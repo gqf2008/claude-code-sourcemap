@@ -1,0 +1,32 @@
+QUICK REFERENCE - RUN ONE OF THESE COMMANDS:
+═════════════════════════════════════════════════════════════════════════════
+
+COMMAND PROMPT (cmd.exe):
+  setup.bat
+
+PYTHON:
+  python setup.py
+
+NODE.JS:
+  node create_dirs.js
+
+MANUAL (if scripts don't work):
+  cd /d E:\Users\gxh\Documents\GitHub\claude-code-sourcemap
+  mkdir claude-code-rs\crates\claude-core\src
+  mkdir claude-code-rs\crates\claude-api\src
+  mkdir claude-code-rs\crates\claude-tools\src
+  mkdir claude-code-rs\crates\claude-agent\src
+  mkdir claude-code-rs\crates\claude-cli\src
+  tree /f claude-code-rs
+  cargo --version
+
+═════════════════════════════════════════════════════════════════════════════
+
+What each command does:
+  1. Creates the directory structure for claude-code-rs Rust workspace
+  2. Verifies all directories were created successfully
+  3. Shows Cargo version (if installed)
+  4. Shows Python and Node.js versions (if installed)
+
+For detailed instructions, see: SETUP_INSTRUCTIONS.txt
+For list of created files, see: FILES_CREATED.txt

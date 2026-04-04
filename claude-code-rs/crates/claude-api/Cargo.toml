@@ -1,0 +1,18 @@
+[package]
+name = "claude-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-stream = { workspace = true }
+tokio-stream = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
