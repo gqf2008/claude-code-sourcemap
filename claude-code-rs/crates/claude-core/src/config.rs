@@ -66,6 +66,22 @@ pub struct HooksConfig {
     pub notification: Vec<HookRule>,
     #[serde(default, rename = "PostSampling")]
     pub post_sampling: Vec<HookRule>,
+    #[serde(default, rename = "PermissionRequest")]
+    pub permission_request: Vec<HookRule>,
+    #[serde(default, rename = "PermissionDenied")]
+    pub permission_denied: Vec<HookRule>,
+    #[serde(default, rename = "InstructionsLoaded")]
+    pub instructions_loaded: Vec<HookRule>,
+    #[serde(default, rename = "CwdChanged")]
+    pub cwd_changed: Vec<HookRule>,
+    #[serde(default, rename = "FileChanged")]
+    pub file_changed: Vec<HookRule>,
+    #[serde(default, rename = "ConfigChange")]
+    pub config_change: Vec<HookRule>,
+    #[serde(default, rename = "TaskCreated")]
+    pub task_created: Vec<HookRule>,
+    #[serde(default, rename = "TaskCompleted")]
+    pub task_completed: Vec<HookRule>,
 }
 
 // ── Main settings struct ────────────────────────────────────────────────────
@@ -91,6 +107,12 @@ pub struct Settings {
     /// Lifecycle hook configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// Language preference (e.g. "中文", "English").
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Output style name (e.g. "concise", "verbose").
+    #[serde(default)]
+    pub output_style: Option<String>,
 }
 
 impl Settings {

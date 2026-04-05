@@ -400,6 +400,65 @@ pub fn calculate_token_warning(current_tokens: u64, threshold: u64) -> TokenWarn
     else { TokenWarningState::Normal }
 }
 
+// ── Auto-compact trigger ────────────────────────────────────────────────────
+
+/// Buffer tokens between auto-compact threshold and context window.
+const AUTOCOMPACT_BUFFER_TOKENS: u64 = 13_000;
+
+/// Maximum consecutive auto-compact failures before circuit-breaker trips.
+const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+/// State for auto-compact trigger logic.
+pub struct AutoCompactState {
+    /// How many compactions have failed in a row.
+    consecutive_failures: u32,
+    /// Disable flag (can be set by user or env var).
+    pub disabled: bool,
+    /// Last compaction summary message id (for dedup).
+    pub last_summary_id: Option<String>,
+}
+
+impl AutoCompactState {
+    pub fn new() -> Self {
+        Self {
+            consecutive_failures: 0,
+            disabled: false,
+            last_summary_id: None,
+        }
+    }
+
+    /// Should we trigger auto-compact given the current token count and model's context window?
+    pub fn should_auto_compact(&self, current_tokens: u64, context_window: u64) -> bool {
+        if self.disabled { return false; }
+        if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES { return false; }
+        if context_window == 0 { return false; }
+
+        // Effective window = context - reserved output tokens (20k)
+        let effective = context_window.saturating_sub(20_000);
+        let threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
+        current_tokens >= threshold
+    }
+
+    /// Call after a successful compaction.
+    pub fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    /// Call after a failed compaction attempt.
+    pub fn record_failure(&mut self) {
+        self.consecutive_failures += 1;
+    }
+
+    /// Whether the circuit breaker has tripped.
+    pub fn is_circuit_broken(&self) -> bool {
+        self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+    }
+}
+
+impl Default for AutoCompactState {
+    fn default() -> Self { Self::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +541,46 @@ mod tests {
         ];
         post_compact_cleanup(&mut messages);
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_auto_compact_trigger() {
+        let state = AutoCompactState::new();
+        // 200k context, 20k output reserved, 13k buffer → threshold = 167k
+        assert!(!state.should_auto_compact(100_000, 200_000));
+        assert!(state.should_auto_compact(170_000, 200_000));
+        assert!(state.should_auto_compact(200_000, 200_000));
+    }
+
+    #[test]
+    fn test_auto_compact_disabled() {
+        let mut state = AutoCompactState::new();
+        state.disabled = true;
+        assert!(!state.should_auto_compact(200_000, 200_000));
+    }
+
+    #[test]
+    fn test_auto_compact_circuit_breaker() {
+        let mut state = AutoCompactState::new();
+        assert!(!state.is_circuit_broken());
+
+        state.record_failure();
+        state.record_failure();
+        assert!(!state.is_circuit_broken());
+
+        state.record_failure(); // 3rd failure
+        assert!(state.is_circuit_broken());
+        assert!(!state.should_auto_compact(200_000, 200_000));
+
+        // Success resets
+        state.record_success();
+        assert!(!state.is_circuit_broken());
+        assert!(state.should_auto_compact(200_000, 200_000));
+    }
+
+    #[test]
+    fn test_auto_compact_zero_context() {
+        let state = AutoCompactState::new();
+        assert!(!state.should_auto_compact(100_000, 0));
     }
 }

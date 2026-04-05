@@ -117,16 +117,30 @@ fn section_using_tools() -> &'static str {
 /// Static: tone and style guidelines.
 fn section_tone_style() -> &'static str {
     r#"
-# Communication style
+# Tone and style
 
-- Be direct and technical. Lead with the answer or action; explain only if needed.
-- Keep responses under 4-5 sentences for routine tasks. For complex tasks, briefly explain your approach before implementing.
-- Use markdown formatting: backtick-quoted identifiers (`functionName`), code blocks for multi-line code.
-- Avoid preamble, filler, or narrating your process. Don't say "Great question!" or "Let me help you with that."
-- Minimize output when editing files — don't echo back large blocks of code unless asked.
-- Use lists and headings for complex explanations; keep them tight.
-- Proactively share relevant info the user didn't ask for — but only if it's genuinely useful (e.g., a security vulnerability spotted while editing).
+- Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.
+- When referencing specific functions or pieces of code include the pattern file_path:line_number to allow the user to easily navigate to the source code location.
+- When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g. anthropics/claude-code#100) so they render as clickable links.
+- Do not use a colon before tool calls. Your tool calls may not be shown directly in the output, so text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.
 - NEVER lie, hallucinate, or make up facts. If uncertain, say so."#
+}
+
+/// Static: output efficiency guidance.
+fn section_output_efficiency() -> &'static str {
+    r#"
+# Output efficiency
+
+IMPORTANT: Go straight to the point. Try the simplest approach first without going in circles. Do not overdo it. Be extra concise.
+
+Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. Do not restate what the user said — just do it. When explaining, include only what is necessary for the user to understand.
+
+Focus text output on:
+- Decisions that need the user's input
+- High-level status updates at natural milestones
+- Errors or blockers that change the plan
+
+If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls."#
 }
 
 /// Dynamic: environment information (CWD, platform, git status, model).
@@ -213,6 +227,63 @@ fn section_tool_guidance(enabled_tools: &[String]) -> String {
     guidance
 }
 
+// ── Dynamic section generators ──────────────────────────────────────────────
+
+/// Dynamic: language preference instruction.
+fn section_language(preference: Option<&str>) -> Option<String> {
+    let lang = preference?;
+    if lang.is_empty() { return None; }
+    Some(format!(
+        "\n# Language\n\
+         Always respond in {lang}. Use {lang} for all explanations, comments, and \
+         communications with the user. Technical terms and code identifiers should \
+         remain in their original form."
+    ))
+}
+
+/// Dynamic: output style override section.
+fn section_output_style(style_name: Option<&str>, style_prompt: Option<&str>) -> Option<String> {
+    let name = style_name?;
+    let prompt = style_prompt?;
+    Some(format!("\n# Output Style: {name}\n{prompt}"))
+}
+
+/// Dynamic: MCP server instructions.
+fn section_mcp_instructions(mcp_instructions: &[(String, String)]) -> Option<String> {
+    if mcp_instructions.is_empty() { return None; }
+    let blocks: Vec<String> = mcp_instructions.iter()
+        .map(|(name, instructions)| format!("## {name}\n{instructions}"))
+        .collect();
+    Some(format!(
+        "\n# MCP Server Instructions\n\n\
+         The following MCP servers have provided instructions for how to use their tools and resources:\n\n\
+         {}", blocks.join("\n\n")
+    ))
+}
+
+/// Dynamic: scratchpad directory instructions.
+fn section_scratchpad(scratchpad_dir: Option<&str>) -> Option<String> {
+    let dir = scratchpad_dir?;
+    Some(format!(
+        "\n# Scratchpad Directory\n\n\
+         IMPORTANT: Always use this scratchpad directory for temporary files instead of `/tmp` or other system temp directories:\n\
+         `{dir}`\n\n\
+         Use this directory for ALL temporary file needs:\n\
+         - Storing intermediate results or data during multi-step tasks\n\
+         - Writing temporary scripts or configuration files\n\
+         - Saving outputs that don't belong in the user's project\n\
+         - Creating working files during analysis or processing\n\n\
+         Only use `/tmp` if the user explicitly requests it.\n\n\
+         The scratchpad directory is session-specific, isolated from the user's project, \
+         and can be used freely without permission prompts."
+    ))
+}
+
+/// Reminder to note important info from tool results (they may be cleared).
+const SUMMARIZE_TOOL_RESULTS: &str = "\
+When working with tool results, write down any important information you might need \
+later in your response, as the original tool result may be cleared later.";
+
 // ── Builder ─────────────────────────────────────────────────────────────────
 
 /// Assembled system prompt with cache boundary information.
@@ -236,6 +307,19 @@ impl SystemPrompt {
     }
 }
 
+/// Optional dynamic sections for the system prompt.
+#[derive(Debug, Default)]
+pub struct DynamicSections<'a> {
+    /// Language preference (e.g. "中文", "English")
+    pub language: Option<&'a str>,
+    /// Output style name + prompt
+    pub output_style: Option<(&'a str, &'a str)>,
+    /// MCP server (name, instructions) pairs
+    pub mcp_instructions: Vec<(String, String)>,
+    /// Scratchpad directory path
+    pub scratchpad_dir: Option<&'a str>,
+}
+
 /// Build the default system prompt from modular sections.
 ///
 /// # Arguments
@@ -251,6 +335,18 @@ pub fn build_system_prompt(
     claude_md_content: &str,
     memory_content: &str,
 ) -> SystemPrompt {
+    build_system_prompt_ext(cwd, model, enabled_tools, claude_md_content, memory_content, &DynamicSections::default())
+}
+
+/// Extended build accepting additional dynamic sections.
+pub fn build_system_prompt_ext(
+    cwd: &Path,
+    model: &str,
+    enabled_tools: &[String],
+    claude_md_content: &str,
+    memory_content: &str,
+    dynamic: &DynamicSections<'_>,
+) -> SystemPrompt {
     let mut parts: Vec<String> = Vec::new();
 
     // ── Static prefix (globally cacheable) ───────────────────────────────
@@ -260,9 +356,9 @@ pub fn build_system_prompt(
     parts.push(section_actions().to_string());
     parts.push(section_using_tools().to_string());
     parts.push(section_tone_style().to_string());
+    parts.push(section_output_efficiency().to_string());
 
     let static_text = parts.join("\n");
-    // Offset = static text + newline + boundary marker + newline
     let dynamic_boundary_offset = static_text.len() + 1 + SYSTEM_PROMPT_DYNAMIC_BOUNDARY.len() + 1;
 
     // ── Dynamic suffix (per-session) ─────────────────────────────────────
@@ -271,9 +367,26 @@ pub fn build_system_prompt(
     // Environment
     dynamic_parts.push(section_environment(cwd, model));
 
+    // Language preference
+    if let Some(lang) = section_language(dynamic.language) {
+        dynamic_parts.push(lang);
+    }
+
+    // Output style
+    if let Some((name, prompt)) = dynamic.output_style {
+        if let Some(s) = section_output_style(Some(name), Some(prompt)) {
+            dynamic_parts.push(s);
+        }
+    }
+
     // Tool guidance
     if !enabled_tools.is_empty() {
         dynamic_parts.push(section_tool_guidance(enabled_tools));
+    }
+
+    // MCP instructions
+    if let Some(mcp) = section_mcp_instructions(&dynamic.mcp_instructions) {
+        dynamic_parts.push(mcp);
     }
 
     // Memory files
@@ -291,6 +404,14 @@ pub fn build_system_prompt(
             claude_md_content
         ));
     }
+
+    // Scratchpad
+    if let Some(sp) = section_scratchpad(dynamic.scratchpad_dir) {
+        dynamic_parts.push(sp);
+    }
+
+    // Summarize tool results reminder
+    dynamic_parts.push(format!("\n{}", SUMMARIZE_TOOL_RESULTS));
 
     let text = format!(
         "{}\n{}\n{}",
@@ -426,8 +547,10 @@ mod tests {
         assert!(prompt.text.contains("# Doing tasks"));
         assert!(prompt.text.contains("# Executing actions"));
         assert!(prompt.text.contains("# Using tools"));
-        assert!(prompt.text.contains("# Communication style"));
+        assert!(prompt.text.contains("# Tone and style"));
+        assert!(prompt.text.contains("# Output efficiency"));
         assert!(prompt.text.contains("Environment"));
+        assert!(prompt.text.contains(SUMMARIZE_TOOL_RESULTS));
         assert!(prompt.dynamic_boundary_offset > 0);
         assert!(prompt.dynamic_boundary_offset < prompt.text.len());
     }
@@ -442,7 +565,7 @@ mod tests {
 
         // Static prefix should contain identity and guidelines
         assert!(prefix.contains(DEFAULT_PREFIX));
-        assert!(prefix.contains("Communication style"));
+        assert!(prefix.contains("Tone and style"));
         // Boundary marker should NOT appear in either part's visible content
         assert!(!suffix.starts_with(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
 
@@ -579,5 +702,60 @@ mod tests {
         assert!(guidance.contains("AskUser"));
         assert!(guidance.contains("Todos"));
         assert!(!guidance.contains("Web search")); // not enabled
+    }
+
+    #[test]
+    fn test_language_section() {
+        assert!(section_language(None).is_none());
+        assert!(section_language(Some("")).is_none());
+
+        let lang = section_language(Some("中文")).unwrap();
+        assert!(lang.contains("# Language"));
+        assert!(lang.contains("中文"));
+    }
+
+    #[test]
+    fn test_output_style_section() {
+        assert!(section_output_style(None, None).is_none());
+        let style = section_output_style(Some("Concise"), Some("Be brief.")).unwrap();
+        assert!(style.contains("# Output Style: Concise"));
+        assert!(style.contains("Be brief."));
+    }
+
+    #[test]
+    fn test_mcp_instructions_section() {
+        assert!(section_mcp_instructions(&[]).is_none());
+        let mcp = section_mcp_instructions(&[
+            ("github".to_string(), "Use github tools for PRs.".to_string()),
+        ]).unwrap();
+        assert!(mcp.contains("# MCP Server Instructions"));
+        assert!(mcp.contains("## github"));
+        assert!(mcp.contains("Use github tools for PRs."));
+    }
+
+    #[test]
+    fn test_scratchpad_section() {
+        assert!(section_scratchpad(None).is_none());
+        let sp = section_scratchpad(Some("/tmp/session-123")).unwrap();
+        assert!(sp.contains("# Scratchpad Directory"));
+        assert!(sp.contains("/tmp/session-123"));
+    }
+
+    #[test]
+    fn test_build_with_dynamic_sections() {
+        let cwd = PathBuf::from(".");
+        let dynamic = DynamicSections {
+            language: Some("日本語"),
+            output_style: Some(("Academic", "Write formally.")),
+            mcp_instructions: vec![("test".to_string(), "Use test tools.".to_string())],
+            scratchpad_dir: Some("/tmp/scratch"),
+        };
+        let prompt = build_system_prompt_ext(&cwd, "claude-sonnet-4-6", &[], "", "", &dynamic);
+        assert!(prompt.text.contains("# Language"));
+        assert!(prompt.text.contains("日本語"));
+        assert!(prompt.text.contains("# Output Style: Academic"));
+        assert!(prompt.text.contains("# MCP Server Instructions"));
+        assert!(prompt.text.contains("# Scratchpad Directory"));
+        assert!(prompt.text.contains(SUMMARIZE_TOOL_RESULTS));
     }
 }

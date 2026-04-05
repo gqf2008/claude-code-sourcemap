@@ -71,8 +71,25 @@ pub enum HookEvent {
     SubagentStart,
     SubagentStop,
     Notification,
-    /// Fired after model sampling, before tool execution. Allows observation/modification.
+    /// Fired after model sampling, before tool execution.
     PostSampling,
+    // ── New events (TS parity) ──
+    /// Permission request shown to user.
+    PermissionRequest,
+    /// Permission denied by user or rule.
+    PermissionDenied,
+    /// CLAUDE.md / instructions loaded or changed.
+    InstructionsLoaded,
+    /// Working directory changed.
+    CwdChanged,
+    /// Watched file changed on disk.
+    FileChanged,
+    /// Configuration settings changed.
+    ConfigChange,
+    /// Task created (task management).
+    TaskCreated,
+    /// Task completed.
+    TaskCompleted,
 }
 
 impl HookEvent {
@@ -93,6 +110,14 @@ impl HookEvent {
             Self::SubagentStop => "SubagentStop",
             Self::Notification => "Notification",
             Self::PostSampling => "PostSampling",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PermissionDenied => "PermissionDenied",
+            Self::InstructionsLoaded => "InstructionsLoaded",
+            Self::CwdChanged => "CwdChanged",
+            Self::FileChanged => "FileChanged",
+            Self::ConfigChange => "ConfigChange",
+            Self::TaskCreated => "TaskCreated",
+            Self::TaskCompleted => "TaskCompleted",
         }
     }
 }
@@ -332,6 +357,14 @@ impl HookRegistry {
             HookEvent::SubagentStop => &self.config.subagent_stop,
             HookEvent::Notification => &self.config.notification,
             HookEvent::PostSampling => &self.config.post_sampling,
+            HookEvent::PermissionRequest => &self.config.permission_request,
+            HookEvent::PermissionDenied => &self.config.permission_denied,
+            HookEvent::InstructionsLoaded => &self.config.instructions_loaded,
+            HookEvent::CwdChanged => &self.config.cwd_changed,
+            HookEvent::FileChanged => &self.config.file_changed,
+            HookEvent::ConfigChange => &self.config.config_change,
+            HookEvent::TaskCreated => &self.config.task_created,
+            HookEvent::TaskCompleted => &self.config.task_completed,
         }
     }
 
@@ -457,6 +490,60 @@ impl HookRegistry {
             trigger: None,
             summary: None,
             agent_id: Some(agent_id.to_string()),
+            cwd: self.cwd.to_string_lossy().into_owned(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Build a `HookContext` for permission events.
+    pub fn permission_ctx(&self, event: HookEvent, tool_name: &str, input: Option<Value>) -> HookContext {
+        HookContext {
+            event: event.as_str().to_string(),
+            tool_name: Some(tool_name.to_string()),
+            tool_input: input,
+            tool_output: None,
+            tool_error: None,
+            error: None,
+            prompt: None,
+            trigger: None,
+            summary: None,
+            agent_id: None,
+            cwd: self.cwd.to_string_lossy().into_owned(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Build a minimal `HookContext` for lifecycle events (CwdChanged, ConfigChange, etc.).
+    pub fn lifecycle_ctx(&self, event: HookEvent) -> HookContext {
+        HookContext {
+            event: event.as_str().to_string(),
+            tool_name: None,
+            tool_input: None,
+            tool_output: None,
+            tool_error: None,
+            error: None,
+            prompt: None,
+            trigger: None,
+            summary: None,
+            agent_id: None,
+            cwd: self.cwd.to_string_lossy().into_owned(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Build a `HookContext` for task events.
+    pub fn task_ctx(&self, event: HookEvent, task_id: &str) -> HookContext {
+        HookContext {
+            event: event.as_str().to_string(),
+            tool_name: None,
+            tool_input: Some(serde_json::json!({"task_id": task_id})),
+            tool_output: None,
+            tool_error: None,
+            error: None,
+            prompt: None,
+            trigger: None,
+            summary: None,
+            agent_id: None,
             cwd: self.cwd.to_string_lossy().into_owned(),
             session_id: self.session_id.clone(),
         }
