@@ -73,6 +73,7 @@ pub fn query_stream(
         const ESCALATED_MAX_TOKENS: u32 = 65536;
         let mut effective_max_tokens = config.max_tokens;
         let mut has_attempted_reactive_compact = false;
+        let mut retried_this_turn = false;
 
         loop {
             // Check abort at the top of every turn
@@ -81,9 +82,6 @@ pub fn query_stream(
                 yield AgentEvent::TurnComplete { stop_reason: claude_core::message::StopReason::EndTurn };
                 break;
             }
-
-            #[allow(unused_assignments)]
-            let mut retried_this_turn = false;
 
             if turn_count >= config.max_turns {
                 yield AgentEvent::MaxTurns { limit: config.max_turns };
@@ -145,8 +143,7 @@ pub fn query_stream(
                         || err_str.contains("503")
                         || err_str.contains("overloaded");
                     if is_retryable && !retried_this_turn && turn_count + 1 < config.max_turns {
-                        #[allow(unused_assignments)]
-                        { retried_this_turn = true; }
+                        retried_this_turn = true;
                         yield AgentEvent::TextDelta(format!(
                             "\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str
                         ));

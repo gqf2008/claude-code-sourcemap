@@ -406,7 +406,7 @@ impl Tool for DispatchAgentTool {
                         "agent_id": agent_id,
                         "message": "Agent is running in the background. Results will be delivered as a <task-notification>."
                     }))
-                    .unwrap(),
+                    .unwrap_or_else(|_| r#"{"status":"async_launched"}"#.to_string()),
                 ));
             }
         }

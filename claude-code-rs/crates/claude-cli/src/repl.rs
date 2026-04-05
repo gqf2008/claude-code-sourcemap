@@ -126,8 +126,8 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     }
                 }
 
-                let stream = engine.submit(input).await;
                 let model = { engine.state().read().await.model.clone() };
+                let stream = engine.submit(input).await;
                 if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                 }
@@ -488,8 +488,7 @@ async fn handle_undo(engine: &QueryEngine) {
     // Then also remove the preceding user message (if any) to keep the
     // conversation in a valid state (user→assistant pairs).
     let mut removed_assistant = false;
-    while !s.messages.is_empty() {
-        let last = s.messages.last().unwrap();
+    while let Some(last) = s.messages.last() {
         let is_assistant = matches!(last, claude_core::message::Message::Assistant(_));
         s.messages.pop();
         if is_assistant {

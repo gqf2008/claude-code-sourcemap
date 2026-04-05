@@ -151,7 +151,7 @@ impl CostTracker {
             format_number(total_input), format_number(total_output)));
         lines.push(format!("  Turns:        {}", turn_count));
 
-        if inner.by_model.len() > 1 || (inner.by_model.len() == 1 && !inner.by_model.is_empty()) {
+        if !inner.by_model.is_empty() {
             lines.push(String::new());
             lines.push("  Usage by model:".to_string());
             let mut models: Vec<_> = inner.by_model.iter().collect();

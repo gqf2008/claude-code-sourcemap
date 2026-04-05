@@ -10,8 +10,9 @@ fn format_tool_result_inline(name: &str, text: &str) -> Option<String> {
         "task_create" | "task_update" | "task_get" | "task_list" |
         "TodoWrite" | "TodoRead" => {
             let first_line = text.lines().next().unwrap_or(text);
-            let truncated = if first_line.len() > 120 {
-                format!("{}…", &first_line[..117])
+            let truncated = if first_line.chars().count() > 120 {
+                let s: String = first_line.chars().take(117).collect();
+                format!("{}…", s)
             } else {
                 first_line.to_string()
             };
