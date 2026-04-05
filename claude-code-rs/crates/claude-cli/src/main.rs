@@ -1,5 +1,6 @@
 mod config;
 mod repl;
+mod repl_commands;
 mod commands;
 mod output;
 
