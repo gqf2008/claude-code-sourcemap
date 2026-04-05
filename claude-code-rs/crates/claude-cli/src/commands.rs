@@ -19,6 +19,10 @@ pub enum SlashCommand {
     Init,
     Commit { message: String },
     Version,
+    Login,
+    Logout,
+    Context,
+    Export { format: String },
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -50,6 +54,10 @@ impl SlashCommand {
             "init" => Self::Init,
             "commit" => Self::Commit { message: args },
             "version" => Self::Version,
+            "login" => Self::Login,
+            "logout" => Self::Logout,
+            "context" | "ctx" => Self::Context,
+            "export" => Self::Export { format: if args.is_empty() { "markdown".into() } else { args } },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -98,6 +106,10 @@ impl SlashCommand {
             Self::Init => CommandResult::Init,
             Self::Commit { message } => CommandResult::Commit { message: message.clone() },
             Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
+            Self::Login => CommandResult::Login,
+            Self::Logout => CommandResult::Logout,
+            Self::Context => CommandResult::Context,
+            Self::Export { format } => CommandResult::Export { format: format.clone() },
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -127,6 +139,10 @@ pub enum CommandResult {
     Doctor,
     Init,
     Commit { message: String },
+    Login,
+    Logout,
+    Context,
+    Export { format: String },
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -157,6 +173,10 @@ Available commands:
   /init              Initialize CLAUDE.md for the current project
   /commit [msg]      Stage and commit changes (AI-generated message)
   /version           Show version info
+  /login             Set API key interactively
+  /logout            Clear saved API key
+  /context           Show loaded context (CLAUDE.md, memory, model)
+  /export [format]   Export session (markdown or json)
   /permissions       Show current permission mode and rules
   /config            Show current configuration
   /skills            List available skills

@@ -102,6 +102,18 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::Commit { message } => {
                                 handle_commit(&engine, &cwd, &message).await;
                             }
+                            CommandResult::Login => {
+                                handle_login();
+                            }
+                            CommandResult::Logout => {
+                                handle_logout();
+                            }
+                            CommandResult::Context => {
+                                handle_context(&engine, &cwd).await;
+                            }
+                            CommandResult::Export { format } => {
+                                handle_export(&engine, &cwd, &format).await;
+                            }
                             CommandResult::RunSkill { name, prompt } => {
                                 run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                             }
@@ -918,5 +930,241 @@ async fn handle_commit(engine: &QueryEngine, cwd: &std::path::Path, user_message
     let stream = engine.submit(&prompt).await;
     if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
         eprintln!("\x1b[31mCommit error: {}\x1b[0m", e);
+    }
+}
+
+// ── /login ───────────────────────────────────────────────────────────────────
+
+fn handle_login() {
+    let Some(config_dir) = claude_core::config::Settings::config_dir() else {
+        eprintln!("\x1b[31mCannot determine config directory\x1b[0m");
+        return;
+    };
+    let settings_path = config_dir.join("settings.json");
+
+    // Read existing settings or create new
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Prompt for API key (hide input)
+    print!("Enter your Anthropic API key: ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let mut key = String::new();
+    if std::io::stdin().read_line(&mut key).is_err() {
+        eprintln!("\x1b[31mFailed to read input\x1b[0m");
+        return;
+    }
+    let key = key.trim().to_string();
+
+    if key.is_empty() {
+        println!("No key provided. Cancelled.");
+        return;
+    }
+
+    if !key.starts_with("sk-ant-") && !key.starts_with("sk-") {
+        println!("\x1b[33mWarning: API key doesn't start with 'sk-ant-' — this may not be a valid Anthropic key.\x1b[0m");
+    }
+
+    // Save to settings
+    settings["api_key"] = serde_json::Value::String(key);
+    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+        eprintln!("\x1b[31mFailed to create config dir: {}\x1b[0m", e);
+        return;
+    }
+    match std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()) {
+        Ok(_) => println!("\x1b[32m✓ API key saved to {}\x1b[0m", settings_path.display()),
+        Err(e) => eprintln!("\x1b[31mFailed to save settings: {}\x1b[0m", e),
+    }
+}
+
+// ── /logout ──────────────────────────────────────────────────────────────────
+
+fn handle_logout() {
+    let Some(config_dir) = claude_core::config::Settings::config_dir() else {
+        eprintln!("\x1b[31mCannot determine config directory\x1b[0m");
+        return;
+    };
+    let settings_path = config_dir.join("settings.json");
+    if !settings_path.exists() {
+        println!("No saved settings found.");
+        return;
+    }
+
+    let mut settings: serde_json::Value = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if settings.get("api_key").is_none() {
+        println!("No saved API key found.");
+        return;
+    }
+
+    settings.as_object_mut().unwrap().remove("api_key");
+    match std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()) {
+        Ok(_) => println!("\x1b[32m✓ API key removed from settings\x1b[0m"),
+        Err(e) => eprintln!("\x1b[31mFailed to update settings: {}\x1b[0m", e),
+    }
+}
+
+// ── /context ─────────────────────────────────────────────────────────────────
+
+async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) {
+    println!("\x1b[1;36m── Loaded Context ──\x1b[0m\n");
+
+    // 1. Model info
+    let state = engine.state().read().await;
+    let display = claude_core::model::display_name(&state.model);
+    println!("\x1b[1mModel:\x1b[0m {} ({})", display, state.model);
+    println!("\x1b[1mPermission mode:\x1b[0m {:?}", state.permission_mode);
+    println!("\x1b[1mTurns:\x1b[0m {}", state.turn_count);
+    println!("\x1b[1mMessages:\x1b[0m {}", state.messages.len());
+    drop(state);
+
+    // 2. CLAUDE.md files
+    println!("\n\x1b[1;33m── CLAUDE.md ──\x1b[0m");
+    let claude_md = claude_core::claude_md::load_claude_md(cwd);
+    if claude_md.is_empty() {
+        println!("  \x1b[2m(none found)\x1b[0m");
+    } else {
+        let preview: String = claude_md.lines().take(20).collect::<Vec<_>>().join("\n");
+        println!("{}", preview);
+        let total_lines = claude_md.lines().count();
+        if total_lines > 20 {
+            println!("  \x1b[2m… ({} more lines)\x1b[0m", total_lines - 20);
+        }
+    }
+
+    // 3. Memory files
+    println!("\n\x1b[1;33m── Memory ──\x1b[0m");
+    let mem_files = claude_core::memory::list_memory_files(cwd);
+    if mem_files.is_empty() {
+        println!("  \x1b[2m(no memory files)\x1b[0m");
+    } else {
+        for f in &mem_files {
+            let type_tag = f.memory_type.as_ref()
+                .map(|t| format!("[{}] ", t.as_str()))
+                .unwrap_or_default();
+            println!("  {}{}", type_tag, f.filename);
+        }
+    }
+
+    // 4. Skills
+    println!("\n\x1b[1;33m── Skills ──\x1b[0m");
+    let skills = claude_core::skills::load_skills(cwd);
+    if skills.is_empty() {
+        println!("  \x1b[2m(no skills)\x1b[0m");
+    } else {
+        for s in &skills {
+            println!("  /{}: {}", s.name, s.description);
+        }
+    }
+
+    // 5. Token estimate
+    let state = engine.state().read().await;
+    let system_tokens = claude_core::token_estimation::estimate_text_tokens(&claude_md);
+    let msg_tokens = claude_core::token_estimation::estimate_messages_tokens(&state.messages);
+    println!("\n\x1b[1;33m── Token Estimates ──\x1b[0m");
+    println!("  System prompt: ~{} tokens", system_tokens);
+    println!("  Conversation:  ~{} tokens", msg_tokens);
+    println!("  Total:         ~{} tokens", system_tokens + msg_tokens);
+}
+
+// ── /export ──────────────────────────────────────────────────────────────────
+
+async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, format: &str) {
+    let state = engine.state().read().await;
+    if state.messages.is_empty() {
+        println!("No conversation to export.");
+        return;
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+
+    match format {
+        "json" => {
+            let filename = format!("claude_export_{}.json", timestamp);
+            let path = cwd.join(&filename);
+            let export = serde_json::json!({
+                "model": state.model,
+                "turn_count": state.turn_count,
+                "messages": state.messages.iter().map(|m| match m {
+                    claude_core::message::Message::User(u) => serde_json::json!({
+                        "role": "user",
+                        "content": u.content.iter().filter_map(|b| match b {
+                            claude_core::message::ContentBlock::Text { text } => Some(serde_json::json!(text)),
+                            _ => None,
+                        }).collect::<Vec<_>>(),
+                    }),
+                    claude_core::message::Message::Assistant(a) => serde_json::json!({
+                        "role": "assistant",
+                        "content": a.content.iter().filter_map(|b| match b {
+                            claude_core::message::ContentBlock::Text { text } => Some(serde_json::json!(text)),
+                            claude_core::message::ContentBlock::ToolUse { name, input, .. } =>
+                                Some(serde_json::json!({"tool": name, "input": input})),
+                            _ => None,
+                        }).collect::<Vec<_>>(),
+                    }),
+                    claude_core::message::Message::System(s) => serde_json::json!({
+                        "role": "system",
+                        "content": s.message,
+                    }),
+                }).collect::<Vec<_>>(),
+            });
+            match std::fs::write(&path, serde_json::to_string_pretty(&export).unwrap()) {
+                Ok(_) => println!("\x1b[32m✓ Exported to {}\x1b[0m", path.display()),
+                Err(e) => eprintln!("\x1b[31mExport failed: {}\x1b[0m", e),
+            }
+        }
+        _ => {
+            // Default: markdown
+            let filename = format!("claude_export_{}.md", timestamp);
+            let path = cwd.join(&filename);
+            let mut md = format!("# Claude Conversation Export\n\nModel: {}\nTurns: {}\n\n---\n\n",
+                state.model, state.turn_count);
+
+            for msg in &state.messages {
+                match msg {
+                    claude_core::message::Message::User(u) => {
+                        md.push_str("## 🧑 User\n\n");
+                        for block in &u.content {
+                            if let claude_core::message::ContentBlock::Text { text } = block {
+                                md.push_str(text);
+                                md.push_str("\n\n");
+                            }
+                        }
+                    }
+                    claude_core::message::Message::Assistant(a) => {
+                        md.push_str("## 🤖 Assistant\n\n");
+                        for block in &a.content {
+                            match block {
+                                claude_core::message::ContentBlock::Text { text } => {
+                                    md.push_str(text);
+                                    md.push_str("\n\n");
+                                }
+                                claude_core::message::ContentBlock::ToolUse { name, .. } => {
+                                    md.push_str(&format!("*Used tool: {}*\n\n", name));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    claude_core::message::Message::System(_) => {}
+                }
+                md.push_str("---\n\n");
+            }
+
+            match std::fs::write(&path, &md) {
+                Ok(_) => println!("\x1b[32m✓ Exported to {}\x1b[0m", path.display()),
+                Err(e) => eprintln!("\x1b[31mExport failed: {}\x1b[0m", e),
+            }
+        }
     }
 }
