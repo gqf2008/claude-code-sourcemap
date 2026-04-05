@@ -94,6 +94,12 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                         CommandResult::Config => {
                             handle_config_command(&cwd);
                         }
+                        CommandResult::Undo => {
+                            handle_undo(&engine).await;
+                        }
+                        CommandResult::Review { prompt } => {
+                            handle_review(&engine, &prompt, &cwd).await;
+                        }
                         CommandResult::RunSkill { name, prompt } => {
                             run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                         }
@@ -426,3 +432,84 @@ async fn run_skill(
     }
 }
 
+/// Undo the last assistant turn — remove trailing assistant+user message pair.
+async fn handle_undo(engine: &QueryEngine) {
+    let mut s = engine.state().write().await;
+    let len = s.messages.len();
+    if len < 2 {
+        println!("Nothing to undo.");
+        return;
+    }
+
+    // Remove messages from the end until we've popped one assistant message
+    let mut removed_assistant = false;
+    while !s.messages.is_empty() {
+        let last = s.messages.last().unwrap();
+        let is_assistant = matches!(last, claude_core::message::Message::Assistant(_));
+        s.messages.pop();
+        if is_assistant {
+            removed_assistant = true;
+            break;
+        }
+    }
+
+    if removed_assistant {
+        let new_len = s.messages.len();
+        println!("\x1b[32m✓ Undone (removed {} message(s), {} remaining)\x1b[0m", len - new_len, new_len);
+    } else {
+        println!("Nothing to undo.");
+    }
+}
+
+/// Launch a code review on recent git changes.
+async fn handle_review(engine: &QueryEngine, custom_prompt: &str, cwd: &std::path::Path) {
+    // Get the diff to review
+    let diff_output = std::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(cwd)
+        .output();
+
+    let diff = match diff_output {
+        Ok(out) => {
+            let d = String::from_utf8_lossy(&out.stdout).to_string();
+            if d.is_empty() {
+                // Try staged changes
+                let staged = std::process::Command::new("git")
+                    .args(["diff", "--cached"])
+                    .current_dir(cwd)
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+                if staged.is_empty() {
+                    println!("No changes to review. Make some changes first.");
+                    return;
+                }
+                staged
+            } else {
+                d
+            }
+        }
+        Err(e) => {
+            eprintln!("\x1b[31mFailed to get git diff: {}\x1b[0m", e);
+            return;
+        }
+    };
+
+    let review_prompt = if custom_prompt.is_empty() {
+        format!(
+            "Review the following code changes for bugs, style issues, security concerns, \
+             and potential improvements. Be specific about file paths and line numbers.\n\n\
+             ```diff\n{}\n```",
+            diff
+        )
+    } else {
+        format!("{}\n\n```diff\n{}\n```", custom_prompt, diff)
+    };
+
+    println!("\x1b[35m[Code Review]\x1b[0m");
+    let stream = engine.submit(&review_prompt).await;
+    if let Err(e) = print_stream(stream).await {
+        eprintln!("\x1b[31mReview error: {}\x1b[0m", e);
+    }
+}

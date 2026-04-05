@@ -142,12 +142,16 @@ impl ToolExecutor {
             }
             PermissionBehavior::Ask => {
                 let desc = format!("{}: {}", tool_name, serde_json::to_string(&input).unwrap_or_default());
-                if !PermissionChecker::prompt_user(tool_name, &desc) {
+                let (allowed, always) = PermissionChecker::prompt_user(tool_name, &desc);
+                if !allowed {
                     return ContentBlock::ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: vec![ToolResultContent::Text { text: "User denied permission".into() }],
                         is_error: true,
                     };
+                }
+                if always {
+                    self.permission_checker.session_allow(tool_name);
                 }
             }
             PermissionBehavior::Allow => {}

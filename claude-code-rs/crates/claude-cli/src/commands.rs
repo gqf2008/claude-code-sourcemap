@@ -13,6 +13,8 @@ pub enum SlashCommand {
     Status,
     Permissions,
     Config,
+    Undo,
+    Review { prompt: String },
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -38,6 +40,8 @@ impl SlashCommand {
             "status" => Self::Status,
             "permissions" | "perms" => Self::Permissions,
             "config" => Self::Config,
+            "undo" => Self::Undo,
+            "review" => Self::Review { prompt: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -80,6 +84,8 @@ impl SlashCommand {
             Self::Status => CommandResult::Status,
             Self::Permissions => CommandResult::Permissions,
             Self::Config => CommandResult::Config,
+            Self::Undo => CommandResult::Undo,
+            Self::Review { prompt } => CommandResult::Review { prompt: prompt.clone() },
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -104,6 +110,8 @@ pub enum CommandResult {
     Status,
     Permissions,
     Config,
+    Undo,
+    Review { prompt: String },
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -128,6 +136,8 @@ Available commands:
   /cost              Show token usage
   /diff              Show git diff (staged + unstaged)
   /status            Show session and git status
+  /undo              Undo last assistant turn (remove last assistant+user pair)
+  /review [prompt]   Launch code review on recent changes
   /permissions       Show current permission mode and rules
   /config            Show current configuration
   /skills            List available skills
@@ -136,6 +146,11 @@ Available commands:
   /session save      Save current session
   /session list      List saved sessions
   /session load <id> Resume a saved session
-  /exit              Exit the CLI";
+  /exit              Exit the CLI
+
+Tips:
+  • End a line with \\ to continue on the next line (multiline input)
+  • Use --resume to restore the most recent session on startup
+  • Use --init to create CLAUDE.md and project scaffolding";
 
 
