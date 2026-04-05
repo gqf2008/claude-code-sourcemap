@@ -39,6 +39,8 @@ pub struct QueryEngine {
     notification_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<TaskNotification>>>,
     /// Whether coordinator mode is active.
     coordinator_mode: bool,
+    /// If non-empty, only expose these tools to the model.
+    allowed_tools: Vec<String>,
 }
 
 pub struct QueryEngineBuilder {
@@ -58,6 +60,8 @@ pub struct QueryEngineBuilder {
     compact_threshold: u64,
     /// Enable coordinator (multi-agent orchestration) mode.
     coordinator_mode: bool,
+    /// If non-empty, only these tools are available to the model.
+    allowed_tools: Vec<String>,
 }
 
 impl QueryEngineBuilder {
@@ -75,6 +79,7 @@ impl QueryEngineBuilder {
             load_memory: true,
             compact_threshold: AUTO_COMPACT_THRESHOLD,
             coordinator_mode: false,
+            allowed_tools: Vec::new(),
         }
     }
 
@@ -126,6 +131,11 @@ impl QueryEngineBuilder {
 
     pub fn coordinator_mode(mut self, enable: bool) -> Self {
         self.coordinator_mode = enable;
+        self
+    }
+
+    pub fn allowed_tools(mut self, tools: Vec<String>) -> Self {
+        self.allowed_tools = tools;
         self
     }
 
@@ -256,6 +266,7 @@ impl QueryEngineBuilder {
             abort_signal,
             notification_rx,
             coordinator_mode: self.coordinator_mode,
+            allowed_tools: self.allowed_tools,
         }
     }
 }
@@ -273,6 +284,10 @@ impl QueryEngine {
             .all()
             .iter()
             .filter(|t| t.is_enabled())
+            .filter(|t| {
+                self.allowed_tools.is_empty()
+                    || self.allowed_tools.iter().any(|a| a.eq_ignore_ascii_case(t.name()))
+            })
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description().to_string(),

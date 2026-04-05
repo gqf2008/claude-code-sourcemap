@@ -61,6 +61,10 @@ struct Cli {
     #[arg(long)]
     init: bool,
 
+    /// Additional context directories (files are read and included)
+    #[arg(long = "add-dir")]
+    add_dirs: Vec<String>,
+
     /// Verbose output
     #[arg(long, short)]
     verbose: bool,
@@ -68,6 +72,14 @@ struct Cli {
     /// Enable coordinator (multi-agent orchestration) mode
     #[arg(long)]
     coordinator: bool,
+
+    /// Restrict available tools (comma-separated or repeatable)
+    #[arg(long = "allowed-tools")]
+    allowed_tools: Vec<String>,
+
+    /// Maximum output tokens per response
+    #[arg(long, default_value = "16384")]
+    max_tokens: u32,
 }
 
 #[tokio::main]
@@ -123,6 +135,8 @@ async fn main() -> anyhow::Result<()> {
         .load_claude_md(!cli.no_claude_md)
         .load_memory(true)
         .coordinator_mode(cli.coordinator)
+        .max_tokens(cli.max_tokens)
+        .allowed_tools(cli.allowed_tools)
         .build();
 
     // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
@@ -165,15 +179,69 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(prompt) = cli.prompt {
-        if cli.output_format == "json" {
-            // JSON output: structured result for programmatic consumption
-            output::run_json(&engine, &prompt).await?;
-        } else if cli.print {
-            // --print mode: only emit final text to stdout, progress to stderr
-            output::run_single(&engine, &prompt).await?;
+        // Combine explicit prompt with any piped stdin
+        let full_prompt = if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            let mut stdin_buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin_buf)?;
+            if stdin_buf.is_empty() {
+                prompt
+            } else {
+                format!("{}\n\n<stdin>\n{}</stdin>", prompt, stdin_buf.trim())
+            }
         } else {
-            // Default non-interactive: rich task progress
-            output::run_task_interactive(&engine, &prompt).await?;
+            prompt
+        };
+
+        // Append --add-dir context
+        let full_prompt = if !cli.add_dirs.is_empty() {
+            let mut ctx = full_prompt;
+            for dir in &cli.add_dirs {
+                let dir_path = std::path::Path::new(dir);
+                if dir_path.is_dir() {
+                    ctx.push_str(&format!("\n\n<context source=\"{}\">\n", dir));
+                    if let Ok(entries) = std::fs::read_dir(dir_path) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_file() {
+                                if let Ok(content) = std::fs::read_to_string(&p) {
+                                    let name = p.file_name().unwrap_or_default().to_string_lossy();
+                                    ctx.push_str(&format!("--- {} ---\n{}\n\n", name, content.trim()));
+                                }
+                            }
+                        }
+                    }
+                    ctx.push_str("</context>");
+                } else {
+                    eprintln!("\x1b[33mWarning: --add-dir '{}' not found\x1b[0m", dir);
+                }
+            }
+            ctx
+        } else {
+            full_prompt
+        };
+
+        if cli.output_format == "json" {
+            output::run_json(&engine, &full_prompt).await?;
+        } else if cli.print {
+            output::run_single(&engine, &full_prompt).await?;
+        } else {
+            output::run_task_interactive(&engine, &full_prompt).await?;
+        }
+    } else if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        // Stdin-only mode: read from pipe with no explicit prompt
+        let mut stdin_buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin_buf)?;
+        let stdin_buf = stdin_buf.trim();
+        if !stdin_buf.is_empty() {
+            if cli.output_format == "json" {
+                output::run_json(&engine, stdin_buf).await?;
+            } else if cli.print {
+                output::run_single(&engine, stdin_buf).await?;
+            } else {
+                output::run_task_interactive(&engine, stdin_buf).await?;
+            }
+        } else {
+            eprintln!("No input provided. Use `claude \"prompt\"` or pipe via stdin.");
         }
     } else {
         repl::run(engine, skills, cwd).await?;
