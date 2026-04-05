@@ -62,6 +62,8 @@ pub struct QueryEngineBuilder {
     coordinator_mode: bool,
     /// If non-empty, only these tools are available to the model.
     allowed_tools: Vec<String>,
+    /// Extended thinking configuration.
+    thinking: Option<claude_api::types::ThinkingConfig>,
 }
 
 impl QueryEngineBuilder {
@@ -80,6 +82,7 @@ impl QueryEngineBuilder {
             compact_threshold: AUTO_COMPACT_THRESHOLD,
             coordinator_mode: false,
             allowed_tools: Vec::new(),
+            thinking: None,
         }
     }
 
@@ -136,6 +139,11 @@ impl QueryEngineBuilder {
 
     pub fn allowed_tools(mut self, tools: Vec<String>) -> Self {
         self.allowed_tools = tools;
+        self
+    }
+
+    pub fn thinking(mut self, config: Option<claude_api::types::ThinkingConfig>) -> Self {
+        self.thinking = config;
         self
     }
 
@@ -257,7 +265,7 @@ impl QueryEngineBuilder {
                 max_turns: self.max_turns,
                 max_tokens: self.max_tokens,
                 temperature: None,
-                thinking: None,
+                thinking: self.thinking.clone(),
             },
             hooks,
             cwd: self.cwd,

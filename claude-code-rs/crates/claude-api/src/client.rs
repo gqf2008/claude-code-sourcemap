@@ -63,6 +63,11 @@ impl AnthropicClient {
             "anthropic-version",
             HeaderValue::from_static(API_VERSION),
         );
+        // Enable prompt caching and extended thinking
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("prompt-caching-2024-07-31"),
+        );
         Ok(headers)
     }
 

@@ -80,6 +80,14 @@ struct Cli {
     /// Maximum output tokens per response
     #[arg(long, default_value = "16384")]
     max_tokens: u32,
+
+    /// Enable extended thinking (chain-of-thought reasoning)
+    #[arg(long)]
+    thinking: bool,
+
+    /// Token budget for extended thinking (default 10000)
+    #[arg(long, default_value = "10000")]
+    thinking_budget: u32,
 }
 
 #[tokio::main]
@@ -137,6 +145,14 @@ async fn main() -> anyhow::Result<()> {
         .coordinator_mode(cli.coordinator)
         .max_tokens(cli.max_tokens)
         .allowed_tools(cli.allowed_tools)
+        .thinking(if cli.thinking {
+            Some(claude_api::types::ThinkingConfig {
+                thinking_type: "enabled".into(),
+                budget_tokens: Some(cli.thinking_budget),
+            })
+        } else {
+            None
+        })
         .build();
 
     // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
