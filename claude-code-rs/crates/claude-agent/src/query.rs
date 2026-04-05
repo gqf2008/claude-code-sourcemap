@@ -432,7 +432,7 @@ pub fn query_stream(
 }
 
 fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
-    messages.iter().filter_map(|msg| match msg {
+    let mut api_msgs: Vec<ApiMessage> = messages.iter().filter_map(|msg| match msg {
         Message::User(u) => Some(ApiMessage {
             role: "user".into(),
             content: u.content.iter().map(block_to_api).collect(),
@@ -442,12 +442,30 @@ fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
             content: a.content.iter().map(block_to_api).collect(),
         }),
         Message::System(_) => None,
-    }).collect()
+    }).collect();
+
+    // Mark the last content block of the last message with cache_control for prompt caching.
+    // This creates a cache breakpoint at the conversation tail, so only new messages
+    // need to be processed on each turn.
+    if let Some(last_msg) = api_msgs.last_mut() {
+        if let Some(last_block) = last_msg.content.last_mut() {
+            match last_block {
+                ApiContentBlock::Text { cache_control, .. } => {
+                    *cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+                }
+                ApiContentBlock::ToolResult { cache_control, .. } => {
+                    *cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+                }
+                _ => {}
+            }
+        }
+    }
+    api_msgs
 }
 
 fn block_to_api(block: &ContentBlock) -> ApiContentBlock {
     match block {
-        ContentBlock::Text { text } => ApiContentBlock::Text { text: text.clone() },
+        ContentBlock::Text { text } => ApiContentBlock::Text { text: text.clone(), cache_control: None },
         ContentBlock::ToolUse { id, name, input } => ApiContentBlock::ToolUse {
             id: id.clone(), name: name.clone(), input: input.clone(),
         },
@@ -462,9 +480,10 @@ fn block_to_api(block: &ContentBlock) -> ApiContentBlock {
                 }
             }).collect(),
             is_error: *is_error,
+            cache_control: None,
         },
         ContentBlock::Thinking { thinking } => {
-            ApiContentBlock::Text { text: format!("<thinking>{}</thinking>", thinking) }
+            ApiContentBlock::Text { text: format!("<thinking>{}</thinking>", thinking), cache_control: None }
         }
     }
 }

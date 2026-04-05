@@ -103,7 +103,7 @@ fn messages_for_compact(messages: &[Message]) -> Vec<ApiMessage> {
                     .iter()
                     .map(|b| match b {
                         claude_core::message::ContentBlock::Text { text } => {
-                            ApiContentBlock::Text { text: text.clone() }
+                            ApiContentBlock::Text { text: text.clone(), cache_control: None }
                         }
                         claude_core::message::ContentBlock::ToolResult {
                             tool_use_id,
@@ -127,9 +127,11 @@ fn messages_for_compact(messages: &[Message]) -> Vec<ApiMessage> {
                                 })
                                 .collect(),
                             is_error: *is_error,
+                            cache_control: None,
                         },
                         _ => ApiContentBlock::Text {
                             text: "[content block]".to_string(),
+                            cache_control: None,
                         },
                     })
                     .collect();
@@ -144,7 +146,7 @@ fn messages_for_compact(messages: &[Message]) -> Vec<ApiMessage> {
                     .iter()
                     .filter_map(|b| match b {
                         claude_core::message::ContentBlock::Text { text } => {
-                            Some(ApiContentBlock::Text { text: text.clone() })
+                            Some(ApiContentBlock::Text { text: text.clone(), cache_control: None })
                         }
                         claude_core::message::ContentBlock::ToolUse { id, name, input } => {
                             Some(ApiContentBlock::ToolUse {
@@ -156,6 +158,7 @@ fn messages_for_compact(messages: &[Message]) -> Vec<ApiMessage> {
                         claude_core::message::ContentBlock::Thinking { thinking } => {
                             Some(ApiContentBlock::Text {
                                 text: format!("<thinking>{}</thinking>", thinking),
+                                cache_control: None,
                             })
                         }
                         _ => None,

@@ -59,7 +59,11 @@ pub struct ApiMessage {
 #[serde(tag = "type")]
 pub enum ApiContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -72,6 +76,8 @@ pub enum ApiContentBlock {
         content: Vec<ToolResultContent>,
         #[serde(default)]
         is_error: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
     #[serde(rename = "image")]
     Image { source: ImageSource },

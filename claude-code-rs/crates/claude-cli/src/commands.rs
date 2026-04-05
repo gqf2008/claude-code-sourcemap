@@ -16,6 +16,9 @@ pub enum SlashCommand {
     Undo,
     Review { prompt: String },
     Doctor,
+    Init,
+    Commit { message: String },
+    Version,
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -44,6 +47,9 @@ impl SlashCommand {
             "undo" => Self::Undo,
             "review" => Self::Review { prompt: args },
             "doctor" => Self::Doctor,
+            "init" => Self::Init,
+            "commit" => Self::Commit { message: args },
+            "version" => Self::Version,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -89,6 +95,9 @@ impl SlashCommand {
             Self::Undo => CommandResult::Undo,
             Self::Review { prompt } => CommandResult::Review { prompt: prompt.clone() },
             Self::Doctor => CommandResult::Doctor,
+            Self::Init => CommandResult::Init,
+            Self::Commit { message } => CommandResult::Commit { message: message.clone() },
+            Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -116,6 +125,8 @@ pub enum CommandResult {
     Undo,
     Review { prompt: String },
     Doctor,
+    Init,
+    Commit { message: String },
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -135,14 +146,17 @@ const HELP_TEXT_BASE: &str = "\
 Available commands:
   /help              Show this help
   /clear             Clear conversation history
-  /model <name>      Switch model
+  /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
   /compact [instr]   Compact conversation history
-  /cost              Show token usage
+  /cost              Show token usage and costs
   /diff              Show git diff (staged + unstaged)
   /status            Show session and git status
-  /undo              Undo last assistant turn (remove last assistant+user pair)
+  /undo              Undo last assistant turn
   /review [prompt]   Launch code review on recent changes
-  /doctor            Check environment health (API, git, config)
+  /doctor            Check environment health
+  /init              Initialize CLAUDE.md for the current project
+  /commit [msg]      Stage and commit changes (AI-generated message)
+  /version           Show version info
   /permissions       Show current permission mode and rules
   /config            Show current configuration
   /skills            List available skills
@@ -157,7 +171,6 @@ Available commands:
 Tips:
   • End a line with \\ to continue on the next line (multiline input)
   • Use --resume to restore the most recent session on startup
-  • Use --init to create CLAUDE.md and project scaffolding
-  • Model aliases: sonnet, opus, haiku, best (e.g., /model opus)";
+  • Use --init to create CLAUDE.md and project scaffolding";
 
 
