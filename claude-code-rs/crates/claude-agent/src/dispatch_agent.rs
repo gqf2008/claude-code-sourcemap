@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use claude_api::client::AnthropicClient;
 use claude_api::types::ToolDefinition;
-use claude_core::tool::{AbortSignal, Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
@@ -119,7 +119,7 @@ impl Tool for DispatchAgentTool {
 
         let tool_context = ToolContext {
             cwd: context.cwd.clone(),
-            abort_signal: AbortSignal::new(),
+            abort_signal: context.abort_signal.clone(), // inherit parent's abort signal
             permission_mode: context.permission_mode,
             messages: Vec::new(),
         };

@@ -32,6 +32,9 @@ pub async fn print_stream(
             AgentEvent::Error(msg) => {
                 eprintln!("\x1b[31mError: {}\x1b[0m", msg);
             }
+            AgentEvent::MaxTurns { limit } => {
+                eprintln!("\x1b[33mMax turns ({}) reached\x1b[0m", limit);
+            }
         }
     }
     Ok(())

@@ -23,6 +23,8 @@ pub enum AgentEvent {
     AssistantMessage(AssistantMessage),
     TurnComplete { stop_reason: StopReason },
     UsageUpdate(Usage),
+    /// Max turns limit reached.
+    MaxTurns { limit: u32 },
     Error(String),
 }
 
@@ -56,6 +58,8 @@ pub fn query_stream(
     let stream = async_stream::stream! {
         let mut messages = initial_messages;
         let mut turn_count: u32 = 0;
+        let mut stop_hook_retries: u32 = 0;
+        const MAX_STOP_HOOK_RETRIES: u32 = 3;
 
         loop {
             // Check abort at the top of every turn
@@ -66,7 +70,7 @@ pub fn query_stream(
             }
 
             if turn_count >= config.max_turns {
-                yield AgentEvent::Error(format!("Max turns ({}) reached", config.max_turns));
+                yield AgentEvent::MaxTurns { limit: config.max_turns };
                 break;
             }
 
@@ -207,8 +211,8 @@ pub fn query_stream(
 
             if let Some(ref u) = usage {
                 let mut s = state.write().await;
-                s.total_input_tokens += u.input_tokens;
-                s.total_output_tokens += u.output_tokens;
+                s.total_input_tokens = s.total_input_tokens.saturating_add(u.input_tokens);
+                s.total_output_tokens = s.total_output_tokens.saturating_add(u.output_tokens);
                 yield AgentEvent::UsageUpdate(u.clone());
             }
 
@@ -227,6 +231,7 @@ pub fn query_stream(
                         }
                     }
                     turn_count += 1;
+                    stop_hook_retries = 0; // reset on normal tool turn
                     { let mut s = state.write().await; s.turn_count = turn_count; }
                 }
                 other => {
@@ -237,17 +242,21 @@ pub fn query_stream(
                         let last_text = if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) };
                         let ctx = hooks.prompt_ctx(HookEvent::Stop, last_text);
                         match hooks.run(HookEvent::Stop, ctx).await {
-                            HookDecision::FeedbackAndContinue { feedback } => {
+                            HookDecision::FeedbackAndContinue { feedback } if stop_hook_retries < MAX_STOP_HOOK_RETRIES => {
+                                stop_hook_retries += 1;
                                 // exit 2: inject feedback as a new user message and loop
                                 let feedback_msg = UserMessage {
                                     uuid: Uuid::new_v4().to_string(),
                                     content: vec![ContentBlock::Text { text: feedback.clone() }],
                                 };
                                 messages.push(Message::User(feedback_msg));
-                                yield AgentEvent::TextDelta(format!("\n[Stop hook feedback]: {}\n", feedback));
+                                yield AgentEvent::TextDelta(format!("\n[Stop hook feedback ({}/{})]: {}\n", stop_hook_retries, MAX_STOP_HOOK_RETRIES, feedback));
                                 turn_count += 1;
                                 { let mut s = state.write().await; s.turn_count = turn_count; }
                                 continue; // restart the query loop
+                            }
+                            HookDecision::FeedbackAndContinue { .. } => {
+                                yield AgentEvent::TextDelta("\n[Stop hook retry limit reached — stopping]\n".to_string());
                             }
                             HookDecision::Block { reason } => {
                                 // Non-zero exit: warn but still stop

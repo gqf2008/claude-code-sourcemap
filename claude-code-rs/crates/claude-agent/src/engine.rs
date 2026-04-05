@@ -29,7 +29,6 @@ pub struct QueryEngine {
     hooks: Arc<HookRegistry>,
     cwd: std::path::PathBuf,
     session_id: String,
-    model_name: String,
     compact_threshold: u64,
     /// Shared abort signal — call `.abort()` to cancel the running task.
     abort_signal: AbortSignal,
@@ -156,12 +155,17 @@ impl QueryEngineBuilder {
             system_prompt
         };
 
+        // Wrap the base registry into Arc; the dispatch tool gets a clone of
+        // this Arc so sub-agents see the same tool set (minus dispatch_agent
+        // itself, to prevent infinite recursion).
+        let sub_registry = Arc::new(ToolRegistry::with_defaults());
+
         let dispatch_tool = DispatchAgentTool {
             client: client.clone(),
-            registry: Arc::new(ToolRegistry::with_defaults()),
+            registry: sub_registry,
             permission_checker: permission_checker.clone(),
             config: SubAgentConfig {
-                model: model_name,
+                model: model_name.clone(),
                 max_tokens: self.max_tokens,
                 cwd: self.cwd.clone(),
                 system_prompt: system_prompt.clone(),
@@ -185,6 +189,11 @@ impl QueryEngineBuilder {
         ));
 
         let state = new_shared_state();
+        // Set model in shared state (single source of truth)
+        {
+            let mut s = state.blocking_write();
+            s.model = model_name.clone();
+        }
         let abort_signal = AbortSignal::new();
 
         QueryEngine {
@@ -200,7 +209,6 @@ impl QueryEngineBuilder {
             hooks,
             cwd: self.cwd,
             session_id,
-            model_name: self.model.unwrap_or_else(|| "claude-sonnet-4-20250514".into()),
             compact_threshold: self.compact_threshold,
             abort_signal,
         }
@@ -382,10 +390,11 @@ impl QueryEngine {
         }
 
         // ── Call Claude for summary ──────────────────────────────────────────
+        let model = { self.state.read().await.model.clone() };
         let summary = compact_conversation(
             &self.client,
             &messages,
-            &self.model_name,
+            &model,
             extra_instructions.as_deref(),
         )
         .await?;

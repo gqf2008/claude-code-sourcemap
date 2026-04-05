@@ -90,13 +90,20 @@ async fn main() -> anyhow::Result<()> {
         .load_memory(true)
         .build();
 
-    // ── Ctrl-C → abort signal ────────────────────────────────────────────────
+    // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
     {
         let abort = engine.abort_signal();
         tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                eprintln!("\n\x1b[33m[Interrupted — aborting task…]\x1b[0m");
-                abort.abort();
+            loop {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    if abort.is_aborted() {
+                        // Second Ctrl-C: force exit
+                        eprintln!("\n\x1b[31m[Force exit]\x1b[0m");
+                        std::process::exit(130);
+                    }
+                    eprintln!("\n\x1b[33m[Interrupted — press Ctrl-C again to force exit]\x1b[0m");
+                    abort.abort();
+                }
             }
         });
     }

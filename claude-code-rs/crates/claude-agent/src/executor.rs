@@ -54,6 +54,7 @@ impl ToolExecutor {
         };
 
         // ── PreToolUse hook ──────────────────────────────────────────────────
+        let mut actual_input = input.clone();
         if self.hooks.has_hooks(HookEvent::PreToolUse) {
             let ctx = self.hooks.tool_ctx(
                 HookEvent::PreToolUse,
@@ -71,13 +72,13 @@ impl ToolExecutor {
                     };
                 }
                 HookDecision::ModifyInput { new_input } => {
-                    return self.execute_inner(tool_use_id, tool_name, new_input, context, tool).await;
+                    actual_input = new_input;
                 }
                 _ => {}
             }
         }
 
-        let result = self.execute_inner(tool_use_id, tool_name, input.clone(), context, tool).await;
+        let result = self.execute_inner(tool_use_id, tool_name, actual_input.clone(), context, tool).await;
 
         // ── PostToolUse hook ─────────────────────────────────────────────────
         if self.hooks.has_hooks(HookEvent::PostToolUse) {
@@ -93,7 +94,7 @@ impl ToolExecutor {
             let ctx = self.hooks.tool_ctx(
                 HookEvent::PostToolUse,
                 tool_name,
-                Some(input),
+                Some(actual_input),
                 Some(output_text),
                 Some(is_err),
             );

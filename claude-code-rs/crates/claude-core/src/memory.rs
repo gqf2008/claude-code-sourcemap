@@ -210,8 +210,12 @@ fn read_memory_body(path: &Path) -> (String, bool) {
     };
     let (_, body) = parse_frontmatter(&text);
     if body.len() > MAX_MEMORY_BYTES_PER_FILE {
-        let truncated = &body[..MAX_MEMORY_BYTES_PER_FILE];
-        (truncated.to_string(), true)
+        // Find a valid UTF-8 char boundary at or before the limit
+        let mut end = MAX_MEMORY_BYTES_PER_FILE;
+        while !body.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        (body[..end].to_string(), true)
     } else {
         (body.to_string(), false)
     }

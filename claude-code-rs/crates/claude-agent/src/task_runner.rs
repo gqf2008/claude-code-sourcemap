@@ -174,12 +174,12 @@ where
             }
 
             AgentEvent::Error(msg) => {
-                // Distinguish abort vs API error
-                if msg.contains("Max turns") || msg.contains("max turns") {
-                    reason = CompletionReason::MaxTurns;
-                } else {
-                    reason = CompletionReason::Error(msg);
-                }
+                reason = CompletionReason::Error(msg);
+                break;
+            }
+
+            AgentEvent::MaxTurns { .. } => {
+                reason = CompletionReason::MaxTurns;
                 break;
             }
         }

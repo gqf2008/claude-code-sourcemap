@@ -9,6 +9,8 @@ pub struct LsTool;
 impl Tool for LsTool {
     fn name(&self) -> &str { "LS" }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn description(&self) -> &str {
         "Lists files and directories in a given path. Use this to explore project structure \
          and discover files. Prefer this over shell 'ls' for directory exploration."
