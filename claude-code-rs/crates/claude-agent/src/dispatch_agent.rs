@@ -133,6 +133,11 @@ impl Tool for DispatchAgentTool {
                 "system_prompt": {
                     "type": "string",
                     "description": "Optional system prompt override for the sub-agent."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "If true, the sub-agent runs in the background. Returns immediately \
+                                    with an agent_id that can be checked with task_get. Default: false."
                 }
             },
             "required": ["prompt"]

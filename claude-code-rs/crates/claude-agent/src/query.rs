@@ -109,6 +109,18 @@ pub fn query_stream(
             let event_stream = match client.messages_stream(&request).await {
                 Ok(s) => s,
                 Err(e) => {
+                    // Retry once on transient errors (rate limit, server error)
+                    let err_str = format!("{}", e);
+                    let is_retryable = err_str.contains("rate")
+                        || err_str.contains("529")
+                        || err_str.contains("500")
+                        || err_str.contains("503")
+                        || err_str.contains("overloaded");
+                    if is_retryable && turn_count < config.max_turns {
+                        yield AgentEvent::TextDelta(format!("\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str));
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        continue; // retry the turn
+                    }
                     state.write().await.messages = messages.clone();
                     yield AgentEvent::Error(format!("API error: {}", e));
                     break;
