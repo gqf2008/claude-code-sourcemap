@@ -86,11 +86,12 @@ impl Tool for LspTool {
                     "goToDefinition" => find_definition(cwd, &word).await,
                     "findReferences" => find_references(cwd, &word).await,
                     "hover" => get_hover_info(&abs_path, line, &word),
+                    "goToImplementation" => find_implementations(cwd, &word).await,
                     _ => Ok(ToolResult::error(format!("Operation '{}' not yet supported.", operation))),
                 }
             }
             _ => Ok(ToolResult::error(format!(
-                "Unknown operation: '{}'. Supported: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol",
+                "Unknown operation: '{}'. Supported: goToDefinition, goToImplementation, findReferences, hover, documentSymbol, workspaceSymbol",
                 operation
             ))),
         }
@@ -362,6 +363,50 @@ async fn find_references(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::text(format!("No references found for '{}'.", word)))
     } else {
         Ok(ToolResult::text(format!("References to '{}' ({} found):\n{}", word, count, text.trim())))
+    }
+}
+
+/// Find implementations of a trait/interface/class using ripgrep patterns.
+async fn find_implementations(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
+    let escaped = regex::escape(word);
+    let patterns = [
+        // Rust: impl Trait for Type, impl Type
+        format!(r"impl\s+({esc}\s+for\s+\w+|\w+<[^>]*>\s+for\s+\w+|{esc})\b", esc = escaped),
+        // TS/Java: class X implements Y, class X extends Y
+        format!(r"class\s+\w+\s+(implements|extends)\s+.*\b{}\b", escaped),
+        // Python: class X(Y)
+        format!(r"class\s+\w+\([^)]*\b{}\b", escaped),
+        // Go: func (r *Type) MethodName
+        format!(r"func\s+\([^)]+\)\s+{}\b", escaped),
+    ];
+
+    let mut results = Vec::new();
+    for pattern in &patterns {
+        let output = tokio::process::Command::new("rg")
+            .args(["--no-heading", "--line-number", "--max-count", "30", "-e", pattern])
+            .current_dir(cwd)
+            .output()
+            .await;
+
+        if let Ok(out) = output {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if !line.is_empty() && !results.contains(&line.to_string()) {
+                    results.push(line.to_string());
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        Ok(ToolResult::text(format!("No implementations found for '{}'.", word)))
+    } else {
+        Ok(ToolResult::text(format!(
+            "Implementations of '{}' ({} found):\n{}",
+            word,
+            results.len(),
+            results.join("\n")
+        )))
     }
 }
 

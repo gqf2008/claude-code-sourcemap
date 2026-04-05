@@ -33,3 +33,7 @@ dirs = "6"
 similar = { version = "2", features = ["unicode"] }
 tokio-util = "0.7"
 base64 = "0.22"
+sha2 = "0.10"
+rand = "0.9"
+urlencoding = "2"
+opener = "0.7"
