@@ -93,7 +93,7 @@ impl TaskNotification {
                <duration_ms>{}</duration_ms>\n\
              </usage>\n\
              </task-notification>",
-            self.agent_id,
+            xml_escape(&self.agent_id),
             self.status,
             xml_escape(&self.summary),
             xml_escape(&self.result),
@@ -239,6 +239,21 @@ impl AgentTracker {
     pub async fn get(&self, agent_id: &str) -> Option<AgentTask> {
         self.agents.read().await.get(agent_id).cloned()
     }
+
+    /// Check if an agent is still running.
+    pub async fn is_running(&self, agent_id: &str) -> bool {
+        self.agents
+            .read()
+            .await
+            .get(agent_id)
+            .map(|t| matches!(t.status, AgentStatus::Running))
+            .unwrap_or(false)
+    }
+
+    /// Remove an agent entry from the tracker (cleanup after notification sent).
+    pub async fn remove(&self, agent_id: &str) {
+        self.agents.write().await.remove(agent_id);
+    }
 }
 
 // ── SendMessage tool ─────────────────────────────────────────────────────────
@@ -370,13 +385,14 @@ impl Tool for TaskStopTool {
                 )))
             }
             Some(_) => {
-                // Cancel via CancellationToken
+                // Cancel via CancellationToken — the background loop will detect
+                // cancellation and call tracker.kill() itself, so we only cancel the
+                // token here and don't call kill() to avoid duplicate notifications.
                 let tokens = self.cancel_tokens.read().await;
                 if let Some(token) = tokens.get(agent_id) {
                     token.cancel();
                 }
-                self.tracker.kill(agent_id).await;
-                Ok(ToolResult::text(format!("Agent '{}' stopped", agent_id)))
+                Ok(ToolResult::text(format!("Agent '{}' stop requested", agent_id)))
             }
         }
     }

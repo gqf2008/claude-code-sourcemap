@@ -284,16 +284,21 @@ pub fn query_stream(
                         match hooks.run(HookEvent::Stop, ctx).await {
                             HookDecision::FeedbackAndContinue { feedback } if stop_hook_retries < MAX_STOP_HOOK_RETRIES => {
                                 stop_hook_retries += 1;
-                                // exit 2: inject feedback as a new user message and loop
-                                let feedback_msg = UserMessage {
-                                    uuid: Uuid::new_v4().to_string(),
-                                    content: vec![ContentBlock::Text { text: feedback.clone() }],
-                                };
-                                messages.push(Message::User(feedback_msg));
-                                yield AgentEvent::TextDelta(format!("\n[Stop hook feedback ({}/{})]: {}\n", stop_hook_retries, MAX_STOP_HOOK_RETRIES, feedback));
-                                turn_count += 1;
-                                { let mut s = state.write().await; s.turn_count = turn_count; }
-                                continue; // restart the query loop
+                                // Check max_turns before injecting feedback turn
+                                if turn_count + 1 >= config.max_turns {
+                                    yield AgentEvent::TextDelta("\n[Stop hook: at max turns — stopping]\n".to_string());
+                                } else {
+                                    // exit 2: inject feedback as a new user message and loop
+                                    let feedback_msg = UserMessage {
+                                        uuid: Uuid::new_v4().to_string(),
+                                        content: vec![ContentBlock::Text { text: feedback.clone() }],
+                                    };
+                                    messages.push(Message::User(feedback_msg));
+                                    yield AgentEvent::TextDelta(format!("\n[Stop hook feedback ({}/{})]: {}\n", stop_hook_retries, MAX_STOP_HOOK_RETRIES, feedback));
+                                    turn_count += 1;
+                                    { let mut s = state.write().await; s.turn_count = turn_count; }
+                                    continue; // restart the query loop
+                                }
                             }
                             HookDecision::FeedbackAndContinue { .. } => {
                                 yield AgentEvent::TextDelta("\n[Stop hook retry limit reached — stopping]\n".to_string());

@@ -32,6 +32,12 @@ impl Tool for GlobTool {
 
     async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
         let pattern = input["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'pattern'"))?;
+
+        // Prevent directory traversal via pattern
+        if pattern.contains("..") || std::path::Path::new(pattern).is_absolute() {
+            return Ok(ToolResult::error("Pattern cannot contain '..' or be an absolute path"));
+        }
+
         let search_dir = match input["path"].as_str() {
             Some(p) => match path_util::resolve_path(p, &context.cwd) {
                 Ok(resolved) => resolved,

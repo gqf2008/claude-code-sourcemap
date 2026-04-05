@@ -38,35 +38,53 @@ impl Tool for BashTool {
 
         let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("bash", "-c") };
 
-        let output = tokio::time::timeout(
+        let child = Command::new(shell)
+            .arg(flag)
+            .arg(command)
+            .current_dir(&context.cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to execute: {}", e))?;
+
+        // Grab the PID before consuming the child
+        let child_id = child.id();
+
+        match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
-            Command::new(shell)
-                .arg(flag)
-                .arg(command)
-                .current_dir(&context.cwd)
-                .output(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Command timed out after {}ms", timeout_ms))?
-        .map_err(|e| anyhow::anyhow!("Failed to execute: {}", e))?;
+            child.wait_with_output(),
+        ).await {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let mut result = stdout.to_string();
+                if !stderr.is_empty() {
+                    if !result.is_empty() { result.push('\n'); }
+                    result.push_str("STDERR:\n");
+                    result.push_str(&stderr);
+                }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut result = stdout.to_string();
-        if !stderr.is_empty() {
-            if !result.is_empty() { result.push('\n'); }
-            result.push_str("STDERR:\n");
-            result.push_str(&stderr);
-        }
-
-        if output.status.success() {
-            Ok(ToolResult::text(if result.is_empty() { "(no output)".into() } else { result }))
-        } else {
-            Ok(ToolResult::error(format!(
-                "Exit code {}\n{}",
-                output.status.code().unwrap_or(-1),
-                result
-            )))
+                if output.status.success() {
+                    Ok(ToolResult::text(if result.is_empty() { "(no output)".into() } else { result }))
+                } else {
+                    Ok(ToolResult::error(format!(
+                        "Exit code {}\n{}",
+                        output.status.code().unwrap_or(-1),
+                        result
+                    )))
+                }
+            }
+            Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {}", e)),
+            Err(_) => {
+                // Timeout — kill the child process by PID
+                if let Some(pid) = child_id {
+                    #[cfg(unix)]
+                    { let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).status(); }
+                    #[cfg(windows)]
+                    { let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status(); }
+                }
+                Ok(ToolResult::error(format!("Command timed out after {}ms", timeout_ms)))
+            }
         }
     }
 }

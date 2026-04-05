@@ -266,16 +266,23 @@ impl Tool for DispatchAgentTool {
                     messages: Vec::new(),
                 };
 
+                // Create message channel so SendMessage can deliver follow-ups
+                let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                if let Some(ref channels) = self.agent_channels {
+                    channels.write().await.insert(agent_id.clone(), msg_tx);
+                }
+
                 let client = self.client.clone();
                 let tracker = tracker.clone();
                 let agent_id_clone = agent_id.clone();
                 let cancel_tokens = self.cancel_tokens.clone();
+                let agent_channels = self.agent_channels.clone();
 
                 tokio::spawn(async move {
                     let mut stream = query_stream(
                         client,
                         executor,
-                        state,
+                        state.clone(),
                         tool_context,
                         query_config,
                         init_messages,
@@ -290,10 +297,22 @@ impl Tool for DispatchAgentTool {
                     loop {
                         tokio::select! {
                             _ = cancel_token.cancelled() => {
-                                // TaskStop was called — abort the agent
                                 agent_abort.abort();
-                                tracker.kill(&agent_id_clone).await;
+                                // Only send kill notification if still running
+                                if tracker.is_running(&agent_id_clone).await {
+                                    tracker.kill(&agent_id_clone).await;
+                                }
                                 break;
+                            }
+                            Some(follow_up) = msg_rx.recv() => {
+                                // Inject follow-up message from SendMessage into the agent's state
+                                let msg = claude_core::message::Message::User(
+                                    claude_core::message::UserMessage {
+                                        uuid: uuid::Uuid::new_v4().to_string(),
+                                        content: vec![claude_core::message::ContentBlock::Text { text: follow_up }],
+                                    }
+                                );
+                                state.write().await.messages.push(msg);
                             }
                             event = stream.next() => {
                                 match event {
@@ -303,11 +322,15 @@ impl Tool for DispatchAgentTool {
                                         total_tokens += u.input_tokens + u.output_tokens;
                                     }
                                     Some(AgentEvent::Error(e)) => {
-                                        tracker.fail(&agent_id_clone, e).await;
+                                        let error_with_context = if output.is_empty() {
+                                            e
+                                        } else {
+                                            format!("Error after partial output:\n{}\n\nError: {}", output, e)
+                                        };
+                                        tracker.fail(&agent_id_clone, error_with_context).await;
                                         break;
                                     }
                                     None => {
-                                        // Stream ended — agent completed
                                         tracker
                                             .complete(&agent_id_clone, output, total_tokens, tool_use_count)
                                             .await;
@@ -319,10 +342,15 @@ impl Tool for DispatchAgentTool {
                         }
                     }
 
-                    // Clean up cancel token
+                    // Clean up cancel token and agent channel
                     if let Some(ref tokens) = cancel_tokens {
                         tokens.write().await.remove(&agent_id_clone);
                     }
+                    if let Some(ref channels) = agent_channels {
+                        channels.write().await.remove(&agent_id_clone);
+                    }
+                    // Clean up agent entry from tracker
+                    tracker.remove(&agent_id_clone).await;
                 });
 
                 return Ok(ToolResult::text(

@@ -36,6 +36,10 @@ impl Tool for FileEditTool {
         let old_string = input["old_string"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'old_string'"))?;
         let new_string = input["new_string"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'new_string'"))?;
 
+        if old_string.is_empty() {
+            return Ok(ToolResult::error("old_string must not be empty"));
+        }
+
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(format!("{}", e))),

@@ -78,6 +78,7 @@ impl ToolExecutor {
             }
         }
 
+        // Execute with the (possibly hook-modified) input
         let result = self.execute_inner(tool_use_id, tool_name, actual_input.clone(), context, tool).await;
 
         // ── PostToolUse hook ─────────────────────────────────────────────────
@@ -129,6 +130,7 @@ impl ToolExecutor {
             };
         }
 
+        // Permission check uses the (possibly hook-modified) input
         let perm = self.permission_checker.check(tool.as_ref(), &input).await;
         match perm.behavior {
             PermissionBehavior::Deny => {

@@ -38,22 +38,28 @@ impl Tool for FileWriteTool {
             Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
 
-        let is_new = !path.exists();
-
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        if is_new {
-            print_create_diff(file_path, content);
-            tokio::fs::write(&path, content).await?;
-            Ok(ToolResult::text(format!("Created {}", path.display())))
-        } else {
-            // Overwrite: show diff
-            let old = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-            crate::diff_ui::print_diff(file_path, &old, content);
-            tokio::fs::write(&path, content).await?;
-            Ok(ToolResult::text(format!("Wrote {}", path.display())))
+        // Read existing content (if any) before writing — avoids TOCTOU by
+        // basing the "new vs overwrite" decision on the actual read result.
+        match tokio::fs::read_to_string(&path).await {
+            Ok(old) => {
+                // File exists — show diff and overwrite
+                crate::diff_ui::print_diff(file_path, &old, content);
+                tokio::fs::write(&path, content).await?;
+                Ok(ToolResult::text(format!("Wrote {}", path.display())))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // New file
+                print_create_diff(file_path, content);
+                tokio::fs::write(&path, content).await?;
+                Ok(ToolResult::text(format!("Created {}", path.display())))
+            }
+            Err(e) => {
+                Ok(ToolResult::error(format!("Cannot read existing file: {}", e)))
+            }
         }
     }
 }

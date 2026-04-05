@@ -241,7 +241,19 @@ pub async fn compact_conversation(
         anyhow::bail!("Compact response was empty");
     }
 
-    Ok(format_compact_summary(&raw_text))
+    let summary = format_compact_summary(&raw_text);
+
+    // Validate that we actually got a meaningful summary.
+    // If Claude didn't produce <summary> tags, the summary is just the raw text
+    // which likely means compaction failed (refusal, distraction, etc.).
+    if !raw_text.contains("<summary>") {
+        tracing::warn!("Compaction response missing <summary> tags — may be unreliable");
+    }
+    if summary.trim().is_empty() || summary.len() < 50 {
+        anyhow::bail!("Compaction produced an empty or too-short summary — keeping original messages");
+    }
+
+    Ok(summary)
 }
 
 /// Build the system message text that replaces old conversation history.
