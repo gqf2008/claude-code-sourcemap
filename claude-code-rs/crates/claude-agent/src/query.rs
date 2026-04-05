@@ -19,6 +19,8 @@ pub enum AgentEvent {
     TextDelta(String),
     ThinkingDelta(String),
     ToolUseStart { id: String, name: String },
+    /// Emitted when tool input is fully parsed (at ContentBlockStop).
+    ToolUseReady { id: String, name: String, input: serde_json::Value },
     ToolResult { id: String, is_error: bool, text: Option<String> },
     AssistantMessage(AssistantMessage),
     TurnComplete { stop_reason: StopReason },
@@ -159,6 +161,11 @@ pub fn query_stream(
                             if !current_tool_id.is_empty() {
                                 let input: serde_json::Value = serde_json::from_str(&current_tool_input)
                                     .unwrap_or(serde_json::Value::Object(Default::default()));
+                                yield AgentEvent::ToolUseReady {
+                                    id: current_tool_id.clone(),
+                                    name: current_tool_name.clone(),
+                                    input: input.clone(),
+                                };
                                 assistant_blocks.push(ContentBlock::ToolUse {
                                     id: current_tool_id.clone(),
                                     name: current_tool_name.clone(),

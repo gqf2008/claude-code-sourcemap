@@ -143,6 +143,10 @@ where
                 on_progress(TaskProgress::ToolUse { name, turn: turns });
             }
 
+            AgentEvent::ToolUseReady { .. } => {
+                // Input is ready — task_runner doesn't need to act on this
+            }
+
             AgentEvent::ToolResult { is_error, text, .. } => {
                 tool_uses += 1;
                 on_progress(TaskProgress::ToolDone {

@@ -8,7 +8,6 @@ fn format_tool_result_inline(name: &str, text: &str) -> Option<String> {
     match name {
         "task_create" | "task_update" | "task_get" | "task_list" |
         "TodoWrite" | "TodoRead" => {
-            // Show task tool output as a compact status line
             let first_line = text.lines().next().unwrap_or(text);
             let truncated = if first_line.len() > 120 {
                 format!("{}…", &first_line[..117])
@@ -19,6 +18,52 @@ fn format_tool_result_inline(name: &str, text: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Format tool start with key parameter info for better UX.
+fn format_tool_start(name: &str, input: &serde_json::Value) -> String {
+    let detail = match name {
+        "Read" | "FileRead" => input["file_path"].as_str()
+            .or_else(|| input["path"].as_str())
+            .map(|p| format!(" \x1b[2m{}\x1b[0m", short_path(p)))
+            .unwrap_or_default(),
+        "Edit" | "FileEdit" => input["file_path"].as_str()
+            .or_else(|| input["path"].as_str())
+            .map(|p| format!(" \x1b[2m{}\x1b[0m", short_path(p)))
+            .unwrap_or_default(),
+        "Write" | "FileWrite" => input["file_path"].as_str()
+            .or_else(|| input["path"].as_str())
+            .map(|p| format!(" \x1b[2m{}\x1b[0m", short_path(p)))
+            .unwrap_or_default(),
+        "Bash" => input["command"].as_str()
+            .map(|c| {
+                let short = if c.len() > 60 { format!("{}…", &c[..57]) } else { c.to_string() };
+                format!(" \x1b[2m`{}`\x1b[0m", short)
+            })
+            .unwrap_or_default(),
+        "Glob" | "GlobTool" => input["pattern"].as_str()
+            .map(|p| format!(" \x1b[2m{}\x1b[0m", p))
+            .unwrap_or_default(),
+        "Grep" | "GrepTool" => input["pattern"].as_str()
+            .map(|p| format!(" \x1b[2m/{}/\x1b[0m", p))
+            .unwrap_or_default(),
+        "dispatch_agent" => input["agent_type"].as_str()
+            .map(|t| format!(" \x1b[2m({})\x1b[0m", t))
+            .unwrap_or_default(),
+        "WebFetch" => input["url"].as_str()
+            .map(|u| format!(" \x1b[2m{}\x1b[0m", u))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    format!("\x1b[36m⚙ {}{}\x1b[0m", name, detail)
+}
+
+fn short_path(path: &str) -> &str {
+    let parts: Vec<&str> = path.split(['/', '\\']).collect();
+    if parts.len() <= 3 { return path; }
+    let start = parts.len() - 3;
+    let idx = path.len() - parts[start..].join("/").len();
+    &path[idx..]
 }
 
 pub async fn print_stream(
@@ -36,7 +81,10 @@ pub async fn print_stream(
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::ToolUseStart { name, .. } => {
                 last_tool_name = name.clone();
-                eprintln!("\n\x1b[36m⚙ {}\x1b[0m", name);
+                // Initial indicator — full detail shown at ToolUseReady
+            }
+            AgentEvent::ToolUseReady { name, input, .. } => {
+                eprintln!("\n{}", format_tool_start(&name, &input));
             }
             AgentEvent::ToolResult { is_error, text, .. } => {
                 if is_error {
