@@ -1,36 +1,112 @@
-pub mod bash;
+// ── File I/O tools ───────────────────────────────────────────────────────────
 pub mod file_read;
 pub mod file_edit;
 pub mod file_write;
+pub mod multi_edit;
 pub mod glob_tool;
 pub mod grep;
+pub mod ls;
+
+// ── Shell / execution tools ─────────────────────────────────────────────────
+pub mod bash;
+pub mod powershell;
+pub mod repl;
+
+// ── Web tools ───────────────────────────────────────────────────────────────
 pub mod web_fetch;
 pub mod web_search;
-pub mod ask_user;
-pub mod ls;
-pub mod todo;
-pub mod task;
-pub mod multi_edit;
-pub mod diff_ui;
-pub mod sleep;
-pub mod config_tool;
-pub mod powershell;
-pub mod notebook;
-pub mod plan_mode;
-pub mod tool_search;
-pub mod mcp;
-pub mod skill_tool;
-pub mod repl;
-pub mod send_message;
-pub mod git;
-pub mod context;
-pub mod worktree;
+
+// ── Code intelligence tools ─────────────────────────────────────────────────
 pub mod lsp;
+pub mod notebook;
+pub mod diff_ui;
+
+// ── Git tools ───────────────────────────────────────────────────────────────
+pub mod git;
+pub mod worktree;
+
+// ── Interaction tools ───────────────────────────────────────────────────────
+pub mod ask_user;
+pub mod send_message;
+
+// ── Agent / orchestration tools ─────────────────────────────────────────────
+pub mod task;
+pub mod skill_tool;
+pub mod plan_mode;
+
+// ── Management tools ────────────────────────────────────────────────────────
+pub mod todo;
+pub mod config_tool;
+pub mod context;
+pub mod sleep;
+pub mod tool_search;
+
+// ── MCP (Model Context Protocol) ────────────────────────────────────────────
+pub mod mcp;
+
+// ── Internal utilities (not tools) ──────────────────────────────────────────
 pub mod path_util;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use claude_core::tool::{DynTool, Tool};
+
+/// Tool category for grouping and filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolCategory {
+    File,
+    Shell,
+    Web,
+    Code,
+    Git,
+    Interaction,
+    Agent,
+    Management,
+    Mcp,
+}
+
+impl ToolCategory {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::File => "File I/O",
+            Self::Shell => "Shell",
+            Self::Web => "Web",
+            Self::Code => "Code Intelligence",
+            Self::Git => "Git",
+            Self::Interaction => "Interaction",
+            Self::Agent => "Agent",
+            Self::Management => "Management",
+            Self::Mcp => "MCP",
+        }
+    }
+}
+
+/// Map a tool name to its category.
+pub fn tool_category(name: &str) -> ToolCategory {
+    match name {
+        "FileRead" | "FileEdit" | "FileWrite" | "MultiEdit"
+        | "Glob" | "Grep" | "ListDir" => ToolCategory::File,
+
+        "Bash" | "PowerShell" | "REPL" => ToolCategory::Shell,
+
+        "WebFetch" | "WebSearch" => ToolCategory::Web,
+
+        "LSP" | "NotebookEdit" | "DiffUI" => ToolCategory::Code,
+
+        "Git" | "GitStatus" | "EnterWorktree" | "ExitWorktree" => ToolCategory::Git,
+
+        "AskUser" | "SendUserMessage" => ToolCategory::Interaction,
+
+        "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList"
+        | "TaskOutput" | "TaskStop" | "Skill"
+        | "EnterPlanMode" | "ExitPlanMode" => ToolCategory::Agent,
+
+        "TodoWrite" | "TodoRead" | "Config" | "ContextInspect"
+        | "Verify" | "Sleep" | "ToolSearch" => ToolCategory::Management,
+
+        _ => ToolCategory::Mcp, // MCP proxy tools and unknown
+    }
+}
 
 pub struct ToolRegistry {
     tools: HashMap<String, DynTool>,
@@ -99,6 +175,26 @@ impl ToolRegistry {
         registry.register(lsp::LspTool);
         // MCP resource tools require a manager — use register_mcp() to add them
         registry
+    }
+
+    /// Return tools filtered by category.
+    pub fn by_category(&self, category: ToolCategory) -> Vec<(&str, &DynTool)> {
+        self.tools
+            .iter()
+            .filter(|(name, _)| tool_category(name) == category)
+            .map(|(name, tool)| (name.as_str(), tool))
+            .collect()
+    }
+
+    /// Return a summary of tool counts by category.
+    pub fn category_summary(&self) -> Vec<(ToolCategory, usize)> {
+        let mut counts: HashMap<ToolCategory, usize> = HashMap::new();
+        for name in self.tools.keys() {
+            *counts.entry(tool_category(name)).or_insert(0) += 1;
+        }
+        let mut result: Vec<_> = counts.into_iter().collect();
+        result.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        result
     }
 
     /// Register MCP tools with a shared manager.
