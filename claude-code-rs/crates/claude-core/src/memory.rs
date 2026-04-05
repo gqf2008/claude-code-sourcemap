@@ -99,8 +99,12 @@ fn parse_frontmatter(text: &str) -> (Vec<String>, &str) {
         return (Vec::new(), text);
     };
     let fm = &rest[..end];
-    let body = &rest[end + 4..]; // skip `\n---`
-    let body = body.trim_start_matches('\n').trim_start_matches('\r');
+    let body_start = end + 4; // skip `\n---`
+    let body = if body_start <= rest.len() {
+        rest[body_start..].trim_start_matches('\n').trim_start_matches('\r')
+    } else {
+        ""
+    };
     let lines: Vec<String> = fm.lines().map(|l| l.to_string()).collect();
     (lines, body)
 }

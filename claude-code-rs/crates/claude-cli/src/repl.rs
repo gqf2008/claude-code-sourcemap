@@ -211,13 +211,23 @@ fn handle_memory_command(sub: &str, cwd: &std::path::Path) {
                 println!("Usage: /memory open <filename>");
                 return;
             }
+            // Validate: reject path traversal attempts
+            if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') || rel_path.contains(':') {
+                println!("Invalid filename: must be a simple name without path separators or '..'");
+                return;
+            }
             // Try to find the file in memory dirs
             let mem_dirs = claude_core::memory::memory_dirs(cwd);
             let mut found = false;
             for dir in &mem_dirs {
                 let p = dir.join(rel_path);
+                // Verify resolved path stays inside the memory directory
+                if let Ok(canonical) = p.canonicalize() {
+                    if !canonical.starts_with(dir) {
+                        continue;
+                    }
+                }
                 if p.exists() {
-                    // Open in $EDITOR or just print the path
                     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "notepad".into());
                     let _ = std::process::Command::new(&editor).arg(&p).status();
                     found = true;
@@ -225,7 +235,7 @@ fn handle_memory_command(sub: &str, cwd: &std::path::Path) {
                 }
             }
             if !found {
-                // Create new file
+                // Create new file in user memory dir
                 match claude_core::memory::ensure_user_memory_dir() {
                     Ok(dir) => {
                         let p = dir.join(rel_path);

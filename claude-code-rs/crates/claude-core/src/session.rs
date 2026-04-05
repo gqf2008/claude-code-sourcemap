@@ -63,13 +63,12 @@ pub fn sessions_dir() -> PathBuf {
 }
 
 /// Path for a specific session file.
-fn session_path(id: &str) -> PathBuf {
+fn session_path(id: &str) -> anyhow::Result<PathBuf> {
     // Validate session ID to prevent path traversal
-    assert!(
-        id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
-        "Invalid session ID: must be alphanumeric, dash, or underscore"
-    );
-    sessions_dir().join(format!("{}.json", id))
+    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        anyhow::bail!("Invalid session ID: must be alphanumeric, dash, or underscore");
+    }
+    Ok(sessions_dir().join(format!("{}.json", id)))
 }
 
 // ── Save ─────────────────────────────────────────────────────────────────────
@@ -78,7 +77,7 @@ fn session_path(id: &str) -> PathBuf {
 pub fn save_session(session: &SessionSnapshot) -> anyhow::Result<()> {
     let dir = sessions_dir();
     std::fs::create_dir_all(&dir)?;
-    let path = session_path(&session.id);
+    let path = session_path(&session.id)?;
     let json = serde_json::to_string_pretty(session)?;
     std::fs::write(&path, json)?;
     Ok(())
@@ -88,7 +87,7 @@ pub fn save_session(session: &SessionSnapshot) -> anyhow::Result<()> {
 
 /// Load a session by ID.
 pub fn load_session(id: &str) -> anyhow::Result<SessionSnapshot> {
-    let path = session_path(id);
+    let path = session_path(id)?;
     if !path.exists() {
         anyhow::bail!("Session not found: {}", id);
     }
@@ -143,7 +142,7 @@ fn read_session_meta(path: &Path) -> Option<SessionMeta> {
 
 /// Delete a saved session.
 pub fn delete_session(id: &str) -> anyhow::Result<()> {
-    let path = session_path(id);
+    let path = session_path(id)?;
     if path.exists() {
         std::fs::remove_file(&path)?;
     }

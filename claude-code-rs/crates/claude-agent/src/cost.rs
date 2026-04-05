@@ -145,7 +145,7 @@ impl CostTracker {
             lines.push(String::new());
             lines.push("  Usage by model:".to_string());
             let mut models: Vec<_> = inner.by_model.iter().collect();
-            models.sort_by(|a, b| b.1.cost_usd.partial_cmp(&a.1.cost_usd).unwrap());
+            models.sort_by(|a, b| b.1.cost_usd.partial_cmp(&a.1.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
             for (model, usage) in models {
                 lines.push(format!(
                     "    {}: {} in, {} out, {} cache_read, {} cache_write ({})",
