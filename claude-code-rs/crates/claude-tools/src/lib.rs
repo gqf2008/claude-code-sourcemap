@@ -8,6 +8,7 @@ pub mod web_fetch;
 pub mod ask_user;
 pub mod ls;
 pub mod todo;
+pub mod task;
 pub mod multi_edit;
 pub mod diff_ui;
 pub mod sleep;
@@ -62,6 +63,10 @@ impl ToolRegistry {
         registry.register(sleep::SleepTool);
         registry.register(config_tool::ConfigTool);
         registry.register(powershell::PowerShellTool);
+        registry.register(task::TaskCreateTool);
+        registry.register(task::TaskUpdateTool);
+        registry.register(task::TaskGetTool);
+        registry.register(task::TaskListTool);
         registry
     }
 }

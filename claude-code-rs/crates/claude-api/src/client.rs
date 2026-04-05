@@ -2,6 +2,8 @@ use std::pin::Pin;
 use anyhow::{Context, Result};
 use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use tracing::info;
+use crate::retry::{ApiHttpError, RetryConfig, with_retry};
 use crate::types::*;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -14,6 +16,7 @@ pub struct AnthropicClient {
     base_url: String,
     default_model: String,
     max_tokens: u32,
+    retry_config: RetryConfig,
 }
 
 impl AnthropicClient {
@@ -24,6 +27,7 @@ impl AnthropicClient {
             base_url: DEFAULT_BASE_URL.to_string(),
             default_model: DEFAULT_MODEL.to_string(),
             max_tokens: 16384,
+            retry_config: RetryConfig::default(),
         }
     }
 
@@ -42,6 +46,11 @@ impl AnthropicClient {
         self
     }
 
+    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = config;
+        self
+    }
+
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -56,28 +65,64 @@ impl AnthropicClient {
         headers
     }
 
-    /// Send a non-streaming messages request
-    pub async fn messages(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
-        let url = format!("{}/v1/messages", self.base_url);
-        let response = self
-            .http
-            .post(&url)
-            .headers(self.headers())
-            .json(request)
-            .send()
-            .await
-            .context("Failed to send API request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("API error ({}): {}", status, body);
-        }
-
-        response.json().await.context("Failed to parse API response")
+    /// Extract `Retry-After` header value (seconds) from response headers.
+    fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+        headers
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
     }
 
-    /// Send a streaming messages request, returns an async stream of events
+    /// Send a non-streaming messages request (with retry).
+    pub async fn messages(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
+        let url = format!("{}/v1/messages", self.base_url);
+        let request = request.clone();
+
+        with_retry(
+            &self.retry_config,
+            || {
+                let url = url.clone();
+                let request = request.clone();
+                let http = self.http.clone();
+                let headers = self.headers();
+                async move {
+                    let response = http
+                        .post(&url)
+                        .headers(headers)
+                        .json(&request)
+                        .send()
+                        .await
+                        .map_err(|e| ApiHttpError {
+                            status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+                            body: format!("Request failed: {}", e),
+                            retry_after: None,
+                        })?;
+
+                    if !response.status().is_success() {
+                        let status = response.status().as_u16();
+                        let retry_after = Self::parse_retry_after(response.headers());
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(ApiHttpError { status, body, retry_after });
+                    }
+
+                    response.json::<MessagesResponse>().await.map_err(|e| ApiHttpError {
+                        status: 0,
+                        body: format!("Failed to parse response: {}", e),
+                        retry_after: None,
+                    })
+                }
+            },
+            |attempt, status, delay| {
+                info!(
+                    "Retrying API request (attempt {}, status {}, wait {:.1}s)",
+                    attempt, status, delay.as_secs_f64()
+                );
+            },
+        )
+        .await
+    }
+
+    /// Send a streaming messages request (with retry on initial connection).
     pub async fn messages_stream(
         &self,
         request: &MessagesRequest,
@@ -86,20 +131,47 @@ impl AnthropicClient {
         let mut req = request.clone();
         req.stream = true;
 
-        let response = self
-            .http
-            .post(&url)
-            .headers(self.headers())
-            .json(&req)
-            .send()
-            .await
-            .context("Failed to send streaming request")?;
+        // Retry only the initial connection — once streaming starts, errors
+        // propagate via the stream (mid-stream retries would lose partial state).
+        let response = with_retry(
+            &self.retry_config,
+            || {
+                let url = url.clone();
+                let req = req.clone();
+                let http = self.http.clone();
+                let headers = self.headers();
+                async move {
+                    let response = http
+                        .post(&url)
+                        .headers(headers)
+                        .json(&req)
+                        .send()
+                        .await
+                        .map_err(|e| ApiHttpError {
+                            status: e.status().map(|s| s.as_u16()).unwrap_or(0),
+                            body: format!("Request failed: {}", e),
+                            retry_after: None,
+                        })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("API error ({}): {}", status, body);
-        }
+                    if !response.status().is_success() {
+                        let status = response.status().as_u16();
+                        let retry_after = Self::parse_retry_after(response.headers());
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(ApiHttpError { status, body, retry_after });
+                    }
+
+                    Ok(response)
+                }
+            },
+            |attempt, status, delay| {
+                info!(
+                    "Retrying stream request (attempt {}, status {}, wait {:.1}s)",
+                    attempt, status, delay.as_secs_f64()
+                );
+            },
+        )
+        .await
+        .context("Failed to connect streaming request")?;
 
         let stream = async_stream::stream! {
             use futures::StreamExt;

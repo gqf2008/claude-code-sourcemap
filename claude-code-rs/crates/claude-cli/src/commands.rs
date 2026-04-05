@@ -8,6 +8,7 @@ pub enum SlashCommand {
     Cost,
     Skills,
     Memory { sub: String },
+    Session { sub: String },
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -28,6 +29,7 @@ impl SlashCommand {
             "cost" => Self::Cost,
             "skills" => Self::Skills,
             "memory" => Self::Memory { sub: args },
+            "session" | "resume" => Self::Session { sub: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -65,6 +67,7 @@ impl SlashCommand {
                 }
             }
             Self::Memory { sub } => CommandResult::Memory { sub: sub.clone() },
+            Self::Session { sub } => CommandResult::Session { sub: sub.clone() },
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -84,6 +87,7 @@ pub enum CommandResult {
     ShowCost,
     Compact { instructions: Option<String> },
     Memory { sub: String },
+    Session { sub: String },
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -109,6 +113,9 @@ Available commands:
   /skills            List available skills
   /memory list       List memory files
   /memory open <f>   Open a memory file (path relative to memory dir)
+  /session save      Save current session
+  /session list      List saved sessions
+  /session load <id> Resume a saved session
   /exit              Exit the CLI";
 
 

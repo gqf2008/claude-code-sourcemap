@@ -442,4 +442,48 @@ impl QueryEngine {
         s.total_input_tokens = 0;
         s.total_output_tokens = 0;
     }
+
+    // ── Session persistence ──────────────────────────────────────────────────
+
+    /// Save the current session to disk.
+    pub async fn save_session(&self) -> anyhow::Result<()> {
+        use claude_core::session::*;
+        let s = self.state.read().await;
+        let snapshot = SessionSnapshot {
+            id: self.session_id.clone(),
+            title: title_from_messages(&s.messages),
+            model: s.model.clone(),
+            cwd: self.cwd.to_string_lossy().to_string(),
+            created_at: chrono::Utc::now(), // approximate
+            updated_at: chrono::Utc::now(),
+            turn_count: s.turn_count,
+            input_tokens: s.total_input_tokens,
+            output_tokens: s.total_output_tokens,
+            messages: s.messages.clone(),
+        };
+        save_session(&snapshot)
+    }
+
+    /// Restore a session from disk, replacing current state.
+    pub async fn restore_session(&self, session_id: &str) -> anyhow::Result<String> {
+        use claude_core::session::load_session;
+        let snap = load_session(session_id)?;
+        let title = snap.title.clone();
+        {
+            let mut s = self.state.write().await;
+            s.messages = snap.messages;
+            s.model = snap.model;
+            s.turn_count = snap.turn_count;
+            s.total_input_tokens = snap.input_tokens;
+            s.total_output_tokens = snap.output_tokens;
+        }
+        // Reset abort signal for new session
+        self.abort_signal.reset();
+        Ok(title)
+    }
+
+    /// Get the working directory.
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
 }

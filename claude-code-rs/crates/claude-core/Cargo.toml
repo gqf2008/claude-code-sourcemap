@@ -14,3 +14,4 @@ tokio = { workspace = true }
 dirs = { workspace = true }
 walkdir = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }

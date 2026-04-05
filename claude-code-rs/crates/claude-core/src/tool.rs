@@ -20,6 +20,9 @@ impl AbortSignal {
     pub fn is_aborted(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Default for AbortSignal {

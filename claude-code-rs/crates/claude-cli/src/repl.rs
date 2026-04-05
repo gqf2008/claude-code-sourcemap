@@ -66,6 +66,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                         CommandResult::Memory { sub } => {
                             handle_memory_command(&sub, &cwd);
                         }
+                        CommandResult::Session { sub } => {
+                            handle_session_command(&sub, &engine).await;
+                        }
                         CommandResult::RunSkill { name, prompt } => {
                             run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                         }
@@ -93,6 +96,17 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
             Err(err) => { eprintln!("Error: {:?}", err); break; }
         }
     }
+
+    // Auto-save session on exit (if there's history)
+    let has_messages = { engine.state().read().await.messages.len() > 1 };
+    if has_messages {
+        if let Err(e) = engine.save_session().await {
+            eprintln!("\x1b[2m(Session auto-save failed: {})\x1b[0m", e);
+        } else {
+            eprintln!("\x1b[2m(Session saved: {})\x1b[0m", &engine.session_id()[..8]);
+        }
+    }
+
     Ok(())
 }
 
@@ -149,6 +163,74 @@ fn handle_memory_command(sub: &str, cwd: &std::path::Path) {
         }
         other => {
             println!("Unknown memory subcommand: '{}'. Use 'list' or 'open <file>'.", other);
+        }
+    }
+}
+
+/// Handle /session subcommands.
+async fn handle_session_command(sub: &str, engine: &QueryEngine) {
+    let parts: Vec<&str> = sub.splitn(2, ' ').collect();
+    match parts.first().copied().unwrap_or("") {
+        "" | "list" => {
+            let sessions = claude_core::session::list_sessions();
+            if sessions.is_empty() {
+                println!("No saved sessions.");
+            } else {
+                println!("Saved sessions:");
+                for s in &sessions {
+                    let age = claude_core::session::format_age(&s.updated_at);
+                    println!(
+                        "  \x1b[36m{:.8}\x1b[0m  {:<50} ({} msgs, {} turns, {})",
+                        s.id, s.title, s.message_count, s.turn_count, age,
+                    );
+                }
+            }
+        }
+        "save" => {
+            match engine.save_session().await {
+                Ok(()) => {
+                    println!("\x1b[32m✓ Session saved ({})\x1b[0m", &engine.session_id()[..8]);
+                }
+                Err(e) => eprintln!("\x1b[31mFailed to save session: {}\x1b[0m", e),
+            }
+        }
+        "load" | "resume" => {
+            let id = parts.get(1).copied().unwrap_or("").trim();
+            if id.is_empty() {
+                // Auto-resume latest session
+                let sessions = claude_core::session::list_sessions();
+                if sessions.is_empty() {
+                    println!("No sessions to resume. Use /session list first.");
+                    return;
+                }
+                let latest = &sessions[0];
+                match engine.restore_session(&latest.id).await {
+                    Ok(title) => {
+                        println!("\x1b[32m✓ Resumed session: {}\x1b[0m", title);
+                        println!("  ({} messages restored)", latest.message_count);
+                    }
+                    Err(e) => eprintln!("\x1b[31mFailed to resume: {}\x1b[0m", e),
+                }
+            } else {
+                // Find session by prefix match
+                let sessions = claude_core::session::list_sessions();
+                let found = sessions.iter().find(|s| s.id.starts_with(id));
+                match found {
+                    Some(meta) => {
+                        match engine.restore_session(&meta.id).await {
+                            Ok(title) => {
+                                println!("\x1b[32m✓ Resumed session: {}\x1b[0m", title);
+                                println!("  ({} messages restored)", meta.message_count);
+                            }
+                            Err(e) => eprintln!("\x1b[31mFailed to resume: {}\x1b[0m", e),
+                        }
+                    }
+                    None => println!("No session found matching '{}'. Use /session list.", id),
+                }
+            }
+        }
+        other => {
+            println!("Unknown session subcommand: '{}'. Use save, list, or load <id>.", other);
         }
     }
 }

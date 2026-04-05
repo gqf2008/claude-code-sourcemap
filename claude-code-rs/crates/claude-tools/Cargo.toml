@@ -17,3 +17,5 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 similar = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }

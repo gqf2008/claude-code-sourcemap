@@ -24,6 +24,68 @@ pub struct SubAgentConfig {
     pub max_turns: u32,
 }
 
+/// Built-in agent type profiles aligned with the TS codebase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentType {
+    /// General-purpose sub-agent with full tool access (default).
+    General,
+    /// Fast exploration agent — read-only tools, lower turn limit.
+    Explore,
+    /// Planning agent — can read files and create/update tasks.
+    Plan,
+    /// Code review agent — read-only tools, focused on analysis.
+    CodeReview,
+}
+
+impl AgentType {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "explore" => Self::Explore,
+            "plan" => Self::Plan,
+            "code-review" | "code_review" | "review" => Self::CodeReview,
+            _ => Self::General,
+        }
+    }
+
+    fn system_prompt(&self, base: &str) -> String {
+        match self {
+            Self::General => base.to_string(),
+            Self::Explore => format!(
+                "{}\n\nYou are an exploration agent. Your job is to investigate the codebase \
+                 and gather information. You should ONLY read files and search — do not modify \
+                 anything. Be thorough but concise in your findings. Summarize what you discover.",
+                base
+            ),
+            Self::Plan => format!(
+                "{}\n\nYou are a planning agent. Analyze the request, break it down into \
+                 actionable tasks using task_create, and identify dependencies between them. \
+                 Read relevant code to inform your plan. Do not implement changes yourself.",
+                base
+            ),
+            Self::CodeReview => format!(
+                "{}\n\nYou are a code review agent. Analyze the code for bugs, style issues, \
+                 security concerns, and potential improvements. Be specific about file paths \
+                 and line numbers. Do not modify any files.",
+                base
+            ),
+        }
+    }
+
+    fn max_turns(&self, configured: u32) -> u32 {
+        match self {
+            Self::General => configured.min(20),
+            Self::Explore => configured.min(10),
+            Self::Plan => configured.min(15),
+            Self::CodeReview => configured.min(15),
+        }
+    }
+
+    /// Returns true if this agent type should be restricted to read-only tools.
+    fn read_only(&self) -> bool {
+        matches!(self, Self::Explore | Self::CodeReview)
+    }
+}
+
 /// A tool that spawns a sub-agent to execute a given prompt.
 /// The sub-agent runs its own query loop and returns its final text output.
 pub struct DispatchAgentTool {
@@ -40,8 +102,12 @@ impl Tool for DispatchAgentTool {
     fn description(&self) -> &str {
         "Launch a sub-agent to accomplish an independent task. The sub-agent runs a full \
          agentic loop with tools and returns its output when done. Use this for tasks that \
-         can be parallelised or isolated. The sub-agent cannot interact with the user and \
-         cannot use tools that require user interaction."
+         can be parallelised or isolated. The sub-agent cannot interact with the user.\n\n\
+         Agent types:\n\
+         - \"general\" (default): Full tool access, up to 20 turns\n\
+         - \"explore\": Read-only, fast investigation, up to 10 turns\n\
+         - \"plan\": Read + task management, up to 15 turns\n\
+         - \"code-review\": Read-only code analysis, up to 15 turns"
     }
 
     fn input_schema(&self) -> Value {
@@ -52,11 +118,17 @@ impl Tool for DispatchAgentTool {
                     "type": "string",
                     "description": "The task prompt for the sub-agent."
                 },
+                "agent_type": {
+                    "type": "string",
+                    "enum": ["general", "explore", "plan", "code-review"],
+                    "description": "The type of agent to launch. Determines available tools \
+                                    and system prompt. Default: general."
+                },
                 "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional list of tool names available to the sub-agent. \
-                                    If omitted, all non-interactive tools are available."
+                                    Overrides agent_type defaults if provided."
                 },
                 "system_prompt": {
                     "type": "string",
@@ -76,6 +148,11 @@ impl Tool for DispatchAgentTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'prompt'"))?
             .to_string();
 
+        let agent_type = input["agent_type"]
+            .as_str()
+            .map(AgentType::from_str)
+            .unwrap_or(AgentType::General);
+
         let allowed_tools: Option<Vec<String>> = input["allowed_tools"]
             .as_array()
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
@@ -83,7 +160,7 @@ impl Tool for DispatchAgentTool {
         let system_prompt = input["system_prompt"]
             .as_str()
             .map(String::from)
-            .unwrap_or_else(|| self.config.system_prompt.clone());
+            .unwrap_or_else(|| agent_type.system_prompt(&self.config.system_prompt));
 
         // Build tool definitions for the sub-agent (optionally filtered)
         let all_tool_defs: Vec<ToolDefinition> = self.registry
@@ -92,12 +169,15 @@ impl Tool for DispatchAgentTool {
             .filter(|t| t.is_enabled())
             // Sub-agents cannot use interactive tools or nested dispatch_agent
             .filter(|t| !matches!(t.name(), "AskUserQuestion" | "dispatch_agent"))
+            // Agent-type based filtering
             .filter(|t| {
                 if let Some(ref allowed) = allowed_tools {
-                    allowed.contains(&t.name().to_string())
-                } else {
-                    true
+                    return allowed.contains(&t.name().to_string());
                 }
+                if agent_type.read_only() {
+                    return t.is_read_only();
+                }
+                true
             })
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
@@ -134,7 +214,7 @@ impl Tool for DispatchAgentTool {
 
         let query_config = QueryConfig {
             system_prompt,
-            max_turns: self.config.max_turns.min(20), // cap sub-agent turns
+            max_turns: agent_type.max_turns(self.config.max_turns),
             max_tokens: self.config.max_tokens,
         };
 

@@ -5,3 +5,4 @@ pub mod config;
 pub mod claude_md;
 pub mod skills;
 pub mod memory;
+pub mod session;
