@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -15,6 +15,7 @@ pub struct ReplTool;
 #[async_trait]
 impl Tool for ReplTool {
     fn name(&self) -> &str { "REPL" }
+    fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
     fn description(&self) -> &str {
         "Execute code in a REPL (Python, Node.js, or Bash). \

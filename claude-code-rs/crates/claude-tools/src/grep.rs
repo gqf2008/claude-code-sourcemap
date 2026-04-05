@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use ignore::WalkBuilder;
 use regex::Regex;
@@ -10,6 +10,7 @@ pub struct GrepTool;
 #[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &str { "Grep" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "A powerful search tool built on ripgrep. ALWAYS use Grep for search tasks — NEVER \

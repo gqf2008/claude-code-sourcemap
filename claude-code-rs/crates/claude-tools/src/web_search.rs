@@ -6,7 +6,7 @@
 //! is configured.
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 /// Maximum number of search results to return.
@@ -19,6 +19,7 @@ pub struct WebSearchTool;
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str { "WebSearch" }
+    fn category(&self) -> ToolCategory { ToolCategory::Web }
 
     fn description(&self) -> &str {
         "Search the web for real-time information. Use this when you need current data, \

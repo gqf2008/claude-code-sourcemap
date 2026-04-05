@@ -61,6 +61,42 @@ impl ToolResult {
     }
 }
 
+/// Tool category for permission grouping and display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ToolCategory {
+    /// File system operations: Read, Edit, Write, Glob, Grep, Ls
+    FileSystem,
+    /// Shell execution: Bash, PowerShell, REPL
+    Shell,
+    /// Web/network: WebFetch, WebSearch
+    Web,
+    /// Code intelligence: Lsp, ToolSearch
+    Code,
+    /// Agent/orchestration: AgentTool, Task*, SendMessage
+    Agent,
+    /// Session/config: Config, Plan, Context, Verify, Notebook
+    Session,
+    /// MCP integration
+    Mcp,
+    /// Git operations
+    Git,
+}
+
+impl std::fmt::Display for ToolCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FileSystem => write!(f, "filesystem"),
+            Self::Shell => write!(f, "shell"),
+            Self::Web => write!(f, "web"),
+            Self::Code => write!(f, "code"),
+            Self::Agent => write!(f, "agent"),
+            Self::Session => write!(f, "session"),
+            Self::Mcp => write!(f, "mcp"),
+            Self::Git => write!(f, "git"),
+        }
+    }
+}
+
 /// Core Tool trait — every tool must implement this
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -69,6 +105,11 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> Value;
 
     async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult>;
+
+    /// Tool category for permission grouping. Defaults to Session.
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Session
+    }
 
     fn is_read_only(&self) -> bool {
         false

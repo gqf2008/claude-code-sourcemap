@@ -1,5 +1,5 @@
 use claude_core::permissions::{PermissionBehavior, PermissionMode, PermissionResult, PermissionRule};
-use claude_core::tool::Tool;
+use claude_core::tool::{Tool, ToolCategory};
 use serde_json::Value;
 use std::io::{self, Write};
 
@@ -35,21 +35,27 @@ impl PermissionChecker {
         }
 
         // Check configured rules (with optional pattern matching)
+        let tool_cat = format!("category:{}", tool.category());
         for rule in &self.rules {
-            if rule.tool_name == tool.name() || rule.tool_name == "*" {
-                // If rule has a pattern, check if input matches
-                if let Some(ref pattern) = rule.pattern {
-                    if !input_matches_pattern(input, pattern) {
-                        continue;
-                    }
+            // Match by tool name, wildcard, or category string
+            let name_matches = rule.tool_name == tool.name()
+                || rule.tool_name == "*"
+                || rule.tool_name == tool_cat;
+            if !name_matches {
+                continue;
+            }
+            // If rule has a pattern, check if input matches
+            if let Some(ref pattern) = rule.pattern {
+                if !input_matches_pattern(input, pattern) {
+                    continue;
                 }
-                match rule.behavior {
-                    PermissionBehavior::Allow => return PermissionResult::allow(),
-                    PermissionBehavior::Deny => {
-                        return PermissionResult::deny(format!("'{}' denied by rule", tool.name()));
-                    }
-                    PermissionBehavior::Ask => {}
+            }
+            match rule.behavior {
+                PermissionBehavior::Allow => return PermissionResult::allow(),
+                PermissionBehavior::Deny => {
+                    return PermissionResult::deny(format!("'{}' denied by rule", tool.name()));
                 }
+                PermissionBehavior::Ask => {}
             }
         }
 
@@ -57,10 +63,9 @@ impl PermissionChecker {
             return PermissionResult::allow();
         }
 
-        // AcceptEdits mode: auto-allow edit tools
+        // AcceptEdits mode: auto-allow filesystem edit tools by category
         if self.mode == PermissionMode::AcceptEdits {
-            let edit_tools = ["Edit", "FileEdit", "Write", "FileWrite", "MultiEdit", "NotebookEdit"];
-            if edit_tools.contains(&tool.name()) {
+            if tool.category() == ToolCategory::FileSystem {
                 return PermissionResult::allow();
             }
         }

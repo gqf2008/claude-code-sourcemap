@@ -6,7 +6,7 @@
 //! (stdio/SSE transport, tool discovery, resource listing) is deferred.
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 // ── MCP Connection (stub) ────────────────────────────────────────────────────
@@ -40,6 +40,7 @@ pub struct ListMcpResourcesTool;
 #[async_trait]
 impl Tool for ListMcpResourcesTool {
     fn name(&self) -> &str { "mcp_list_resources" }
+    fn category(&self) -> ToolCategory { ToolCategory::Mcp }
 
     fn description(&self) -> &str {
         "List resources available from connected MCP servers. Resources are \
@@ -76,6 +77,7 @@ pub struct ReadMcpResourceTool;
 #[async_trait]
 impl Tool for ReadMcpResourceTool {
     fn name(&self) -> &str { "mcp_read_resource" }
+    fn category(&self) -> ToolCategory { ToolCategory::Mcp }
 
     fn description(&self) -> &str {
         "Read a specific resource from an MCP server by its URI."
@@ -113,6 +115,7 @@ pub struct McpTool;
 #[async_trait]
 impl Tool for McpTool {
     fn name(&self) -> &str { "mcp" }
+    fn category(&self) -> ToolCategory { ToolCategory::Mcp }
 
     fn description(&self) -> &str {
         "Execute a tool provided by a connected MCP server. MCP tools are \

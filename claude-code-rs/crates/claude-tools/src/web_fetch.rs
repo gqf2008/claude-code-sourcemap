@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 pub struct WebFetchTool;
@@ -7,6 +7,7 @@ pub struct WebFetchTool;
 #[async_trait]
 impl Tool for WebFetchTool {
     fn name(&self) -> &str { "WebFetch" }
+    fn category(&self) -> ToolCategory { ToolCategory::Web }
     fn description(&self) -> &str { "Fetch a URL and return its text content." }
 
     fn input_schema(&self) -> Value {

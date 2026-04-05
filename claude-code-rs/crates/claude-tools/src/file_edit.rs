@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::diff_ui::print_diff;
@@ -10,6 +10,7 @@ pub struct FileEditTool;
 #[async_trait]
 impl Tool for FileEditTool {
     fn name(&self) -> &str { "Edit" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "Performs exact string replacements in files. You must use Read at least once before \

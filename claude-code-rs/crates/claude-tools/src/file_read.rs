@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::Path;
 use crate::path_util;
@@ -19,6 +19,7 @@ pub struct FileReadTool;
 #[async_trait]
 impl Tool for FileReadTool {
     fn name(&self) -> &str { "Read" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "Reads a file from the local filesystem. The file_path must be an absolute path. \

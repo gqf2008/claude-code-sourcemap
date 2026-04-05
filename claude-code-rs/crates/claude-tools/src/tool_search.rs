@@ -5,7 +5,7 @@
 //! Returns matching tool names and descriptions.
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 pub struct ToolSearchTool;
@@ -13,6 +13,7 @@ pub struct ToolSearchTool;
 #[async_trait]
 impl Tool for ToolSearchTool {
     fn name(&self) -> &str { "ToolSearch" }
+    fn category(&self) -> ToolCategory { ToolCategory::Code }
 
     fn description(&self) -> &str {
         "Search for available tools by keyword. Use this when you're unsure which \

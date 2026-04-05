@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::path_util;
@@ -9,6 +9,7 @@ pub struct LsTool;
 #[async_trait]
 impl Tool for LsTool {
     fn name(&self) -> &str { "LS" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn is_read_only(&self) -> bool { true }
 

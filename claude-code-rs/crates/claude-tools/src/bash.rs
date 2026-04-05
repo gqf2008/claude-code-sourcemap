@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -77,6 +77,7 @@ pub struct BashTool;
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str { "Bash" }
+    fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
     fn description(&self) -> &str {
         "Execute a shell command in the working directory. Use for system commands, \

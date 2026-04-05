@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::path_util;
@@ -9,6 +9,7 @@ pub struct GlobTool;
 #[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &str { "Glob" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "Fast file pattern matching tool that works with any codebase size. Supports glob \

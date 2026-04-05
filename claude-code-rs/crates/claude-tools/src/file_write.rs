@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::diff_ui::print_create_diff;
@@ -10,6 +10,7 @@ pub struct FileWriteTool;
 #[async_trait]
 impl Tool for FileWriteTool {
     fn name(&self) -> &str { "Write" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "Writes a file to the local filesystem. Overwrites existing files if present. \

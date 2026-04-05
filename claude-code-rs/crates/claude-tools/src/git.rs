@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 
@@ -15,6 +15,7 @@ pub struct GitTool;
 #[async_trait]
 impl Tool for GitTool {
     fn name(&self) -> &str { "Git" }
+    fn category(&self) -> ToolCategory { ToolCategory::Git }
 
     fn description(&self) -> &str {
         "Run git commands. Supports common operations: status, diff, log, branch, \
@@ -138,6 +139,7 @@ pub struct GitStatusTool;
 #[async_trait]
 impl Tool for GitStatusTool {
     fn name(&self) -> &str { "GitStatus" }
+    fn category(&self) -> ToolCategory { ToolCategory::Git }
 
     fn description(&self) -> &str {
         "Quick git status check: shows branch, staged/unstaged changes, and untracked files."

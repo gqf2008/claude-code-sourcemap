@@ -6,7 +6,7 @@
 //! - delete: remove a cell
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::path_util;
@@ -16,6 +16,7 @@ pub struct NotebookEditTool;
 #[async_trait]
 impl Tool for NotebookEditTool {
     fn name(&self) -> &str { "NotebookEdit" }
+    fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn description(&self) -> &str {
         "Edit Jupyter notebook (.ipynb) cells. Supports replacing cell content, \

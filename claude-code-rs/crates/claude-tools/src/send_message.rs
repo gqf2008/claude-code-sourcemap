@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 /// SendUserMessageTool — send a message or notification to the user.
@@ -15,6 +15,7 @@ pub struct SendUserMessageTool;
 #[async_trait]
 impl Tool for SendUserMessageTool {
     fn name(&self) -> &str { "SendUserMessage" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Send a message to the user. Use for proactive status updates, completion notices, \

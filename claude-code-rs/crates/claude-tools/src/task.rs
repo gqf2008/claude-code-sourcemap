@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::warn;
@@ -122,6 +122,7 @@ pub struct TaskCreateTool;
 #[async_trait]
 impl Tool for TaskCreateTool {
     fn name(&self) -> &str { "task_create" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Create a new task for tracking progress. Use this when breaking down a complex \
@@ -199,6 +200,7 @@ pub struct TaskUpdateTool;
 #[async_trait]
 impl Tool for TaskUpdateTool {
     fn name(&self) -> &str { "task_update" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Update an existing task's status, subject, description, or dependencies. \
@@ -342,6 +344,7 @@ pub struct TaskGetTool;
 #[async_trait]
 impl Tool for TaskGetTool {
     fn name(&self) -> &str { "task_get" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Get details of a specific task by ID, including subject, description, \
@@ -383,6 +386,7 @@ pub struct TaskListTool;
 #[async_trait]
 impl Tool for TaskListTool {
     fn name(&self) -> &str { "task_list" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "List all tasks with their status and dependencies. Returns a summary view \
@@ -479,6 +483,7 @@ pub struct TaskOutputTool;
 #[async_trait]
 impl Tool for TaskOutputTool {
     fn name(&self) -> &str { "task_output" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Get the detailed output or description of a specific task. Use this to \
@@ -527,6 +532,7 @@ pub struct TaskStopTool;
 #[async_trait]
 impl Tool for TaskStopTool {
     fn name(&self) -> &str { "task_stop" }
+    fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
     fn description(&self) -> &str {
         "Stop/cancel a running task by marking it as deleted. Use this when a task \

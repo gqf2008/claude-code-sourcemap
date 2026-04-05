@@ -72,7 +72,8 @@ pub fn query_stream(
         const MAX_TOKENS_RECOVERY_LIMIT: u32 = 3;
         let mut effective_max_tokens = config.max_tokens;
         let mut has_attempted_reactive_compact = false;
-        let mut retried_this_turn = false;
+        let mut consecutive_errors: u32 = 0;
+        let mut retry_delay_ms: u64 = 1_000; // exponential backoff: 1s → 2s → 4s → … → 32s max
 
         // Look up model capabilities for smart max_tokens escalation
         let model_name = { state.read().await.model.clone() };
@@ -168,18 +169,50 @@ pub fn query_stream(
                         }
                     }
 
-                    // ── Transient error retry ────────────────────────────────
+                    // ── Transient error retry with exponential backoff ─────
                     let is_retryable = err_str.contains("rate")
                         || err_str.contains("529")
                         || err_str.contains("500")
                         || err_str.contains("503")
                         || err_str.contains("overloaded");
-                    if is_retryable && !retried_this_turn && turn_count + 1 < config.max_turns {
-                        retried_this_turn = true;
+
+                    consecutive_errors += 1;
+                    const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+                    // Record error in state for diagnostics
+                    {
+                        let error_cat = if err_str.contains("rate") || err_str.contains("429") {
+                            "rate_limit"
+                        } else if err_str.contains("overloaded") || err_str.contains("529") {
+                            "overloaded"
+                        } else if err_str.contains("500") || err_str.contains("503") {
+                            "server_error"
+                        } else {
+                            "api_error"
+                        };
+                        state.write().await.record_error(error_cat);
+                    }
+
+                    if is_retryable && consecutive_errors <= MAX_CONSECUTIVE_ERRORS && turn_count + 1 < config.max_turns {
+                        // Parse Retry-After header hint from error message if present
+                        let wait_ms = if let Some(pos) = err_str.find("retry-after:") {
+                            let after = &err_str[pos + 12..];
+                            after.trim().split_whitespace().next()
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .map(|secs| secs * 1000)
+                                .unwrap_or(retry_delay_ms)
+                        } else {
+                            retry_delay_ms
+                        };
+
                         yield AgentEvent::TextDelta(format!(
-                            "\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str
+                            "\n\x1b[33m[Retrying after API error ({}/{}) in {}ms: {}]\x1b[0m\n",
+                            consecutive_errors, MAX_CONSECUTIVE_ERRORS, wait_ms, err_str
                         ));
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+
+                        // Exponential backoff: double delay, cap at 32s
+                        retry_delay_ms = (retry_delay_ms * 2).min(32_000);
                         continue;
                     }
                     state.write().await.messages = messages.clone();
@@ -298,10 +331,18 @@ pub fn query_stream(
             messages.push(Message::Assistant(assistant_msg.clone()));
             yield AgentEvent::AssistantMessage(assistant_msg);
 
+            // Successful API response — reset error tracking
+            consecutive_errors = 0;
+            retry_delay_ms = 1_000;
+
             if let Some(ref u) = usage {
                 let mut s = state.write().await;
                 s.total_input_tokens = s.total_input_tokens.saturating_add(u.input_tokens);
                 s.total_output_tokens = s.total_output_tokens.saturating_add(u.output_tokens);
+                s.total_cache_read_tokens = s.total_cache_read_tokens
+                    .saturating_add(u.cache_read_input_tokens.unwrap_or(0));
+                s.total_cache_creation_tokens = s.total_cache_creation_tokens
+                    .saturating_add(u.cache_creation_input_tokens.unwrap_or(0));
                 yield AgentEvent::UsageUpdate(u.clone());
             }
 

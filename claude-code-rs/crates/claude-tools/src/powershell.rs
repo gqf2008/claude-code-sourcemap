@@ -4,7 +4,7 @@
 //! returns an informational error.
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 use crate::bash::{check_dangerous, truncate_output};
@@ -14,6 +14,7 @@ pub struct PowerShellTool;
 #[async_trait]
 impl Tool for PowerShellTool {
     fn name(&self) -> &str { "PowerShell" }
+    fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
     fn description(&self) -> &str {
         "Execute a PowerShell command on Windows. Returns stdout, stderr, and exit code. \

@@ -8,7 +8,7 @@
 //! is available.
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolContext, ToolResult};
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,7 @@ pub struct LspTool;
 #[async_trait]
 impl Tool for LspTool {
     fn name(&self) -> &str { "LSP" }
+    fn category(&self) -> ToolCategory { ToolCategory::Code }
 
     fn description(&self) -> &str {
         "Interact with language servers for code intelligence. \

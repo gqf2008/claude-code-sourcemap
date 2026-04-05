@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use claude_core::permissions::PermissionMode;
@@ -12,6 +13,19 @@ pub struct AppState {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub turn_count: u32,
+    /// Cumulative error tracking for diagnostics and circuit breaking.
+    pub error_counts: HashMap<String, u32>,
+    pub total_errors: u32,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_creation_tokens: u64,
+}
+
+impl AppState {
+    /// Record an error by category (e.g., "rate_limit", "overloaded", "timeout").
+    pub fn record_error(&mut self, category: &str) {
+        *self.error_counts.entry(category.to_string()).or_insert(0) += 1;
+        self.total_errors += 1;
+    }
 }
 
 impl Default for AppState {
@@ -24,6 +38,10 @@ impl Default for AppState {
             total_input_tokens: 0,
             total_output_tokens: 0,
             turn_count: 0,
+            error_counts: HashMap::new(),
+            total_errors: 0,
+            total_cache_read_tokens: 0,
+            total_cache_creation_tokens: 0,
         }
     }
 }
