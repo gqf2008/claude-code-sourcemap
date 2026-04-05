@@ -57,6 +57,7 @@ impl ToolRegistry {
         registry.register(ask_user::AskUserTool);
         registry.register(ls::LsTool);
         registry.register(todo::TodoWriteTool);
+        registry.register(todo::TodoReadTool);
         registry.register(multi_edit::MultiEditTool);
         registry.register(sleep::SleepTool);
         registry.register(config_tool::ConfigTool);

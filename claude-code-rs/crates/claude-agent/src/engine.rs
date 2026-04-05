@@ -18,6 +18,7 @@ use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
 use crate::query::{query_stream, AgentEvent, QueryConfig};
 use crate::state::{new_shared_state, SharedState};
+use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
 pub struct QueryEngine {
     client: Arc<AnthropicClient>,
@@ -30,6 +31,8 @@ pub struct QueryEngine {
     session_id: String,
     model_name: String,
     compact_threshold: u64,
+    /// Shared abort signal — call `.abort()` to cancel the running task.
+    abort_signal: AbortSignal,
 }
 
 pub struct QueryEngineBuilder {
@@ -182,6 +185,7 @@ impl QueryEngineBuilder {
         ));
 
         let state = new_shared_state();
+        let abort_signal = AbortSignal::new();
 
         QueryEngine {
             client,
@@ -198,6 +202,7 @@ impl QueryEngineBuilder {
             session_id,
             model_name: self.model.unwrap_or_else(|| "claude-sonnet-4-20250514".into()),
             compact_threshold: self.compact_threshold,
+            abort_signal,
         }
     }
 }
@@ -262,7 +267,7 @@ impl QueryEngine {
         let tools = self.tool_definitions();
         let tool_context = ToolContext {
             cwd: self.cwd.clone(),
-            abort_signal: AbortSignal::new(),
+            abort_signal: self.abort_signal.clone(),
             permission_mode,
             messages: Vec::new(),
         };
@@ -285,6 +290,42 @@ impl QueryEngine {
 
     pub fn state(&self) -> &SharedState {
         &self.state
+    }
+
+    /// Get a clone of the abort signal so callers can cancel the running task.
+    /// Call `.abort()` on the returned signal to interrupt tool execution and
+    /// stop the agent loop at the next opportunity.
+    pub fn abort_signal(&self) -> AbortSignal {
+        self.abort_signal.clone()
+    }
+
+    /// Abort the current task (equivalent to Ctrl-C in the TS implementation).
+    pub fn abort(&self) {
+        self.abort_signal.abort();
+    }
+
+    /// Run a task autonomously to completion, streaming progress events.
+    ///
+    /// This is the primary entry point for non-interactive / programmatic use.
+    /// It drives the full multi-turn agentic loop (planning → tool execution →
+    /// verification → delivery) and returns a structured `TaskResult`.
+    ///
+    /// # Arguments
+    /// - `task` — natural-language task description
+    /// - `on_progress` — callback invoked for each `TaskProgress` event
+    ///
+    /// # Example
+    /// ```no_run
+    /// let result = engine.run_task("Add a README.md with project description", |p| {
+    ///     if let TaskProgress::Text(t) = p { print!("{}", t); }
+    /// }).await;
+    /// println!("Done in {} turns: {}", result.turns, result.reason);
+    /// ```
+    pub async fn run_task<F>(&self, task: &str, on_progress: F) -> TaskResult
+    where
+        F: FnMut(TaskProgress) + Send,
+    {
+        run_task(self, task, on_progress).await
     }
 
     /// Return the session ID (used by hooks).

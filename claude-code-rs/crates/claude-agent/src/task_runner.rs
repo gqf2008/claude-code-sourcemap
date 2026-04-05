@@ -1,0 +1,208 @@
+//! Multi-turn autonomous task runner.
+//!
+//! Drives `query_stream` to completion, collecting live progress via a callback
+//! and returning a structured `TaskResult`.  This is the Rust equivalent of the
+//! TypeScript `runAgent()` / `query()` generator consumer.
+//!
+//! # Architecture (aligned with TS runAgent.ts + query.ts)
+//!
+//! ```text
+//!   run_task()
+//!     │  submits prompt to engine
+//!     │  polls AgentEvent stream
+//!     │    TextDelta     → accumulate output, fire on_progress(Text)
+//!     │    ToolUseStart  → fire on_progress(ToolUse)
+//!     │    ToolResult    → fire on_progress(ToolDone)
+//!     │    TurnComplete  → fire on_progress(Turn), check abort
+//!     │    Error         → mark failed, fire on_progress(Done)
+//!     └──► returns TaskResult { output, turns, tool_uses, success, … }
+//! ```
+
+use std::time::{Duration, Instant};
+
+use tokio_stream::StreamExt;
+
+use crate::engine::QueryEngine;
+use crate::query::AgentEvent;
+use claude_core::message::StopReason;
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// Structured result of a completed task.
+#[derive(Debug, Clone)]
+pub struct TaskResult {
+    /// Final text output produced by the model.
+    pub output: String,
+    /// Total number of tool invocations.
+    pub tool_uses: u32,
+    /// Number of agent turns (model calls).
+    pub turns: u32,
+    /// Wall-clock duration.
+    pub elapsed: Duration,
+    /// Token usage.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Completion reason.
+    pub reason: CompletionReason,
+}
+
+impl TaskResult {
+    pub fn success(&self) -> bool {
+        matches!(self.reason, CompletionReason::Completed | CompletionReason::EndTurn)
+    }
+}
+
+/// Why the task stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionReason {
+    /// Claude finished normally (end_turn).
+    Completed,
+    /// stop_reason was end_turn (same as Completed).
+    EndTurn,
+    /// Claude hit the max-tokens limit.
+    MaxTokens,
+    /// stop_reason was a stop sequence.
+    StopSequence,
+    /// Task was aborted by the user or caller.
+    Aborted,
+    /// Max turns limit was reached.
+    MaxTurns,
+    /// API or stream error.
+    Error(String),
+}
+
+impl std::fmt::Display for CompletionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed | Self::EndTurn => write!(f, "completed"),
+            Self::MaxTokens    => write!(f, "max_tokens"),
+            Self::StopSequence => write!(f, "stop_sequence"),
+            Self::Aborted      => write!(f, "aborted"),
+            Self::MaxTurns     => write!(f, "max_turns"),
+            Self::Error(e)     => write!(f, "error: {}", e),
+        }
+    }
+}
+
+/// Live progress events emitted during task execution.
+#[derive(Debug, Clone)]
+pub enum TaskProgress {
+    /// Agent turn started.
+    TurnStart { turn: u32 },
+    /// Text token from the model.
+    Text(String),
+    /// A tool invocation has started.
+    ToolUse { name: String, turn: u32 },
+    /// A tool invocation completed.
+    ToolDone { name: String, is_error: bool },
+    /// Token usage update.
+    Tokens { input: u64, output: u64 },
+    /// Task fully completed.
+    Done(TaskResult),
+}
+
+// ── Core runner ───────────────────────────────────────────────────────────────
+
+/// Run a task to completion, calling `on_progress` for each live event.
+///
+/// # Errors
+/// Returns `Err` only if the engine itself panics — task-level errors
+/// (API errors, max turns) are encoded in `TaskResult::reason`.
+pub async fn run_task<F>(
+    engine: &QueryEngine,
+    task: &str,
+    mut on_progress: F,
+) -> TaskResult
+where
+    F: FnMut(TaskProgress) + Send,
+{
+    let started = Instant::now();
+    let mut output = String::new();
+    let mut tool_uses: u32 = 0;
+    let mut turns: u32 = 0;
+    let mut input_tokens: u64 = 0;
+    let mut output_tokens: u64 = 0;
+    let mut reason = CompletionReason::Completed;
+    let mut current_tool_name = String::new();
+
+    on_progress(TaskProgress::TurnStart { turn: 0 });
+
+    let mut stream = engine.submit(task).await;
+
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::TextDelta(text) => {
+                output.push_str(&text);
+                on_progress(TaskProgress::Text(text));
+            }
+
+            AgentEvent::ThinkingDelta(_) => {}
+
+            AgentEvent::ToolUseStart { name, .. } => {
+                current_tool_name = name.clone();
+                on_progress(TaskProgress::ToolUse { name, turn: turns });
+            }
+
+            AgentEvent::ToolResult { is_error, .. } => {
+                tool_uses += 1;
+                on_progress(TaskProgress::ToolDone {
+                    name: current_tool_name.clone(),
+                    is_error,
+                });
+            }
+
+            AgentEvent::AssistantMessage(_) => {}
+
+            AgentEvent::TurnComplete { stop_reason } => {
+                turns += 1;
+                on_progress(TaskProgress::TurnStart { turn: turns });
+                reason = match stop_reason {
+                    StopReason::EndTurn        => CompletionReason::EndTurn,
+                    StopReason::MaxTokens      => CompletionReason::MaxTokens,
+                    StopReason::StopSequence   => CompletionReason::StopSequence,
+                    StopReason::ToolUse        => continue, // more turns coming
+                };
+            }
+
+            AgentEvent::UsageUpdate(u) => {
+                input_tokens += u.input_tokens;
+                output_tokens += u.output_tokens;
+                on_progress(TaskProgress::Tokens {
+                    input: input_tokens,
+                    output: output_tokens,
+                });
+            }
+
+            AgentEvent::Error(msg) => {
+                // Distinguish abort vs API error
+                if msg.contains("Max turns") || msg.contains("max turns") {
+                    reason = CompletionReason::MaxTurns;
+                } else {
+                    reason = CompletionReason::Error(msg);
+                }
+                break;
+            }
+        }
+    }
+
+    let result = TaskResult {
+        output: output.trim_end().to_string(),
+        tool_uses,
+        turns,
+        elapsed: started.elapsed(),
+        input_tokens,
+        output_tokens,
+        reason,
+    };
+
+    on_progress(TaskProgress::Done(result.clone()));
+    result
+}
+
+// ── Convenience wrapper: collect output silently ──────────────────────────────
+
+/// Run a task and return its output text, discarding progress events.
+/// Useful for sub-agents or testing.
+pub async fn run_task_silent(engine: &QueryEngine, task: &str) -> TaskResult {
+    run_task(engine, task, |_| {}).await
+}

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use futures::future::join_all;
 use claude_core::tool::ToolContext;
 use claude_core::message::{ContentBlock, ToolResultContent};
 use claude_core::permissions::PermissionBehavior;
@@ -7,6 +8,9 @@ use serde_json::Value;
 use tracing::{debug, warn};
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
+
+/// Max number of tools that may run concurrently (mirrors TS default of 10).
+const MAX_TOOL_CONCURRENCY: usize = 10;
 
 pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
@@ -39,7 +43,7 @@ impl ToolExecutor {
         context: &ToolContext,
     ) -> ContentBlock {
         let tool = match self.registry.get(tool_name) {
-            Some(t) => t,
+            Some(t) => t.clone(),
             None => {
                 return ContentBlock::ToolResult {
                     tool_use_id: tool_use_id.to_string(),
@@ -67,14 +71,13 @@ impl ToolExecutor {
                     };
                 }
                 HookDecision::ModifyInput { new_input } => {
-                    // Recursively call with modified input (one level only)
-                    return self.execute_inner(tool_use_id, tool_name, new_input, context, tool.clone()).await;
+                    return self.execute_inner(tool_use_id, tool_name, new_input, context, tool).await;
                 }
                 _ => {}
             }
         }
 
-        let result = self.execute_inner(tool_use_id, tool_name, input.clone(), context, tool.clone()).await;
+        let result = self.execute_inner(tool_use_id, tool_name, input.clone(), context, tool).await;
 
         // ── PostToolUse hook ─────────────────────────────────────────────────
         if self.hooks.has_hooks(HookEvent::PostToolUse) {
@@ -94,17 +97,14 @@ impl ToolExecutor {
                 Some(output_text),
                 Some(is_err),
             );
-            match self.hooks.run(HookEvent::PostToolUse, ctx).await {
-                HookDecision::Block { reason } => {
-                    if let ContentBlock::ToolResult { tool_use_id, .. } = &result {
-                        return ContentBlock::ToolResult {
-                            tool_use_id: tool_use_id.clone(),
-                            content: vec![ToolResultContent::Text { text: format!("[PostHook override] {}", reason) }],
-                            is_error: true,
-                        };
-                    }
+            if let HookDecision::Block { reason } = self.hooks.run(HookEvent::PostToolUse, ctx).await {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = &result {
+                    return ContentBlock::ToolResult {
+                        tool_use_id: tool_use_id.clone(),
+                        content: vec![ToolResultContent::Text { text: format!("[PostHook override] {}", reason) }],
+                        is_error: true,
+                    };
                 }
-                _ => {}
             }
         }
 
@@ -119,6 +119,15 @@ impl ToolExecutor {
         context: &ToolContext,
         tool: claude_core::tool::DynTool,
     ) -> ContentBlock {
+        // Check abort signal
+        if context.abort_signal.is_aborted() {
+            return ContentBlock::ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: vec![ToolResultContent::Text { text: "Interrupted by user".into() }],
+                is_error: true,
+            };
+        }
+
         let perm = self.permission_checker.check(tool.as_ref(), &input).await;
         match perm.behavior {
             PermissionBehavior::Deny => {
@@ -154,7 +163,6 @@ impl ToolExecutor {
                 warn!("Tool {} failed: {}", tool_name, e);
                 let error_msg = format!("Tool error: {}", e);
 
-                // ── PostToolUseFailure hook ─────────────────────────────────
                 if self.hooks.has_hooks(HookEvent::PostToolUseFailure) {
                     let ctx = self.hooks.tool_failure_ctx(tool_name, Some(input), &error_msg);
                     let _ = self.hooks.run(HookEvent::PostToolUseFailure, ctx).await;
@@ -169,16 +177,87 @@ impl ToolExecutor {
         }
     }
 
+    /// Execute multiple tools with smart parallelism:
+    /// - Read-only (concurrency-safe) tools in a batch run in parallel (up to MAX_TOOL_CONCURRENCY)
+    /// - Write tools run sequentially
+    /// - Batches run in order: [safe, safe] → [write] → [safe, safe] → …
     pub async fn execute_many(
         &self,
         tool_uses: Vec<(String, String, Value)>,
         context: &ToolContext,
     ) -> Vec<ContentBlock> {
-        let mut results = Vec::new();
-        for (id, name, input) in tool_uses {
-            results.push(self.execute(&id, &name, input, context).await);
+        // Partition into batches of consecutive safe/unsafe tools
+        let batches = partition_tool_calls(&self.registry, &tool_uses);
+
+        let mut results: Vec<ContentBlock> = Vec::with_capacity(tool_uses.len());
+
+        for batch in batches {
+            if batch.concurrency_safe {
+                // Parallel execution with concurrency cap
+                let chunk_results = self.run_batch_parallel(batch.items, context).await;
+                results.extend(chunk_results);
+            } else {
+                // Sequential execution for writes
+                for (id, name, input) in batch.items {
+                    results.push(self.execute(&id, &name, input, context).await);
+                }
+            }
+        }
+
+        results
+    }
+
+    async fn run_batch_parallel(
+        &self,
+        items: Vec<(String, String, Value)>,
+        context: &ToolContext,
+    ) -> Vec<ContentBlock> {
+        // Process in chunks of MAX_TOOL_CONCURRENCY
+        let mut results = Vec::with_capacity(items.len());
+        for chunk in items.chunks(MAX_TOOL_CONCURRENCY) {
+            let futs: Vec<_> = chunk.iter().map(|(id, name, input)| {
+                self.execute(id, name, input.clone(), context)
+            }).collect();
+            let chunk_results = join_all(futs).await;
+            results.extend(chunk_results);
         }
         results
     }
 }
+
+// ── Batch partitioning ────────────────────────────────────────────────────────
+
+struct ToolBatch {
+    concurrency_safe: bool,
+    items: Vec<(String, String, Value)>,
+}
+
+fn partition_tool_calls(
+    registry: &ToolRegistry,
+    tool_uses: &[(String, String, Value)],
+) -> Vec<ToolBatch> {
+    let mut batches: Vec<ToolBatch> = Vec::new();
+
+    for (id, name, input) in tool_uses {
+        let safe = registry
+            .get(name)
+            .map(|t| t.is_concurrency_safe())
+            .unwrap_or(false);
+
+        match batches.last_mut() {
+            Some(batch) if batch.concurrency_safe == safe => {
+                batch.items.push((id.clone(), name.clone(), input.clone()));
+            }
+            _ => {
+                batches.push(ToolBatch {
+                    concurrency_safe: safe,
+                    items: vec![(id.clone(), name.clone(), input.clone())],
+                });
+            }
+        }
+    }
+
+    batches
+}
+
 

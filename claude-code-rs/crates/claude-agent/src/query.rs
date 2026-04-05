@@ -58,6 +58,13 @@ pub fn query_stream(
         let mut turn_count: u32 = 0;
 
         loop {
+            // Check abort at the top of every turn
+            if tool_context.abort_signal.is_aborted() {
+                state.write().await.messages = messages.clone();
+                yield AgentEvent::TurnComplete { stop_reason: claude_core::message::StopReason::EndTurn };
+                break;
+            }
+
             if turn_count >= config.max_turns {
                 yield AgentEvent::Error(format!("Max turns ({}) reached", config.max_turns));
                 break;
@@ -208,7 +215,7 @@ pub fn query_stream(
             let actual_stop = stop_reason.unwrap_or(StopReason::EndTurn);
             match actual_stop {
                 StopReason::ToolUse if !tool_uses.is_empty() => {
-                    let results = executor.execute_many(tool_uses, &tool_context).await;
+                    let results: Vec<ContentBlock> = executor.execute_many(tool_uses, &tool_context).await;
                     let tool_result_msg = UserMessage {
                         uuid: Uuid::new_v4().to_string(),
                         content: results.clone(),

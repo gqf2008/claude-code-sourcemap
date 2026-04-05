@@ -6,3 +6,4 @@ pub mod hooks;
 pub mod permissions;
 pub mod dispatch_agent;
 pub mod compact;
+pub mod task_runner;

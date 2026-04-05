@@ -29,6 +29,7 @@ impl Default for AbortSignal {
 }
 
 /// Runtime context available to every tool invocation
+#[derive(Clone)]
 pub struct ToolContext {
     pub cwd: PathBuf,
     pub abort_signal: AbortSignal,
@@ -69,6 +70,13 @@ pub trait Tool: Send + Sync {
     fn is_read_only(&self) -> bool {
         false
     }
+
+    /// If true, this tool can safely run in parallel with other concurrency-safe tools.
+    /// Read-only tools are concurrency-safe; write tools are not.
+    fn is_concurrency_safe(&self) -> bool {
+        self.is_read_only()
+    }
+
     fn is_enabled(&self) -> bool {
         true
     }
