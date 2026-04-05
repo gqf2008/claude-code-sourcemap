@@ -21,7 +21,7 @@ use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
 use crate::query::{query_stream, AgentEvent, QueryConfig};
-use crate::state::{new_shared_state, SharedState};
+use crate::state::{new_shared_state_with_model, SharedState};
 use crate::system_prompt::{build_system_prompt_ext, coordinator_system_prompt, DynamicSections};
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
@@ -337,11 +337,7 @@ impl QueryEngineBuilder {
             hooks.clone(),
         ));
 
-        let state = new_shared_state();
-        {
-            let mut s = state.blocking_write();
-            s.model = model_name.clone();
-        }
+        let state = new_shared_state_with_model(model_name.clone());
         let abort_signal = AbortSignal::new();
 
         QueryEngine {
@@ -726,5 +722,226 @@ impl QueryEngine {
     /// Get the working directory.
     pub fn cwd(&self) -> &std::path::Path {
         &self.cwd
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── QueryEngineBuilder ───────────────────────────────────────────
+
+    #[test]
+    fn test_builder_defaults() {
+        let b = QueryEngineBuilder::new("test-key", "/tmp");
+        assert_eq!(b.api_key, "test-key");
+        assert_eq!(b.max_turns, 100);
+        assert_eq!(b.max_tokens, 16384);
+        assert!(b.model.is_none());
+        assert!(b.system_prompt.is_empty());
+        assert!(b.load_claude_md);
+        assert!(b.load_memory);
+        assert!(!b.coordinator_mode);
+        assert!(b.allowed_tools.is_empty());
+    }
+
+    #[test]
+    fn test_builder_fluent_api() {
+        let b = QueryEngineBuilder::new("key", "/tmp")
+            .model("claude-haiku")
+            .system_prompt("Hello")
+            .max_turns(50)
+            .max_tokens(8192)
+            .compact_threshold(40_000)
+            .coordinator_mode(true)
+            .load_claude_md(false)
+            .load_memory(false)
+            .allowed_tools(vec!["Read".into(), "Bash".into()])
+            .language(Some("中文".into()))
+            .scratchpad_dir(Some("/tmp/scratchpad".into()));
+
+        assert_eq!(b.model.as_deref(), Some("claude-haiku"));
+        assert_eq!(b.system_prompt, "Hello");
+        assert_eq!(b.max_turns, 50);
+        assert_eq!(b.max_tokens, 8192);
+        assert_eq!(b.compact_threshold, 40_000);
+        assert!(b.coordinator_mode);
+        assert!(!b.load_claude_md);
+        assert!(!b.load_memory);
+        assert_eq!(b.allowed_tools, vec!["Read", "Bash"]);
+        assert_eq!(b.language.as_deref(), Some("中文"));
+        assert_eq!(b.scratchpad_dir.as_deref(), Some("/tmp/scratchpad"));
+    }
+
+    #[test]
+    fn test_builder_thinking_config() {
+        let b = QueryEngineBuilder::new("key", "/tmp")
+            .thinking(Some(claude_api::types::ThinkingConfig {
+                thinking_type: "enabled".into(),
+                budget_tokens: Some(4096),
+            }));
+
+        let tc = b.thinking.as_ref().unwrap();
+        assert_eq!(tc.thinking_type, "enabled");
+        assert_eq!(tc.budget_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_builder_output_style() {
+        let b = QueryEngineBuilder::new("key", "/tmp")
+            .output_style("Concise".into(), "Be brief.".into());
+
+        let (name, prompt) = b.output_style.as_ref().unwrap();
+        assert_eq!(name, "Concise");
+        assert_eq!(prompt, "Be brief.");
+    }
+
+    #[test]
+    fn test_builder_mcp_instructions() {
+        let b = QueryEngineBuilder::new("key", "/tmp")
+            .mcp_instructions(vec![
+                ("github".into(), "Use GitHub MCP for repos".into()),
+                ("slack".into(), "Use Slack MCP for messaging".into()),
+            ]);
+
+        assert_eq!(b.mcp_instructions.len(), 2);
+        assert_eq!(b.mcp_instructions[0].0, "github");
+    }
+
+    fn build_test_engine() -> QueryEngine {
+        QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .build()
+    }
+
+    #[test]
+    fn test_builder_build_creates_engine() {
+        // Build with minimal config (no claude_md, no memory) to avoid FS access
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .model("test-model")
+            .max_turns(5)
+            .build();
+
+        assert_eq!(engine.cwd(), std::path::Path::new("/tmp"));
+        assert!(!engine.is_coordinator());
+        assert_eq!(engine.config.max_turns, 5);
+    }
+
+    #[test]
+    fn test_builder_build_coordinator_mode() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .coordinator_mode(true)
+            .build();
+
+        assert!(engine.is_coordinator());
+    }
+
+    #[test]
+    fn test_engine_abort_signal() {
+        let engine = build_test_engine();
+
+        let signal = engine.abort_signal();
+        assert!(!signal.is_aborted());
+        engine.abort();
+        assert!(signal.is_aborted());
+    }
+
+    // ── tool_definitions ─────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_definitions_non_empty() {
+        let engine = build_test_engine();
+
+        let defs = engine.tool_definitions();
+        assert!(!defs.is_empty(), "should have tool definitions");
+    }
+
+    #[test]
+    fn test_tool_definitions_last_has_cache_control() {
+        let engine = build_test_engine();
+
+        let defs = engine.tool_definitions();
+        let last = defs.last().unwrap();
+        assert!(last.cache_control.is_some(), "last tool def should have cache_control");
+    }
+
+    #[test]
+    fn test_tool_definitions_filtered_by_allowed_tools() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .allowed_tools(vec!["Read".into(), "Write".into()])
+            .build();
+
+        let defs = engine.tool_definitions();
+        assert!(defs.len() <= 3, "should only have allowed tools + DispatchAgent");
+        for def in &defs {
+            // DispatchAgent is always registered; Read/Write are the only allowed user tools
+            assert!(
+                def.name == "Read" || def.name == "Write" || def.name == "DispatchAgent",
+                "unexpected tool: {}",
+                def.name
+            );
+        }
+    }
+
+    // ── should_auto_compact ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_auto_compact_disabled_when_zero() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .compact_threshold(0)
+            .build();
+
+        assert!(!engine.should_auto_compact().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_auto_compact_not_triggered_when_empty() {
+        let engine = build_test_engine();
+
+        // Empty conversation → token count is tiny → no auto-compact
+        assert!(!engine.should_auto_compact().await);
+    }
+
+    // ── drain_notifications ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_drain_notifications_empty_when_not_coordinator() {
+        let engine = build_test_engine();
+
+        let msgs = engine.drain_notifications().await;
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_drain_notifications_coordinator() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .coordinator_mode(true)
+            .build();
+
+        // No notifications sent → drain returns empty
+        let msgs = engine.drain_notifications().await;
+        assert!(msgs.is_empty());
+    }
+
+    // ── run_session_start ────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_session_start_no_hooks() {
+        let engine = build_test_engine();
+
+        // No hooks configured → returns None
+        let result = engine.run_session_start().await;
+        assert!(result.is_none());
     }
 }

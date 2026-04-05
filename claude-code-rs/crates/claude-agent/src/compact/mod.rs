@@ -477,7 +477,7 @@ impl Default for AutoCompactState {
 mod tests {
     use super::*;
     use claude_core::message::{
-        AssistantMessage, ContentBlock, SystemMessage, UserMessage,
+        AssistantMessage, ContentBlock, SystemMessage,
     };
 
     #[test]

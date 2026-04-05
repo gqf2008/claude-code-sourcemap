@@ -104,6 +104,12 @@ pub fn new_shared_state() -> SharedState {
     Arc::new(RwLock::new(AppState::default()))
 }
 
+pub fn new_shared_state_with_model(model: String) -> SharedState {
+    let mut state = AppState::default();
+    state.model = model;
+    Arc::new(RwLock::new(state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
