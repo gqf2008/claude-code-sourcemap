@@ -34,7 +34,7 @@ const BLOCKED_GIT_PATTERNS: &[(&str, &str)] = &[
 ];
 
 /// Check if a command matches any dangerous pattern.
-pub fn check_dangerous(command: &str) -> Option<&'static str> {
+pub(crate) fn check_dangerous(command: &str) -> Option<&'static str> {
     let lower = command.to_lowercase();
     for &(pattern, reason, exact_boundary) in DANGEROUS_PATTERNS {
         if exact_boundary {
@@ -57,17 +57,24 @@ pub fn check_dangerous(command: &str) -> Option<&'static str> {
 }
 
 /// Truncate output to prevent context explosion.
-pub fn truncate_output(output: String) -> String {
+pub(crate) fn truncate_output(output: String) -> String {
     if output.len() <= MAX_OUTPUT_BYTES {
         return output;
     }
     let keep = MAX_OUTPUT_BYTES / 2;
-    let first = &output[..keep];
-    let last = &output[output.len() - keep..];
+    // Find safe char boundaries for slicing
+    let mut first_end = keep;
+    while first_end > 0 && !output.is_char_boundary(first_end) {
+        first_end -= 1;
+    }
+    let mut last_start = output.len() - keep;
+    while last_start < output.len() && !output.is_char_boundary(last_start) {
+        last_start += 1;
+    }
     let skipped = output.len() - MAX_OUTPUT_BYTES;
     format!(
         "{}\n\n... [truncated {} bytes] ...\n\n{}",
-        first, skipped, last
+        &output[..first_end], skipped, &output[last_start..]
     )
 }
 
@@ -97,7 +104,7 @@ const WRITE_COMMANDS: &[&str] = &[
 
 /// Classify what kind of command this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandType {
+pub(crate) enum CommandType {
     ReadOnly,
     Write,
     Search,
@@ -128,7 +135,7 @@ fn extract_base_command(command: &str) -> &str {
 }
 
 /// Classify a command as read-only, write, or search.
-pub fn classify_command(command: &str) -> CommandType {
+pub(crate) fn classify_command(command: &str) -> CommandType {
     let base = extract_base_command(command).to_lowercase();
 
     for &s in SEARCH_COMMANDS {
@@ -150,7 +157,7 @@ pub fn classify_command(command: &str) -> CommandType {
 }
 
 /// Interpret exit code in context — e.g., grep returning 1 means "no matches", not error.
-pub fn interpret_exit_code(command: &str, code: i32) -> (bool, Option<String>) {
+pub(crate) fn interpret_exit_code(command: &str, code: i32) -> (bool, Option<String>) {
     if code == 0 {
         return (true, None);
     }

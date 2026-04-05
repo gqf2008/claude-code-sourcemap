@@ -22,7 +22,9 @@
 //! Hook config lives in `settings.json` under the `hooks` key — see
 //! `claude_core::config::HooksConfig` for the format.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,25 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 use claude_core::config::{HookCommandDef, HooksConfig, HookRule};
+
+// ── Regex cache for hook matchers ────────────────────────────────────────────
+
+/// Cached compiled regexes for hook tool matchers.
+/// Avoids recompiling the same pattern on every tool invocation.
+static REGEX_CACHE: std::sync::OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
+    std::sync::OnceLock::new();
+
+fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
+    let cache_mutex = REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = match cache_mutex.lock() {
+        Ok(c) => c,
+        Err(_) => return regex::Regex::new(pattern).ok(),
+    };
+    cache
+        .entry(pattern.to_string())
+        .or_insert_with(|| regex::Regex::new(pattern).ok())
+        .clone()
+}
 
 // ── Public event enum ────────────────────────────────────────────────────────
 
@@ -141,16 +162,12 @@ fn tool_matches(matcher: &Option<String>, tool_name: &str) -> bool {
         None => true,
         Some(pat) if pat.is_empty() || pat == "*" => true,
         Some(pat) => {
-            // If the pattern contains regex metacharacters, treat it as a regex.
-            // Otherwise do an exact match to avoid the overhead of Regex::new.
-            // NOTE: Regex is compiled on each call; acceptable since hook checks
-            //       are low-frequency (once per tool invocation, not in a hot loop).
             let is_regex = pat.contains('|') || pat.contains('^')
                 || pat.contains('$') || pat.contains('.')
                 || pat.contains('*') || pat.contains('+') || pat.contains('?')
                 || pat.contains('[') || pat.contains('(');
             if is_regex {
-                regex::Regex::new(pat)
+                get_cached_regex(pat)
                     .map(|re| re.is_match(tool_name))
                     .unwrap_or(false)
             } else {
@@ -217,7 +234,8 @@ fn interpret_output(event: HookEvent, exit_code: i32, stdout: String) -> HookDec
                         reason: resp.reason.unwrap_or(stdout),
                     },
                     Some("modify") if resp.input.is_some() => return HookDecision::ModifyInput {
-                        new_input: resp.input.unwrap(),
+                        // Safety: guarded by is_some() check above
+                        new_input: resp.input.expect("input checked above"),
                     },
                     // Explicit "approve" or "continue" → don't treat stdout as context
                     Some("approve") | Some("continue") | Some("") => return HookDecision::Continue,

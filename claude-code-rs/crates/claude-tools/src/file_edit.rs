@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::diff_ui::print_diff;
 use crate::path_util;
@@ -33,15 +33,17 @@ impl FileState {
     }
 }
 
-lazy_static::lazy_static! {
-    /// Global file state cache to detect external modifications between edits.
-    static ref FILE_STATE_CACHE: Mutex<HashMap<String, FileState>> = Mutex::new(HashMap::new());
+/// Global file state cache to detect external modifications between edits.
+static FILE_STATE_CACHE: OnceLock<Mutex<HashMap<String, FileState>>> = OnceLock::new();
+
+fn file_state_cache() -> &'static Mutex<HashMap<String, FileState>> {
+    FILE_STATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Check if a file has been modified externally since we last saw it.
 fn check_external_modification(path: &std::path::Path, content: &str) -> Option<String> {
     let key = path.to_string_lossy().to_string();
-    let cache = FILE_STATE_CACHE.lock().ok()?;
+    let cache = file_state_cache().lock().ok()?;
 
     if let Some(cached) = cache.get(&key) {
         let current = FileState::from_content(content, path);
@@ -58,7 +60,7 @@ fn check_external_modification(path: &std::path::Path, content: &str) -> Option<
 /// Update the file state cache after a successful read or edit.
 fn update_file_state(path: &std::path::Path, content: &str) {
     let key = path.to_string_lossy().to_string();
-    if let Ok(mut cache) = FILE_STATE_CACHE.lock() {
+    if let Ok(mut cache) = file_state_cache().lock() {
         cache.insert(key, FileState::from_content(content, path));
     }
 }

@@ -115,7 +115,7 @@ impl CostTracker {
     /// Add a single API response usage to the running totals.
     pub fn add(&self, model: &str, usage: &Usage) {
         let cost = calculate_cost(model, usage);
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().expect("CostTracker lock poisoned");
         inner.total_cost_usd += cost;
 
         let entry = inner.by_model.entry(canonical_model(model).to_string()).or_default();
@@ -128,12 +128,12 @@ impl CostTracker {
 
     /// Get the total accumulated USD cost.
     pub fn total_usd(&self) -> f64 {
-        self.inner.lock().unwrap().total_cost_usd
+        self.inner.lock().expect("CostTracker lock poisoned").total_cost_usd
     }
 
     /// Format a human-readable cost summary (aligned with TS `formatTotalCost`).
     pub fn format_summary(&self, total_input: u64, total_output: u64, turn_count: u32) -> String {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("CostTracker lock poisoned");
         let mut lines = Vec::new();
 
         lines.push(format!("  Total cost:   {}", format_usd(inner.total_cost_usd)));

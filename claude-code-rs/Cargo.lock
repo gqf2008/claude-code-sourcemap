@@ -324,7 +324,6 @@ dependencies = [
  "dirs",
  "glob",
  "ignore",
- "lazy_static",
  "regex",
  "reqwest",
  "serde",

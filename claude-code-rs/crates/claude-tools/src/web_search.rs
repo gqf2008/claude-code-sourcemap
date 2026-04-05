@@ -152,7 +152,10 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
                 .unwrap_or("");
 
             let snippet = if snippet.len() > MAX_SNIPPET_LEN {
-                &snippet[..MAX_SNIPPET_LEN]
+                // UTF-8 safe truncation: find nearest char boundary
+                let mut end = MAX_SNIPPET_LEN;
+                while !snippet.is_char_boundary(end) && end > 0 { end -= 1; }
+                &snippet[..end]
             } else {
                 snippet
             };
@@ -174,7 +177,9 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
                     .unwrap_or("");
 
                 let snippet = if snippet.len() > MAX_SNIPPET_LEN {
-                    &snippet[..MAX_SNIPPET_LEN]
+                    let mut end = MAX_SNIPPET_LEN;
+                    while !snippet.is_char_boundary(end) && end > 0 { end -= 1; }
+                    &snippet[..end]
                 } else {
                     snippet
                 };
