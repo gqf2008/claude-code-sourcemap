@@ -50,6 +50,8 @@ pub enum HookEvent {
     SubagentStart,
     SubagentStop,
     Notification,
+    /// Fired after model sampling, before tool execution. Allows observation/modification.
+    PostSampling,
 }
 
 impl HookEvent {
@@ -69,6 +71,7 @@ impl HookEvent {
             Self::SubagentStart => "SubagentStart",
             Self::SubagentStop => "SubagentStop",
             Self::Notification => "Notification",
+            Self::PostSampling => "PostSampling",
         }
     }
 }
@@ -310,6 +313,7 @@ impl HookRegistry {
             HookEvent::SubagentStart => &self.config.subagent_start,
             HookEvent::SubagentStop => &self.config.subagent_stop,
             HookEvent::Notification => &self.config.notification,
+            HookEvent::PostSampling => &self.config.post_sampling,
         }
     }
 

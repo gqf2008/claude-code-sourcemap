@@ -7,11 +7,99 @@ use crate::path_util;
 /// Extensions we support reading as base64-encoded images.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
 
+/// Device files that would hang or cause issues when read.
+const BLOCKED_DEVICE_PATHS: &[&str] = &[
+    "/dev/zero", "/dev/random", "/dev/urandom", "/dev/null",
+    "/dev/stdin", "/dev/stdout", "/dev/stderr",
+    "/dev/fd/", "/proc/kcore",
+];
+
 /// Check if the first N bytes look like binary content.
 fn is_binary(data: &[u8]) -> bool {
     let check_len = data.len().min(8192);
     let null_count = data[..check_len].iter().filter(|&&b| b == 0).count();
     null_count > 0
+}
+
+/// Find similar file names in the same directory (for suggestions on not-found).
+fn find_similar_files(path: &Path, max_suggestions: usize) -> Vec<String> {
+    let parent = match path.parent() {
+        Some(p) if p.is_dir() => p,
+        _ => return Vec::new(),
+    };
+    let target_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if target_name.is_empty() { return Vec::new(); }
+
+    let mut candidates: Vec<(String, usize)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let name_lower = name.to_lowercase();
+
+            // Simple similarity: count matching chars or check prefix/suffix
+            let score = similarity_score(&target_name, &name_lower);
+            if score > 0 {
+                candidates.push((name, score));
+            }
+        }
+    }
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.iter()
+        .take(max_suggestions)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Simple string similarity score based on common subsequences.
+fn similarity_score(a: &str, b: &str) -> usize {
+    if a == b { return 100; }
+
+    let mut score = 0;
+
+    // Prefix match bonus
+    let prefix_len = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    score += prefix_len * 3;
+
+    // Extension match bonus
+    let ext_a = a.rsplit('.').next().unwrap_or("");
+    let ext_b = b.rsplit('.').next().unwrap_or("");
+    if !ext_a.is_empty() && ext_a == ext_b {
+        score += 5;
+    }
+
+    // Stem match — base name without extension
+    let stem_a = a.rsplit('.').last().unwrap_or(a);
+    let stem_b = b.rsplit('.').last().unwrap_or(b);
+    if stem_a == stem_b {
+        score += 10;
+    }
+
+    // Contains bonus
+    if b.contains(a) || a.contains(b) {
+        score += 8;
+    }
+
+    // Levenshtein-like: penalize only if reasonably close
+    if a.len().abs_diff(b.len()) <= 3 {
+        let common = a.chars().filter(|c| b.contains(*c)).count();
+        score += common;
+    }
+
+    score
+}
+
+/// Format file modification time as a human-readable string.
+fn format_mtime(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let datetime: chrono::DateTime<chrono::Utc> = modified.into();
+    Some(datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string())
 }
 
 pub struct FileReadTool;
@@ -33,9 +121,9 @@ impl Tool for FileReadTool {
         json!({
             "type": "object",
             "properties": {
-                "file_path": { "type": "string", "description": "Path to read" },
+                "file_path": { "type": "string", "description": "Absolute path to read" },
                 "offset": { "type": "integer", "description": "Start line (0-indexed)" },
-                "limit": { "type": "integer", "description": "Number of lines" }
+                "limit": { "type": "integer", "description": "Number of lines to read" }
             },
             "required": ["file_path"]
         })
@@ -48,12 +136,30 @@ impl Tool for FileReadTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'file_path'"))?;
 
+        // Block device files that would hang
+        for blocked in BLOCKED_DEVICE_PATHS {
+            if file_path.starts_with(blocked) {
+                return Ok(ToolResult::error(format!(
+                    "Cannot read device file: {} — this would hang or produce infinite output", file_path
+                )));
+            }
+        }
+
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
         if !path.exists() {
-            return Ok(ToolResult::error(format!("File not found: {}", path.display())));
+            // Try to suggest similar files
+            let suggestions = find_similar_files(&path, 5);
+            let mut msg = format!("File not found: {}", path.display());
+            if !suggestions.is_empty() {
+                msg.push_str("\n\nDid you mean one of these?");
+                for s in &suggestions {
+                    msg.push_str(&format!("\n  - {}", path.parent().unwrap_or(Path::new("")).join(s).display()));
+                }
+            }
+            return Ok(ToolResult::error(msg));
         }
         if path.is_dir() {
             return read_directory(&path).await;
@@ -95,9 +201,10 @@ impl Tool for FileReadTool {
 
         let content = String::from_utf8_lossy(&raw_bytes);
         let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len();
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
         let limit = input["limit"].as_u64().map(|l| l as usize);
-        let end = limit.map_or(lines.len(), |l| (offset + l).min(lines.len()));
+        let end = limit.map_or(lines.len().min(offset + 2000), |l| (offset + l).min(lines.len()));
 
         let selected: Vec<String> = lines[offset.min(lines.len())..end]
             .iter()
@@ -105,7 +212,18 @@ impl Tool for FileReadTool {
             .map(|(i, line)| format!("{:>4}  {}", offset + i + 1, line))
             .collect();
 
-        Ok(ToolResult::text(selected.join("\n")))
+        // Add file metadata header
+        let mtime = format_mtime(&path).unwrap_or_default();
+        let mut header = format!("File: {} ({} lines", path.display(), total_lines);
+        if !mtime.is_empty() {
+            header.push_str(&format!(", modified {}", mtime));
+        }
+        header.push(')');
+        if end < total_lines {
+            header.push_str(&format!("\nShowing lines {}-{} of {}", offset + 1, end, total_lines));
+        }
+
+        Ok(ToolResult::text(format!("{}\n{}", header, selected.join("\n"))))
     }
 }
 
@@ -169,7 +287,6 @@ async fn read_notebook(path: &Path) -> anyhow::Result<ToolResult> {
                 output.push('\n');
             }
 
-            // Show outputs for code cells
             if cell_type == "code" {
                 if let Some(outputs) = cell["outputs"].as_array() {
                     for out in outputs {

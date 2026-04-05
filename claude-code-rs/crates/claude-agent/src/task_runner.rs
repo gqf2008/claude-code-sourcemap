@@ -187,6 +187,12 @@ where
                 reason = CompletionReason::MaxTurns;
                 break;
             }
+
+            // New event types — task_runner just ignores them
+            AgentEvent::TurnTokens { .. }
+            | AgentEvent::ContextWarning { .. }
+            | AgentEvent::CompactStart
+            | AgentEvent::CompactComplete { .. } => {}
         }
     }
 

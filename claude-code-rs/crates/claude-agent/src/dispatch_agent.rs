@@ -277,6 +277,7 @@ impl Tool for DispatchAgentTool {
             max_tokens: self.config.max_tokens,
             temperature: None,
             thinking: None,
+            token_budget: 0,
         };
 
         // Sub-agents run without user-defined hooks to avoid re-entrant side effects

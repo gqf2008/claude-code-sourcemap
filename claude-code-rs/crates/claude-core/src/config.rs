@@ -64,6 +64,8 @@ pub struct HooksConfig {
     pub subagent_stop: Vec<HookRule>,
     #[serde(default, rename = "Notification")]
     pub notification: Vec<HookRule>,
+    #[serde(default, rename = "PostSampling")]
+    pub post_sampling: Vec<HookRule>,
 }
 
 // ── Main settings struct ────────────────────────────────────────────────────

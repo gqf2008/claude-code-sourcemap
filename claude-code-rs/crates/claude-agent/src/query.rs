@@ -25,6 +25,14 @@ pub enum AgentEvent {
     AssistantMessage(AssistantMessage),
     TurnComplete { stop_reason: StopReason },
     UsageUpdate(Usage),
+    /// Per-turn token counts for budget tracking.
+    TurnTokens { input_tokens: u64, output_tokens: u64 },
+    /// Prompt is getting too large — may need compaction soon.
+    ContextWarning { usage_pct: f64, message: String },
+    /// Auto-compaction triggered.
+    CompactStart,
+    /// Compaction finished successfully.
+    CompactComplete { summary_len: usize },
     /// Max turns limit reached.
     MaxTurns { limit: u32 },
     Error(String),
@@ -36,6 +44,8 @@ pub struct QueryConfig {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub thinking: Option<claude_api::types::ThinkingConfig>,
+    /// Token budget for this query (0 = unlimited).
+    pub token_budget: u64,
 }
 
 impl Default for QueryConfig {
@@ -46,6 +56,7 @@ impl Default for QueryConfig {
             max_tokens: 16384,
             temperature: None,
             thinking: None,
+            token_budget: 0,
         }
     }
 }
@@ -331,6 +342,24 @@ pub fn query_stream(
             messages.push(Message::Assistant(assistant_msg.clone()));
             yield AgentEvent::AssistantMessage(assistant_msg);
 
+            // ── PostSampling hook ────────────────────────────────────────────
+            // Fires after model response, before tool execution. Allows
+            // observation or modification of the assistant's output.
+            if hooks.has_hooks(HookEvent::PostSampling) {
+                let ctx = hooks.prompt_ctx(
+                    HookEvent::PostSampling,
+                    if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) },
+                );
+                match hooks.run(HookEvent::PostSampling, ctx).await {
+                    HookDecision::Block { reason } => {
+                        yield AgentEvent::Error(format!("[PostSampling hook blocked]: {}", reason));
+                        state.write().await.messages = messages.clone();
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
             // Successful API response — reset error tracking
             consecutive_errors = 0;
             retry_delay_ms = 1_000;
@@ -343,7 +372,65 @@ pub fn query_stream(
                     .saturating_add(u.cache_read_input_tokens.unwrap_or(0));
                 s.total_cache_creation_tokens = s.total_cache_creation_tokens
                     .saturating_add(u.cache_creation_input_tokens.unwrap_or(0));
+
+                // Per-model usage tracking
+                let model_name = s.model.clone();
+                let cost = crate::cost::calculate_cost(&model_name, u);
+                s.record_model_usage(
+                    &model_name,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_input_tokens.unwrap_or(0),
+                    u.cache_creation_input_tokens.unwrap_or(0),
+                    cost,
+                );
+                drop(s);
+
                 yield AgentEvent::UsageUpdate(u.clone());
+
+                // Emit per-turn token event for budget tracking
+                yield AgentEvent::TurnTokens {
+                    input_tokens: u.input_tokens,
+                    output_tokens: u.output_tokens,
+                };
+
+                // Context usage warning
+                let total_input = { state.read().await.total_input_tokens };
+                let warning = crate::compact::calculate_token_warning(
+                    total_input,
+                    crate::compact::AUTO_COMPACT_THRESHOLD,
+                );
+                if warning != crate::compact::TokenWarningState::Normal {
+                    let pct = total_input as f64 / crate::compact::AUTO_COMPACT_THRESHOLD as f64;
+                    let msg = match warning {
+                        crate::compact::TokenWarningState::Warning =>
+                            "Approaching context limit — consider saving progress".to_string(),
+                        crate::compact::TokenWarningState::Critical =>
+                            "Context nearly full — auto-compaction may trigger soon".to_string(),
+                        crate::compact::TokenWarningState::Imminent =>
+                            "Context limit imminent — auto-compaction will trigger".to_string(),
+                        _ => String::new(),
+                    };
+                    if !msg.is_empty() {
+                        yield AgentEvent::ContextWarning { usage_pct: pct, message: msg };
+                    }
+                }
+
+                // Budget enforcement
+                if config.token_budget > 0 {
+                    let total_tokens = {
+                        let s = state.read().await;
+                        s.total_input_tokens + s.total_output_tokens
+                    };
+                    if total_tokens >= config.token_budget {
+                        yield AgentEvent::Error(format!(
+                            "Token budget exceeded ({}/{}) — stopping",
+                            total_tokens, config.token_budget
+                        ));
+                        state.write().await.messages = messages.clone();
+                        break;
+                    }
+                }
             }
 
             let actual_stop = stop_reason.unwrap_or(StopReason::EndTurn);

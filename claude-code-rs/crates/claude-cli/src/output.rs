@@ -201,6 +201,18 @@ pub async fn print_stream(
             AgentEvent::MaxTurns { limit } => {
                 eprintln!("\x1b[33mMax turns ({}) reached\x1b[0m", limit);
             }
+            AgentEvent::TurnTokens { input_tokens, output_tokens } => {
+                tracing::debug!("Turn tokens: in={}, out={}", input_tokens, output_tokens);
+            }
+            AgentEvent::ContextWarning { usage_pct, message } => {
+                eprintln!("\x1b[33m⚠ Context {:.0}%: {}\x1b[0m", usage_pct * 100.0, message);
+            }
+            AgentEvent::CompactStart => {
+                eprintln!("\x1b[36m🗜 Compacting conversation...\x1b[0m");
+            }
+            AgentEvent::CompactComplete { summary_len } => {
+                eprintln!("\x1b[36m✓ Compacted ({} chars)\x1b[0m", summary_len);
+            }
         }
     }
     Ok(())

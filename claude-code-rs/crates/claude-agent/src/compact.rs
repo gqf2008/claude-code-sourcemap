@@ -272,3 +272,215 @@ pub fn compact_context_message(summary: &str, transcript_note: Option<&str>) -> 
         do not recap what was happening. Pick up the last task as if the break never happened.");
     msg
 }
+
+// ── Tool Use Summary ─────────────────────────────────────────────────────────
+
+/// Generate a concise summary of tool uses in a message sequence.
+/// This is used to condense long tool use chains during compaction.
+pub fn summarize_tool_uses(messages: &[Message]) -> String {
+    use std::collections::HashMap;
+    let mut tool_counts: HashMap<String, u32> = HashMap::new();
+    let mut files_modified: Vec<String> = Vec::new();
+    let mut files_read: Vec<String> = Vec::new();
+
+    for msg in messages {
+        if let Message::Assistant(a) = msg {
+            for block in &a.content {
+                if let claude_core::message::ContentBlock::ToolUse { name, input, .. } = block {
+                    *tool_counts.entry(name.clone()).or_insert(0) += 1;
+
+                    // Track files
+                    if let Some(path) = input["file_path"].as_str() {
+                        match name.as_str() {
+                            "Read" => {
+                                if !files_read.contains(&path.to_string()) {
+                                    files_read.push(path.to_string());
+                                }
+                            }
+                            "Edit" | "Write" | "MultiEdit" => {
+                                if !files_modified.contains(&path.to_string()) {
+                                    files_modified.push(path.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if tool_counts.is_empty() {
+        return String::new();
+    }
+
+    let mut summary = String::from("Tool usage summary:\n");
+
+    // Sort by count descending
+    let mut sorted: Vec<_> = tool_counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (tool, count) in &sorted {
+        summary.push_str(&format!("  {} — {} call(s)\n", tool, count));
+    }
+
+    if !files_modified.is_empty() {
+        summary.push_str(&format!(
+            "Files modified: {}\n",
+            files_modified.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+        ));
+        if files_modified.len() > 10 {
+            summary.push_str(&format!("  ... and {} more\n", files_modified.len() - 10));
+        }
+    }
+
+    if !files_read.is_empty() {
+        summary.push_str(&format!(
+            "Files read: {}\n",
+            files_read.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+        ));
+        if files_read.len() > 10 {
+            summary.push_str(&format!("  ... and {} more\n", files_read.len() - 10));
+        }
+    }
+
+    summary
+}
+
+// ── Post-Compact Cleanup ─────────────────────────────────────────────────────
+
+/// Remove duplicate or redundant content from post-compact messages.
+/// This cleans up memory injections and context that got duplicated.
+pub fn post_compact_cleanup(messages: &mut Vec<Message>) {
+    // Remove consecutive duplicate system messages
+    let mut i = 0;
+    while i + 1 < messages.len() {
+        let is_dup = match (&messages[i], &messages[i + 1]) {
+            (Message::System(a), Message::System(b)) => a.message == b.message,
+            _ => false,
+        };
+        if is_dup {
+            messages.remove(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+
+    // Trim empty assistant messages (can happen after compaction)
+    messages.retain(|msg| {
+        if let Message::Assistant(a) = msg {
+            !a.content.is_empty()
+        } else {
+            true
+        }
+    });
+}
+
+// ── Token Warning State ──────────────────────────────────────────────────────
+
+/// Calculate token usage warning level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenWarningState {
+    /// Under 50% of threshold — normal
+    Normal,
+    /// 50-75% — approaching limit
+    Warning,
+    /// 75-90% — nearly full
+    Critical,
+    /// Over 90% — auto-compact imminent
+    Imminent,
+}
+
+pub fn calculate_token_warning(current_tokens: u64, threshold: u64) -> TokenWarningState {
+    if threshold == 0 { return TokenWarningState::Normal; }
+    let ratio = current_tokens as f64 / threshold as f64;
+    if ratio >= 0.9 { TokenWarningState::Imminent }
+    else if ratio >= 0.75 { TokenWarningState::Critical }
+    else if ratio >= 0.5 { TokenWarningState::Warning }
+    else { TokenWarningState::Normal }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_token_warning_levels() {
+        assert_eq!(calculate_token_warning(0, 100_000), TokenWarningState::Normal);
+        assert_eq!(calculate_token_warning(40_000, 100_000), TokenWarningState::Normal);
+        assert_eq!(calculate_token_warning(55_000, 100_000), TokenWarningState::Warning);
+        assert_eq!(calculate_token_warning(80_000, 100_000), TokenWarningState::Critical);
+        assert_eq!(calculate_token_warning(95_000, 100_000), TokenWarningState::Imminent);
+        // Zero threshold always Normal
+        assert_eq!(calculate_token_warning(1_000_000, 0), TokenWarningState::Normal);
+    }
+
+    #[test]
+    fn test_summarize_tool_uses_empty() {
+        let messages: Vec<Message> = Vec::new();
+        let summary = summarize_tool_uses(&messages);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn test_summarize_tool_uses_with_tools() {
+        use claude_core::message::{AssistantMessage, ContentBlock};
+        let messages = vec![
+            Message::Assistant(AssistantMessage {
+                uuid: "a1".into(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "t1".into(),
+                        name: "Read".into(),
+                        input: serde_json::json!({"file_path": "src/main.rs"}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t2".into(),
+                        name: "Edit".into(),
+                        input: serde_json::json!({"file_path": "src/lib.rs"}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t3".into(),
+                        name: "Read".into(),
+                        input: serde_json::json!({"file_path": "Cargo.toml"}),
+                    },
+                ],
+                stop_reason: None,
+                usage: None,
+            }),
+        ];
+        let summary = summarize_tool_uses(&messages);
+        assert!(summary.contains("Read"));
+        assert!(summary.contains("Edit"));
+        assert!(summary.contains("src/main.rs"));
+        assert!(summary.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_post_compact_cleanup_removes_duplicates() {
+        use claude_core::message::SystemMessage;
+        let mut messages = vec![
+            Message::System(SystemMessage { uuid: "s1".into(), message: "Hello".into() }),
+            Message::System(SystemMessage { uuid: "s2".into(), message: "Hello".into() }),
+            Message::System(SystemMessage { uuid: "s3".into(), message: "World".into() }),
+        ];
+        post_compact_cleanup(&mut messages);
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_post_compact_cleanup_removes_empty_assistant() {
+        use claude_core::message::{AssistantMessage, SystemMessage};
+        let mut messages = vec![
+            Message::System(SystemMessage { uuid: "s1".into(), message: "Ctx".into() }),
+            Message::Assistant(AssistantMessage {
+                uuid: "a1".into(),
+                content: vec![],
+                stop_reason: None,
+                usage: None,
+            }),
+        ];
+        post_compact_cleanup(&mut messages);
+        assert_eq!(messages.len(), 1);
+    }
+}

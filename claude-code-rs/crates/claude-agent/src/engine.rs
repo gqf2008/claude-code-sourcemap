@@ -310,6 +310,7 @@ impl QueryEngineBuilder {
                 max_tokens: self.max_tokens,
                 temperature: None,
                 thinking: self.thinking.clone(),
+                token_budget: 0,
             },
             hooks,
             cwd: self.cwd,
@@ -411,6 +412,7 @@ impl QueryEngine {
                 max_tokens: self.config.max_tokens,
                 temperature: self.config.temperature,
                 thinking: self.config.thinking.clone(),
+                token_budget: self.config.token_budget,
             },
             messages,
             tools,
@@ -616,6 +618,17 @@ impl QueryEngine {
             turn_count: s.turn_count,
             input_tokens: s.total_input_tokens,
             output_tokens: s.total_output_tokens,
+            model_usage: s.model_usage.iter().map(|(k, v)| {
+                (k.clone(), SessionModelUsage {
+                    input_tokens: v.input_tokens,
+                    output_tokens: v.output_tokens,
+                    cache_read_tokens: v.cache_read_tokens,
+                    cache_creation_tokens: v.cache_creation_tokens,
+                    api_calls: v.api_calls,
+                    cost_usd: v.cost_usd,
+                })
+            }).collect(),
+            total_cost_usd: s.model_usage.values().map(|u| u.cost_usd).sum(),
             messages: s.messages.clone(),
         };
         save_session(&snapshot)

@@ -232,7 +232,41 @@ impl ToolExecutor {
     }
 }
 
-// ── Batch partitioning ────────────────────────────────────────────────────────
+// ── Tool Result Pairing Validation ────────────────────────────────────────────
+
+/// Validate that every tool_use has a corresponding tool_result in the messages.
+/// Returns errors for any unpaired tool uses.
+pub fn validate_tool_result_pairing(
+    tool_uses: &[(String, String, Value)],
+    results: &[ContentBlock],
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    for (id, name, _) in tool_uses {
+        let has_result = results.iter().any(|r| {
+            if let ContentBlock::ToolResult { tool_use_id, .. } = r {
+                tool_use_id == id
+            } else {
+                false
+            }
+        });
+        if !has_result {
+            errors.push(format!("Missing tool result for {}({})", name, id));
+        }
+    }
+
+    // Check for orphaned results
+    for result in results {
+        if let ContentBlock::ToolResult { tool_use_id, .. } = result {
+            let has_use = tool_uses.iter().any(|(id, _, _)| id == tool_use_id);
+            if !has_use {
+                errors.push(format!("Orphaned tool result: {}", tool_use_id));
+            }
+        }
+    }
+
+    errors
+}
 
 struct ToolBatch {
     concurrency_safe: bool,
