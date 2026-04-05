@@ -97,11 +97,25 @@ impl ToolRegistry {
         registry.register(worktree::EnterWorktreeTool);
         registry.register(worktree::ExitWorktreeTool);
         registry.register(lsp::LspTool);
-        // MCP tools registered but disabled until MCP is implemented
-        registry.register(mcp::ListMcpResourcesTool);
-        registry.register(mcp::ReadMcpResourceTool);
-        registry.register(mcp::McpTool);
+        // MCP resource tools require a manager — use register_mcp() to add them
         registry
+    }
+
+    /// Register MCP tools with a shared manager.
+    /// Call this after connecting to MCP servers.
+    pub fn register_mcp(&mut self, manager: std::sync::Arc<tokio::sync::RwLock<mcp::McpManager>>) {
+        self.tools.remove("mcp_list_resources");
+        self.tools.remove("mcp_read_resource");
+        self.register(mcp::ListMcpResourcesTool { manager: manager.clone() });
+        self.register(mcp::ReadMcpResourceTool { manager });
+    }
+
+    /// Register dynamically-discovered MCP tool proxies.
+    pub fn register_mcp_proxies(&mut self, proxies: Vec<mcp::McpToolProxy>) {
+        for proxy in proxies {
+            let name = proxy.qualified_name.clone();
+            self.tools.insert(name, std::sync::Arc::new(proxy));
+        }
     }
 }
 
