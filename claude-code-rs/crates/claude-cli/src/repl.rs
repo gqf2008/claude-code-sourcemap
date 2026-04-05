@@ -69,6 +69,19 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                         CommandResult::Session { sub } => {
                             handle_session_command(&sub, &engine).await;
                         }
+                        CommandResult::Diff => {
+                            handle_diff_command(&cwd);
+                        }
+                        CommandResult::Status => {
+                            handle_status_command(&engine, &cwd).await;
+                        }
+                        CommandResult::Permissions => {
+                            let s = engine.state().read().await;
+                            println!("Permission mode: {:?}", s.permission_mode);
+                        }
+                        CommandResult::Config => {
+                            handle_config_command(&cwd);
+                        }
                         CommandResult::RunSkill { name, prompt } => {
                             run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                         }
@@ -232,6 +245,122 @@ async fn handle_session_command(sub: &str, engine: &QueryEngine) {
         other => {
             println!("Unknown session subcommand: '{}'. Use save, list, or load <id>.", other);
         }
+    }
+}
+
+/// Show git diff (staged + unstaged).
+fn handle_diff_command(cwd: &std::path::Path) {
+    let output = std::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(cwd)
+        .output();
+
+    match output {
+        Ok(out) => {
+            let diff = String::from_utf8_lossy(&out.stdout);
+            if diff.is_empty() {
+                println!("No changes (working tree is clean).");
+            } else {
+                println!("{}", diff);
+            }
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.is_empty() && !out.status.success() {
+                eprintln!("\x1b[31m{}\x1b[0m", stderr.trim());
+            }
+        }
+        Err(e) => eprintln!("\x1b[31mFailed to run git diff: {}\x1b[0m", e),
+    }
+}
+
+/// Show session and git status.
+async fn handle_status_command(engine: &QueryEngine, cwd: &std::path::Path) {
+    let s = engine.state().read().await;
+    println!("Session:  {}", &engine.session_id()[..8]);
+    println!("Model:    {}", s.model);
+    println!("Turns:    {}", s.turn_count);
+    println!("Messages: {}", s.messages.len());
+    println!("Tokens:   {}↑ {}↓", s.total_input_tokens, s.total_output_tokens);
+    println!("Mode:     {:?}", s.permission_mode);
+    println!("CWD:      {}", cwd.display());
+
+    // Git branch + status
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output();
+    if let Ok(out) = branch {
+        let branch_name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !branch_name.is_empty() {
+            println!("Branch:   {}", branch_name);
+        }
+    }
+
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .output();
+    if let Ok(out) = status {
+        let lines = String::from_utf8_lossy(&out.stdout);
+        let count = lines.lines().count();
+        if count == 0 {
+            println!("Git:      clean");
+        } else {
+            println!("Git:      {} changed file(s)", count);
+        }
+    }
+}
+
+/// Show current configuration.
+fn handle_config_command(cwd: &std::path::Path) {
+    let settings = crate::config::load_settings();
+    match settings {
+        Ok(s) => {
+            println!("Configuration:");
+            if let Some(ref model) = s.model {
+                println!("  model: {}", model);
+            }
+            if let Some(ref mode) = s.permission_mode {
+                println!("  permission_mode: {}", mode);
+            }
+            if !s.allowed_tools.is_empty() {
+                println!("  allowed_tools: {:?}", s.allowed_tools);
+            }
+            if !s.denied_tools.is_empty() {
+                println!("  denied_tools: {:?}", s.denied_tools);
+            }
+            if !s.permission_rules.is_empty() {
+                println!("  permission_rules: {} rule(s)", s.permission_rules.len());
+            }
+            let hooks_count = s.hooks.pre_tool_use.len()
+                + s.hooks.post_tool_use.len()
+                + s.hooks.stop.len()
+                + s.hooks.session_start.len()
+                + s.hooks.session_end.len();
+            if hooks_count > 0 {
+                println!("  hooks: {} rule(s)", hooks_count);
+            }
+            if let Some(ref p) = s.custom_system_prompt {
+                println!("  custom_system_prompt: {}...", &p[..p.len().min(60)]);
+            }
+            if let Some(ref p) = s.append_system_prompt {
+                println!("  append_system_prompt: {}...", &p[..p.len().min(60)]);
+            }
+
+            // Show config file path
+            let config_path = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("claude")
+                .join("settings.json");
+            println!("\n  Config file: {}", config_path.display());
+        }
+        Err(e) => eprintln!("Failed to load config: {}", e),
+    }
+
+    // CLAUDE.md status
+    let claude_md = cwd.join("CLAUDE.md");
+    if claude_md.exists() {
+        let size = std::fs::metadata(&claude_md).map(|m| m.len()).unwrap_or(0);
+        println!("  CLAUDE.md: {} ({} bytes)", claude_md.display(), size);
     }
 }
 

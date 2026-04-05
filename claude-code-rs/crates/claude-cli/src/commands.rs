@@ -9,6 +9,10 @@ pub enum SlashCommand {
     Skills,
     Memory { sub: String },
     Session { sub: String },
+    Diff,
+    Status,
+    Permissions,
+    Config,
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -30,6 +34,10 @@ impl SlashCommand {
             "skills" => Self::Skills,
             "memory" => Self::Memory { sub: args },
             "session" | "resume" => Self::Session { sub: args },
+            "diff" => Self::Diff,
+            "status" => Self::Status,
+            "permissions" | "perms" => Self::Permissions,
+            "config" => Self::Config,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -68,6 +76,10 @@ impl SlashCommand {
             }
             Self::Memory { sub } => CommandResult::Memory { sub: sub.clone() },
             Self::Session { sub } => CommandResult::Session { sub: sub.clone() },
+            Self::Diff => CommandResult::Diff,
+            Self::Status => CommandResult::Status,
+            Self::Permissions => CommandResult::Permissions,
+            Self::Config => CommandResult::Config,
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -88,6 +100,10 @@ pub enum CommandResult {
     Compact { instructions: Option<String> },
     Memory { sub: String },
     Session { sub: String },
+    Diff,
+    Status,
+    Permissions,
+    Config,
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -108,11 +124,15 @@ Available commands:
   /help              Show this help
   /clear             Clear conversation history
   /model <name>      Switch model
-  /compact [instr]   Compact conversation history (optional custom instructions)
+  /compact [instr]   Compact conversation history
   /cost              Show token usage
+  /diff              Show git diff (staged + unstaged)
+  /status            Show session and git status
+  /permissions       Show current permission mode and rules
+  /config            Show current configuration
   /skills            List available skills
   /memory list       List memory files
-  /memory open <f>   Open a memory file (path relative to memory dir)
+  /memory open <f>   Open a memory file
   /session save      Save current session
   /session list      List saved sessions
   /session load <id> Resume a saved session

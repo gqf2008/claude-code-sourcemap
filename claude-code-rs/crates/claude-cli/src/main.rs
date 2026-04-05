@@ -74,6 +74,10 @@ async fn main() -> anyhow::Result<()> {
         settings.append_system_prompt.as_deref(),
     );
 
+    // Append dynamic environment context
+    let env_context = config::build_env_context(&cwd);
+    let system_prompt = format!("{}\n\n{}", system_prompt, env_context);
+
     let permission_mode = config::parse_permission_mode(&cli.permission_mode);
     let skills = load_skills(&cwd);
 
