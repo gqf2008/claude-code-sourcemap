@@ -12,7 +12,10 @@ impl Tool for FileWriteTool {
     fn name(&self) -> &str { "Write" }
 
     fn description(&self) -> &str {
-        "Create a new file or overwrite an existing file with the provided content."
+        "Writes a file to the local filesystem. Overwrites existing files if present. \
+         If this is an existing file, you MUST use Read first. Prefer Edit for modifying \
+         existing files — it only sends the diff. Use Write for new files or complete rewrites. \
+         NEVER create documentation files (*.md) or README files unless explicitly requested."
     }
 
     fn input_schema(&self) -> Value {

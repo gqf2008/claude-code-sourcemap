@@ -125,6 +125,29 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 if let Err(e) = print_stream(stream).await {
                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                 }
+
+                // In coordinator mode: drain background agent notifications and
+                // re-submit them so the coordinator can react to completed tasks.
+                if engine.is_coordinator() {
+                    loop {
+                        let notifications = engine.drain_notifications().await;
+                        if notifications.is_empty() {
+                            break;
+                        }
+                        // Inject notifications into state, then trigger a re-submit
+                        for notif in &notifications {
+                            if let claude_core::message::Message::User(u) = notif {
+                                if let Some(claude_core::message::ContentBlock::Text { text }) = u.content.first() {
+                                    eprintln!("\x1b[33m[Task notification received]\x1b[0m");
+                                    let stream = engine.submit(text).await;
+                                    if let Err(e) = print_stream(stream).await {
+                                        eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Err(ReadlineError::Interrupted) => { println!("^C"); continue; }
             Err(ReadlineError::Eof) => { println!("Goodbye!"); break; }

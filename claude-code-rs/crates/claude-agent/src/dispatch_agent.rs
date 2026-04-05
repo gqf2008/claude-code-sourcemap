@@ -8,6 +8,7 @@ use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
+use crate::coordinator::AgentTracker;
 use crate::executor::ToolExecutor;
 use crate::hooks::HookRegistry;
 use crate::permissions::PermissionChecker;
@@ -88,11 +89,17 @@ impl AgentType {
 
 /// A tool that spawns a sub-agent to execute a given prompt.
 /// The sub-agent runs its own query loop and returns its final text output.
+///
+/// In coordinator mode, if `run_in_background` is true, the agent is spawned
+/// via `tokio::spawn` and the tool returns immediately with an `agent_id`.
+/// Results are delivered as `<task-notification>` XML via the `AgentTracker`.
 pub struct DispatchAgentTool {
     pub client: Arc<AnthropicClient>,
     pub registry: Arc<ToolRegistry>,
     pub permission_checker: Arc<PermissionChecker>,
     pub config: SubAgentConfig,
+    /// Optional tracker for background agent execution (coordinator mode).
+    pub agent_tracker: Option<AgentTracker>,
 }
 
 #[async_trait]
@@ -167,13 +174,18 @@ impl Tool for DispatchAgentTool {
             .map(String::from)
             .unwrap_or_else(|| agent_type.system_prompt(&self.config.system_prompt));
 
+        let run_in_background = input["run_in_background"]
+            .as_bool()
+            .unwrap_or(false)
+            || self.agent_tracker.is_some(); // coordinator mode → always background
+
         // Build tool definitions for the sub-agent (optionally filtered)
         let all_tool_defs: Vec<ToolDefinition> = self.registry
             .all()
             .iter()
             .filter(|t| t.is_enabled())
             // Sub-agents cannot use interactive tools or nested dispatch_agent
-            .filter(|t| !matches!(t.name(), "AskUserQuestion" | "dispatch_agent"))
+            .filter(|t| !matches!(t.name(), "AskUserQuestion" | "dispatch_agent" | "SendMessage" | "TaskStop"))
             // Agent-type based filtering
             .filter(|t| {
                 if let Some(ref allowed) = allowed_tools {
@@ -205,7 +217,7 @@ impl Tool for DispatchAgentTool {
 
         let tool_context = ToolContext {
             cwd: context.cwd.clone(),
-            abort_signal: context.abort_signal.clone(), // inherit parent's abort signal
+            abort_signal: context.abort_signal.clone(),
             permission_mode: context.permission_mode,
             messages: Vec::new(),
         };
@@ -215,7 +227,7 @@ impl Tool for DispatchAgentTool {
         use claude_core::message::{ContentBlock, Message, UserMessage};
         let init_messages = vec![Message::User(UserMessage {
             uuid: Uuid::new_v4().to_string(),
-            content: vec![ContentBlock::Text { text: prompt }],
+            content: vec![ContentBlock::Text { text: prompt.clone() }],
         })];
 
         let query_config = QueryConfig {
@@ -226,9 +238,67 @@ impl Tool for DispatchAgentTool {
             thinking: None,
         };
 
-        // Sub-agents run without user-defined hooks to avoid re-entrant hook side effects
+        // Sub-agents run without user-defined hooks to avoid re-entrant side effects
         let no_hooks = Arc::new(HookRegistry::new());
 
+        // ── Background execution (coordinator mode) ─────────────────────────
+        if run_in_background {
+            if let Some(ref tracker) = self.agent_tracker {
+                let agent_id = format!("agent-{}", &Uuid::new_v4().to_string()[..8]);
+                tracker.register(&agent_id, &prompt).await;
+
+                let client = self.client.clone();
+                let tracker = tracker.clone();
+                let agent_id_clone = agent_id.clone();
+
+                tokio::spawn(async move {
+                    let mut stream = query_stream(
+                        client,
+                        executor,
+                        state,
+                        tool_context,
+                        query_config,
+                        init_messages,
+                        all_tool_defs,
+                        no_hooks,
+                    );
+
+                    let mut output = String::new();
+                    let mut tool_use_count: u32 = 0;
+                    let mut total_tokens: u64 = 0;
+
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            AgentEvent::TextDelta(text) => output.push_str(&text),
+                            AgentEvent::ToolUseStart { .. } => tool_use_count += 1,
+                            AgentEvent::UsageUpdate(u) => {
+                                total_tokens += u.input_tokens + u.output_tokens;
+                            }
+                            AgentEvent::Error(e) => {
+                                tracker.fail(&agent_id_clone, e).await;
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    tracker
+                        .complete(&agent_id_clone, output, total_tokens, tool_use_count)
+                        .await;
+                });
+
+                return Ok(ToolResult::text(
+                    serde_json::to_string_pretty(&json!({
+                        "status": "async_launched",
+                        "agent_id": agent_id,
+                        "message": "Agent is running in the background. Results will be delivered as a <task-notification>."
+                    }))
+                    .unwrap(),
+                ));
+            }
+        }
+
+        // ── Synchronous execution (default) ─────────────────────────────────
         let mut stream = query_stream(
             self.client.clone(),
             executor,

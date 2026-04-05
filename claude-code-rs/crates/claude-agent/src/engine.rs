@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -10,8 +11,10 @@ use claude_core::message::{ContentBlock, Message, UserMessage};
 use claude_core::tool::{AbortSignal, ToolContext};
 use claude_core::permissions::PermissionMode;
 use claude_tools::ToolRegistry;
+use tokio::sync::RwLock;
 
 use crate::compact::{compact_conversation, compact_context_message, AUTO_COMPACT_THRESHOLD};
+use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool, TaskNotification};
 use crate::dispatch_agent::{DispatchAgentTool, SubAgentConfig};
 use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
@@ -32,6 +35,10 @@ pub struct QueryEngine {
     compact_threshold: u64,
     /// Shared abort signal — call `.abort()` to cancel the running task.
     abort_signal: AbortSignal,
+    /// Coordinator mode: receives task notifications from background agents.
+    notification_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<TaskNotification>>>,
+    /// Whether coordinator mode is active.
+    coordinator_mode: bool,
 }
 
 pub struct QueryEngineBuilder {
@@ -49,6 +56,8 @@ pub struct QueryEngineBuilder {
     load_memory: bool,
     /// Token threshold for auto-compaction (0 = disabled).
     compact_threshold: u64,
+    /// Enable coordinator (multi-agent orchestration) mode.
+    coordinator_mode: bool,
 }
 
 impl QueryEngineBuilder {
@@ -65,6 +74,7 @@ impl QueryEngineBuilder {
             load_claude_md: true,
             load_memory: true,
             compact_threshold: AUTO_COMPACT_THRESHOLD,
+            coordinator_mode: false,
         }
     }
 
@@ -114,6 +124,11 @@ impl QueryEngineBuilder {
         self
     }
 
+    pub fn coordinator_mode(mut self, enable: bool) -> Self {
+        self.coordinator_mode = enable;
+        self
+    }
+
     pub fn build(self) -> QueryEngine {
         let mut client = AnthropicClient::new(self.api_key);
         if let Some(ref model) = self.model {
@@ -125,7 +140,6 @@ impl QueryEngineBuilder {
         let mut registry = ToolRegistry::with_defaults();
         let permission_checker = Arc::new(self.permission_checker);
 
-        // Register the dispatch_agent tool (requires client + registry access)
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
         let system_prompt = if self.load_claude_md {
             let md = load_claude_md(&self.cwd);
@@ -155,10 +169,28 @@ impl QueryEngineBuilder {
             system_prompt
         };
 
-        // Wrap the base registry into Arc; the dispatch tool gets a clone of
-        // this Arc so sub-agents see the same tool set (minus dispatch_agent
-        // itself, to prevent infinite recursion).
         let sub_registry = Arc::new(ToolRegistry::with_defaults());
+
+        // ── Coordinator mode setup ───────────────────────────────────────────
+        let (agent_tracker, notification_rx) = if self.coordinator_mode {
+            let (tracker, rx) = AgentTracker::new();
+            let agent_channels = Arc::new(RwLock::new(HashMap::new()));
+            let cancel_tokens = Arc::new(RwLock::new(HashMap::new()));
+
+            // Register coordinator-only tools
+            registry.register(SendMessageTool {
+                tracker: tracker.clone(),
+                agent_channels,
+            });
+            registry.register(TaskStopTool {
+                tracker: tracker.clone(),
+                cancel_tokens,
+            });
+
+            (Some(tracker), Some(tokio::sync::Mutex::new(rx)))
+        } else {
+            (None, None)
+        };
 
         let dispatch_tool = DispatchAgentTool {
             client: client.clone(),
@@ -171,6 +203,7 @@ impl QueryEngineBuilder {
                 system_prompt: system_prompt.clone(),
                 max_turns: self.max_turns,
             },
+            agent_tracker,
         };
         registry.register(dispatch_tool);
 
@@ -189,7 +222,6 @@ impl QueryEngineBuilder {
         ));
 
         let state = new_shared_state();
-        // Set model in shared state (single source of truth)
         {
             let mut s = state.blocking_write();
             s.model = model_name.clone();
@@ -213,6 +245,8 @@ impl QueryEngineBuilder {
             session_id,
             compact_threshold: self.compact_threshold,
             abort_signal,
+            notification_rx,
+            coordinator_mode: self.coordinator_mode,
         }
     }
 }
@@ -309,6 +343,27 @@ impl QueryEngine {
 
     pub fn state(&self) -> &SharedState {
         &self.state
+    }
+
+    /// Whether this engine is in coordinator (multi-agent) mode.
+    pub fn is_coordinator(&self) -> bool {
+        self.coordinator_mode
+    }
+
+    /// Drain any pending task notifications from background agents.
+    /// Returns them as user-role messages containing `<task-notification>` XML.
+    /// Call this between turns in the REPL to inject notifications into the conversation.
+    pub async fn drain_notifications(&self) -> Vec<Message> {
+        let rx = match &self.notification_rx {
+            Some(rx) => rx,
+            None => return Vec::new(),
+        };
+        let mut rx = rx.lock().await;
+        let mut messages = Vec::new();
+        while let Ok(notification) = rx.try_recv() {
+            messages.push(notification.to_message());
+        }
+        messages
     }
 
     /// Get a clone of the abort signal so callers can cancel the running task.

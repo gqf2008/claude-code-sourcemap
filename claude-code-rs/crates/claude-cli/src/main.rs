@@ -60,6 +60,10 @@ struct Cli {
     /// Verbose output
     #[arg(long, short)]
     verbose: bool,
+
+    /// Enable coordinator (multi-agent orchestration) mode
+    #[arg(long)]
+    coordinator: bool,
 }
 
 #[tokio::main]
@@ -92,8 +96,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Append dynamic environment context
-    let env_context = config::build_env_context(&cwd);
-    let system_prompt = format!("{}\n\n{}", system_prompt, env_context);
+    let env_context = config::build_env_context(&cwd, &cli.model, cli.coordinator);
+    let system_prompt = if cli.coordinator {
+        // In coordinator mode, use the coordinator-specific system prompt
+        format!("{}\n\n{}", config::COORDINATOR_SYSTEM_PROMPT, env_context)
+    } else {
+        format!("{}\n\n{}", system_prompt, env_context)
+    };
 
     let permission_mode = config::parse_permission_mode(&cli.permission_mode);
     let skills = load_skills(&cwd);
@@ -109,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
         .hooks_config(settings.hooks)
         .load_claude_md(!cli.no_claude_md)
         .load_memory(true)
+        .coordinator_mode(cli.coordinator)
         .build();
 
     // ── Ctrl-C → abort signal (second press → force exit) ──────────────────

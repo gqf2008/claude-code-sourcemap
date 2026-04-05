@@ -11,7 +11,11 @@ impl Tool for FileReadTool {
     fn name(&self) -> &str { "Read" }
 
     fn description(&self) -> &str {
-        "Read file contents with optional line range. Also lists directories."
+        "Reads a file from the local filesystem. The file_path must be an absolute path. \
+         By default reads up to 2000 lines from the beginning. Use offset/limit to read \
+         specific portions. Results use cat -n format with line numbers starting at 1. \
+         Can read images (PNG, JPG), PDFs (use pages param for large PDFs), and Jupyter \
+         notebooks (.ipynb). Can only read files, not directories — use Bash ls for directories."
     }
 
     fn input_schema(&self) -> Value {

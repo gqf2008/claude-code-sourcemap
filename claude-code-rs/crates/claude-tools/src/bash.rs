@@ -10,7 +10,13 @@ impl Tool for BashTool {
     fn name(&self) -> &str { "Bash" }
 
     fn description(&self) -> &str {
-        "Execute a shell command in the working directory."
+        "Execute a shell command in the working directory. Use for system commands, \
+         git operations, build commands, and running programs. Do NOT use for file operations \
+         when dedicated tools exist (Read, Edit, Write, Glob, Grep). \
+         Git safety: NEVER update git config, NEVER run destructive git commands \
+         (force push, reset --hard, clean -f) unless explicitly requested, NEVER skip hooks, \
+         always create NEW commits (not amend) unless asked, prefer staging specific files \
+         over 'git add -A'."
     }
 
     fn input_schema(&self) -> Value {

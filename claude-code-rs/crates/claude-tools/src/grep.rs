@@ -12,7 +12,11 @@ impl Tool for GrepTool {
     fn name(&self) -> &str { "Grep" }
 
     fn description(&self) -> &str {
-        "Search file contents with a regular expression."
+        "A powerful search tool built on ripgrep. ALWAYS use Grep for search tasks — NEVER \
+         invoke grep or rg as a Bash command. Supports full regex syntax (e.g. \"log.*Error\"). \
+         Filter by glob (e.g. \"*.js\") or type (e.g. \"py\", \"rust\"). Output modes: \
+         \"content\" shows matching lines, \"files_with_matches\" shows only paths (default), \
+         \"count\" shows match counts. For cross-line patterns use multiline: true."
     }
 
     fn input_schema(&self) -> Value {
