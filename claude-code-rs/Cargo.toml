@@ -32,3 +32,4 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 similar = { version = "2", features = ["unicode"] }
 tokio-util = "0.7"
+base64 = "0.22"

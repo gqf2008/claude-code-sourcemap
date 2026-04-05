@@ -68,40 +68,54 @@ impl Tool for MultiEditTool {
         }
 
         let original = tokio::fs::read_to_string(&path).await?;
-        let mut content = original.clone();
 
+        // Pre-validate: check all old_strings are present and unique in original
+        // and detect overlapping regions before modifying anything
+        let mut regions: Vec<(usize, usize, usize)> = Vec::new(); // (start, end, edit_index)
         for (i, edit) in edits.iter().enumerate() {
             let old_str = edit["old_string"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'old_string'", i))?;
-            let new_str = edit["new_string"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", i))?;
-
             if old_str.is_empty() {
                 return Ok(ToolResult::error(format!("Edit {}: old_string must not be empty", i)));
             }
-
-            let count = content.matches(old_str).count();
+            let count = original.matches(old_str).count();
             if count == 0 {
                 return Ok(ToolResult::error(format!(
-                    "Edit {}: old_string not found in file (after applying {} previous edits).\n\
-                     old_string: {:?}",
-                    i,
-                    i,
-                    truncate(old_str, 100)
+                    "Edit {}: old_string not found in file.\nold_string: {:?}",
+                    i, truncate(old_str, 100)
                 )));
             }
             if count > 1 {
                 return Ok(ToolResult::error(format!(
-                    "Edit {}: old_string found {} times — must be unique.\n\
-                     old_string: {:?}",
-                    i,
-                    count,
-                    truncate(old_str, 100)
+                    "Edit {}: old_string found {} times — must be unique.\nold_string: {:?}",
+                    i, count, truncate(old_str, 100)
                 )));
             }
+            if let Some(pos) = original.find(old_str) {
+                regions.push((pos, pos + old_str.len(), i));
+            }
+        }
 
+        // Check for overlapping regions
+        regions.sort_by_key(|r| r.0);
+        for w in regions.windows(2) {
+            if w[0].1 > w[1].0 {
+                return Ok(ToolResult::error(format!(
+                    "Edits {} and {} have overlapping regions ({}-{} and {}-{}). \
+                     Split into separate Edit calls or merge into one edit.",
+                    w[0].2, w[1].2, w[0].0, w[0].1, w[1].0, w[1].1
+                )));
+            }
+        }
+
+        // Apply edits sequentially (safe since we pre-validated)
+        let mut content = original.clone();
+        for (i, edit) in edits.iter().enumerate() {
+            let old_str = edit["old_string"].as_str().unwrap();
+            let new_str = edit["new_string"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", i))?;
             content = content.replacen(old_str, new_str, 1);
         }
 

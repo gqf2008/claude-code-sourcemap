@@ -3,6 +3,8 @@ use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 
+use crate::bash::truncate_output;
+
 /// GitTool — safe wrapper for common git operations.
 ///
 /// Provides a structured interface for git commands that's safer than raw Bash.
@@ -26,7 +28,9 @@ impl Tool for GitTool {
                 "subcommand": {
                     "type": "string",
                     "enum": ["status", "diff", "log", "branch", "show", "blame",
-                             "add", "commit", "checkout", "stash", "tag", "remote"],
+                             "add", "commit", "checkout", "stash", "tag", "remote",
+                             "cherry-pick", "rebase", "merge", "fetch", "pull",
+                             "rev-parse", "reflog"],
                     "description": "The git subcommand to run."
                 },
                 "args": {
@@ -57,6 +61,8 @@ impl Tool for GitTool {
         let allowed = [
             "status", "diff", "log", "branch", "show", "blame",
             "add", "commit", "checkout", "stash", "tag", "remote",
+            "cherry-pick", "rebase", "merge", "fetch", "pull",
+            "rev-parse", "reflog",
         ];
         if !allowed.contains(&subcommand) {
             return Ok(ToolResult::error(format!(
@@ -66,8 +72,22 @@ impl Tool for GitTool {
 
         // Safety: block dangerous patterns
         for arg in &args {
-            if (arg.contains("--force") || arg.contains("-f")) && subcommand == "push" {
-                return Ok(ToolResult::error("Force push is not allowed for safety."));
+            if arg.contains("--force") || arg == "-f" {
+                if subcommand == "push" {
+                    return Ok(ToolResult::error(
+                        "Force push is not allowed for safety. Use --force-with-lease if needed."
+                    ));
+                }
+            }
+            if arg == "--hard" && subcommand == "reset" {
+                return Ok(ToolResult::error(
+                    "Hard reset blocked — could lose uncommitted changes."
+                ));
+            }
+            if arg == "--no-verify" {
+                return Ok(ToolResult::error(
+                    "Skipping hooks (--no-verify) is not allowed unless explicitly requested."
+                ));
             }
         }
 
@@ -99,10 +119,7 @@ impl Tool for GitTool {
         }
 
         // Truncate very large outputs
-        if text.len() > 100_000 {
-            text.truncate(100_000);
-            text.push_str("\n... [output truncated at 100KB]");
-        }
+        let text = truncate_output(text);
 
         if output.status.success() {
             Ok(ToolResult::text(text))

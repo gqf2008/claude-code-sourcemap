@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
+use crate::bash::{check_dangerous, truncate_output};
+
 pub struct PowerShellTool;
 
 #[async_trait]
@@ -56,6 +58,11 @@ impl Tool for PowerShellTool {
                 .unwrap_or(30_000)
                 .min(120_000);
 
+            // Security: check for dangerous patterns
+            if let Some(reason) = check_dangerous(command) {
+                return Ok(ToolResult::error(format!("🚫 {}\nCommand: {}", reason, command)));
+            }
+
             use std::process::Stdio;
             use tokio::process::Command;
             use tokio::time::{timeout, Duration};
@@ -93,6 +100,9 @@ impl Tool for PowerShellTool {
                     if response.is_empty() {
                         response = "(no output)".to_string();
                     }
+
+                    // Truncate large output
+                    let response = truncate_output(response);
 
                     let is_error = exit_code != 0;
                     if is_error {
