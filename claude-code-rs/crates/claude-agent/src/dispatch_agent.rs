@@ -85,6 +85,44 @@ impl AgentType {
     fn read_only(&self) -> bool {
         matches!(self, Self::Explore | Self::CodeReview)
     }
+
+    /// Preferred model alias for this agent type.
+    /// Returns `None` for "inherit" (use parent model).
+    fn preferred_model(&self) -> Option<&'static str> {
+        match self {
+            Self::Explore => Some("haiku"),
+            _ => None, // inherit parent model
+        }
+    }
+}
+
+/// Resolve a model alias ("haiku", "sonnet", "opus") to a concrete model name.
+/// If `alias` is None or "inherit", returns the `parent_model` unchanged.
+pub fn resolve_agent_model(alias: Option<&str>, parent_model: &str) -> String {
+    match alias {
+        None | Some("inherit") => parent_model.to_string(),
+        Some("haiku") => resolve_model_alias("haiku", parent_model),
+        Some("sonnet") => resolve_model_alias("sonnet", parent_model),
+        Some("opus") => resolve_model_alias("opus", parent_model),
+        Some(concrete) => concrete.to_string(),
+    }
+}
+
+/// Map a tier alias to a concrete model, preserving the parent's date suffix
+/// pattern when possible.
+fn resolve_model_alias(tier: &str, parent_model: &str) -> String {
+    // Extract date suffix from parent model if present (e.g., "-20250514")
+    let date_suffix = parent_model.rsplit('-').next()
+        .filter(|s| s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()))
+        .map(|d| format!("-{}", d))
+        .unwrap_or_default();
+
+    match tier {
+        "haiku" => format!("claude-haiku-4-5{}", date_suffix),
+        "sonnet" => format!("claude-sonnet-4{}", date_suffix),
+        "opus" => format!("claude-opus-4{}", date_suffix),
+        _ => tier.to_string(),
+    }
 }
 
 /// A tool that spawns a sub-agent to execute a given prompt.
@@ -144,6 +182,12 @@ impl Tool for DispatchAgentTool {
                 "system_prompt": {
                     "type": "string",
                     "description": "Optional system prompt override for the sub-agent."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model alias for the sub-agent: 'haiku', 'sonnet', 'opus', \
+                                    'inherit', or a concrete model name. Default: determined \
+                                    by agent_type (explore=haiku, others=inherit parent model)."
                 },
                 "run_in_background": {
                     "type": "boolean",
@@ -213,10 +257,18 @@ impl Tool for DispatchAgentTool {
             self.permission_checker.clone(),
         ));
         let state = new_shared_state();
-        // Inherit permission mode from parent
+
+        // Resolve model: agent type preferred model → input model → parent model
+        let agent_model = input["model"]
+            .as_str()
+            .map(|m| resolve_agent_model(Some(m), &self.config.model))
+            .unwrap_or_else(|| {
+                resolve_agent_model(agent_type.preferred_model(), &self.config.model)
+            });
+
         {
             let mut s = state.write().await;
-            s.model = self.config.model.clone();
+            s.model = agent_model.clone();
         }
 
         let tool_context = ToolContext {

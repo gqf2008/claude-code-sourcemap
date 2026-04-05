@@ -8,3 +8,4 @@ pub mod dispatch_agent;
 pub mod compact;
 pub mod task_runner;
 pub mod coordinator;
+pub mod cost;

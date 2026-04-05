@@ -15,6 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::compact::{compact_conversation, compact_context_message, AUTO_COMPACT_THRESHOLD};
 use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool, TaskNotification};
+use crate::cost::CostTracker;
 use crate::dispatch_agent::{DispatchAgentTool, SubAgentConfig};
 use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
@@ -41,6 +42,8 @@ pub struct QueryEngine {
     coordinator_mode: bool,
     /// If non-empty, only expose these tools to the model.
     allowed_tools: Vec<String>,
+    /// Tracks accumulated API usage costs per model.
+    cost_tracker: CostTracker,
 }
 
 pub struct QueryEngineBuilder {
@@ -275,6 +278,7 @@ impl QueryEngineBuilder {
             notification_rx,
             coordinator_mode: self.coordinator_mode,
             allowed_tools: self.allowed_tools,
+            cost_tracker: CostTracker::new(),
         }
     }
 }
@@ -375,6 +379,11 @@ impl QueryEngine {
 
     pub fn state(&self) -> &SharedState {
         &self.state
+    }
+
+    /// Get the cost tracker for displaying usage stats.
+    pub fn cost_tracker(&self) -> &CostTracker {
+        &self.cost_tracker
     }
 
     /// Whether this engine is in coordinator (multi-agent) mode.

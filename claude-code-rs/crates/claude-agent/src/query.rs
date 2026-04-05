@@ -67,6 +67,13 @@ pub fn query_stream(
         let mut stop_hook_retries: u32 = 0;
         const MAX_STOP_HOOK_RETRIES: u32 = 3;
 
+        // ── Recovery state (aligned with TS query.ts) ────────────────────────
+        let mut max_tokens_recovery_count: u32 = 0;
+        const MAX_TOKENS_RECOVERY_LIMIT: u32 = 3;
+        const ESCALATED_MAX_TOKENS: u32 = 65536;
+        let mut effective_max_tokens = config.max_tokens;
+        let mut has_attempted_reactive_compact = false;
+
         loop {
             // Check abort at the top of every turn
             if tool_context.abort_signal.is_aborted() {
@@ -87,8 +94,6 @@ pub fn query_stream(
             let system = if config.system_prompt.is_empty() {
                 None
             } else {
-                // Use prompt caching (ephemeral) on the system prompt to save
-                // input tokens across turns — mirrors the TS implementation.
                 Some(vec![SystemBlock {
                     block_type: "text".into(),
                     text: config.system_prompt.clone(),
@@ -98,7 +103,7 @@ pub fn query_stream(
 
             let request = MessagesRequest {
                 model: { state.read().await.model.clone() },
-                max_tokens: config.max_tokens,
+                max_tokens: effective_max_tokens,
                 messages: api_messages,
                 system,
                 tools: if tools.is_empty() { None } else { Some(tools.clone()) },
@@ -112,8 +117,28 @@ pub fn query_stream(
             let event_stream = match client.messages_stream(&request).await {
                 Ok(s) => s,
                 Err(e) => {
-                    // Retry once on transient errors (rate limit, server error)
                     let err_str = format!("{}", e);
+
+                    // ── Prompt-too-long recovery ─────────────────────────────
+                    let is_prompt_too_long = err_str.contains("prompt is too long")
+                        || err_str.contains("413")
+                        || err_str.contains("too many tokens");
+                    if is_prompt_too_long && !has_attempted_reactive_compact {
+                        has_attempted_reactive_compact = true;
+                        yield AgentEvent::TextDelta(
+                            "\n\x1b[33m[Prompt too long — triggering auto-compact…]\x1b[0m\n".to_string()
+                        );
+                        // Signal the caller that compaction is needed.
+                        // The engine's auto-compact will handle it on the next
+                        // submit() call.  Here we simply trim the oldest
+                        // user+assistant pair to get below the limit.
+                        if messages.len() > 3 {
+                            messages.drain(1..3);
+                            continue;
+                        }
+                    }
+
+                    // ── Transient error retry ────────────────────────────────
                     let is_retryable = err_str.contains("rate")
                         || err_str.contains("529")
                         || err_str.contains("500")
@@ -122,9 +147,11 @@ pub fn query_stream(
                     if is_retryable && !retried_this_turn && turn_count + 1 < config.max_turns {
                         #[allow(unused_assignments)]
                         { retried_this_turn = true; }
-                        yield AgentEvent::TextDelta(format!("\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str));
+                        yield AgentEvent::TextDelta(format!(
+                            "\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str
+                        ));
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        continue; // retry the turn
+                        continue;
                     }
                     state.write().await.messages = messages.clone();
                     yield AgentEvent::Error(format!("API error: {}", e));
@@ -271,9 +298,61 @@ pub fn query_stream(
                         }
                     }
                     turn_count += 1;
-                    stop_hook_retries = 0; // reset on normal tool turn
+                    stop_hook_retries = 0;
                     { let mut s = state.write().await; s.turn_count = turn_count; }
                 }
+
+                // ── max_output_tokens recovery (aligned with TS query.ts) ────
+                StopReason::MaxTokens => {
+                    // Strategy 1: Escalate max_tokens (8k → 64k)
+                    if effective_max_tokens < ESCALATED_MAX_TOKENS {
+                        effective_max_tokens = ESCALATED_MAX_TOKENS;
+                        yield AgentEvent::TextDelta(
+                            "\n\x1b[33m[Output truncated — escalating max_tokens to 64K]\x1b[0m\n".to_string()
+                        );
+                        // Inject continuation message
+                        let cont_msg = UserMessage {
+                            uuid: Uuid::new_v4().to_string(),
+                            content: vec![ContentBlock::Text {
+                                text: "Output token limit hit. Resume directly — no apology, \
+                                       no recap. Continue exactly where you left off.".to_string(),
+                            }],
+                        };
+                        messages.push(Message::User(cont_msg));
+                        turn_count += 1;
+                        { let mut s = state.write().await; s.turn_count = turn_count; }
+                        continue;
+                    }
+
+                    // Strategy 2: Multi-turn continuation (up to 3 attempts)
+                    if max_tokens_recovery_count < MAX_TOKENS_RECOVERY_LIMIT {
+                        max_tokens_recovery_count += 1;
+                        yield AgentEvent::TextDelta(format!(
+                            "\n\x1b[33m[Output truncated — recovery attempt {}/{}]\x1b[0m\n",
+                            max_tokens_recovery_count, MAX_TOKENS_RECOVERY_LIMIT
+                        ));
+                        let cont_msg = UserMessage {
+                            uuid: Uuid::new_v4().to_string(),
+                            content: vec![ContentBlock::Text {
+                                text: "Output token limit hit again. Continue where you left off. \
+                                       Break remaining work into smaller pieces.".to_string(),
+                            }],
+                        };
+                        messages.push(Message::User(cont_msg));
+                        turn_count += 1;
+                        { let mut s = state.write().await; s.turn_count = turn_count; }
+                        continue;
+                    }
+
+                    // Exhausted recovery — surface to caller
+                    yield AgentEvent::TextDelta(
+                        "\n\x1b[31m[Max output tokens recovery exhausted]\x1b[0m\n".to_string()
+                    );
+                    state.write().await.messages = messages.clone();
+                    yield AgentEvent::TurnComplete { stop_reason: StopReason::MaxTokens };
+                    break;
+                }
+
                 other => {
                     // ── Stop hooks ───────────────────────────────────────────
                     if hooks.has_hooks(HookEvent::Stop) {

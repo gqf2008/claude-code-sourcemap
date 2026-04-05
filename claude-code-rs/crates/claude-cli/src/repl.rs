@@ -48,10 +48,12 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::ShowCost => {
                                 let state = engine.state();
                                 let s = state.read().await;
-                                println!(
-                                    "Tokens: input={}, output={}, turns={}",
-                                    s.total_input_tokens, s.total_output_tokens, s.turn_count
+                                let summary = engine.cost_tracker().format_summary(
+                                    s.total_input_tokens,
+                                    s.total_output_tokens,
+                                    s.turn_count,
                                 );
+                                println!("{}", summary);
                             }
                             CommandResult::Compact { instructions } => {
                                 println!("\x1b[33mCompacting conversation…\x1b[0m");
@@ -125,7 +127,8 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 }
 
                 let stream = engine.submit(input).await;
-                if let Err(e) = print_stream(stream).await {
+                let model = { engine.state().read().await.model.clone() };
+                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                 }
 
@@ -153,7 +156,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                 if text.is_empty() { continue; }
                                 eprintln!("\x1b[33m[Task notification received]\x1b[0m");
                                 let stream = engine.submit(&text).await;
-                                if let Err(e) = print_stream(stream).await {
+                                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
                                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                                 }
                             }
@@ -465,8 +468,9 @@ async fn run_skill(
         );
     }
 
+    let model = { parent_engine.state().read().await.model.clone() };
     let stream = parent_engine.submit(&augmented).await;
-    if let Err(e) = print_stream(stream).await {
+    if let Err(e) = print_stream(stream, &model, Some(parent_engine.cost_tracker())).await {
         eprintln!("\x1b[31mSkill error: {}\x1b[0m", e);
     }
 }
@@ -691,8 +695,9 @@ async fn handle_review(engine: &QueryEngine, custom_prompt: &str, cwd: &std::pat
     };
 
     println!("\x1b[35m[Code Review]\x1b[0m");
+    let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&review_prompt).await;
-    if let Err(e) = print_stream(stream).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
         eprintln!("\x1b[31mReview error: {}\x1b[0m", e);
     }
 }

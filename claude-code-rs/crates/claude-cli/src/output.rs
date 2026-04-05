@@ -1,3 +1,4 @@
+use claude_agent::cost::CostTracker;
 use claude_agent::engine::QueryEngine;
 use claude_agent::query::AgentEvent;
 use claude_agent::task_runner::{run_task, CompletionReason, TaskProgress};
@@ -116,6 +117,8 @@ fn short_path(path: &str) -> &str {
 
 pub async fn print_stream(
     mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>>,
+    model: &str,
+    cost_tracker: Option<&CostTracker>,
 ) -> anyhow::Result<()> {
     let mut last_tool_name = String::new();
 
@@ -155,6 +158,9 @@ pub async fn print_stream(
             AgentEvent::AssistantMessage(_) => {}
             AgentEvent::TurnComplete { .. } => { println!(); }
             AgentEvent::UsageUpdate(u) => {
+                if let Some(tracker) = cost_tracker {
+                    tracker.add(model, &u);
+                }
                 tracing::debug!("Tokens: in={}, out={}", u.input_tokens, u.output_tokens);
             }
             AgentEvent::Error(msg) => {
@@ -169,8 +175,9 @@ pub async fn print_stream(
 }
 
 pub async fn run_single(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> {
+    let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(prompt).await;
-    print_stream(stream).await
+    print_stream(stream, &model, Some(engine.cost_tracker())).await
 }
 
 /// Run a single prompt and output structured JSON result.
