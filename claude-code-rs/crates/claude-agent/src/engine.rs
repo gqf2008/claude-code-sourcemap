@@ -501,12 +501,21 @@ impl QueryEngine {
     }
 
     /// Check if auto-compact should trigger (returns true if over threshold).
+    ///
+    /// Uses API-reported tokens when available; falls back to local estimation
+    /// (e.g., when resuming a session before any API calls are made).
     pub async fn should_auto_compact(&self) -> bool {
         if self.compact_threshold == 0 {
             return false;
         }
         let s = self.state.read().await;
-        s.total_input_tokens >= self.compact_threshold
+        if s.total_input_tokens > 0 {
+            return s.total_input_tokens >= self.compact_threshold;
+        }
+        // No API-reported tokens yet — use local estimation
+        let estimated = claude_core::token_estimation::estimate_messages_tokens(&s.messages)
+            + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt);
+        estimated >= self.compact_threshold
     }
 
     /// Clear conversation history and reset token counters.

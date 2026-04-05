@@ -214,12 +214,17 @@ fn run_init(cwd: &std::path::Path) -> anyhow::Result<()> {
         println!("✓ Created {}", claude_md_path.display());
     }
 
-    // Create .claude/ directory for skills and memory
+    // Create .claude/ directory for skills, memory, and rules
     let claude_dir = cwd.join(".claude");
     let skills_dir = claude_dir.join("skills");
+    let rules_dir = claude_dir.join("rules");
     if !skills_dir.exists() {
         std::fs::create_dir_all(&skills_dir)?;
         println!("✓ Created {}", skills_dir.display());
+    }
+    if !rules_dir.exists() {
+        std::fs::create_dir_all(&rules_dir)?;
+        println!("✓ Created {}", rules_dir.display());
     }
 
     // Create settings directory if it doesn't exist
