@@ -98,8 +98,8 @@ async fn main() -> anyhow::Result<()> {
     // Append dynamic environment context
     let env_context = config::build_env_context(&cwd, &cli.model, cli.coordinator);
     let system_prompt = if cli.coordinator {
-        // In coordinator mode, use the coordinator-specific system prompt
-        format!("{}\n\n{}", config::COORDINATOR_SYSTEM_PROMPT, env_context)
+        // In coordinator mode, append coordinator prompt to the user's prompt
+        format!("{}\n\n{}\n\n{}", system_prompt, config::COORDINATOR_SYSTEM_PROMPT, env_context)
     } else {
         format!("{}\n\n{}", system_prompt, env_context)
     };

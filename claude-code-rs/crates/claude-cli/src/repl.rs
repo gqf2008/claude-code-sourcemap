@@ -129,20 +129,29 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 // In coordinator mode: drain background agent notifications and
                 // re-submit them so the coordinator can react to completed tasks.
                 if engine.is_coordinator() {
+                    const MAX_NOTIFICATION_ROUNDS: u32 = 10;
+                    let mut rounds = 0;
                     loop {
                         let notifications = engine.drain_notifications().await;
-                        if notifications.is_empty() {
+                        if notifications.is_empty() || rounds >= MAX_NOTIFICATION_ROUNDS {
                             break;
                         }
-                        // Inject notifications into state, then trigger a re-submit
+                        rounds += 1;
                         for notif in &notifications {
                             if let claude_core::message::Message::User(u) = notif {
-                                if let Some(claude_core::message::ContentBlock::Text { text }) = u.content.first() {
-                                    eprintln!("\x1b[33m[Task notification received]\x1b[0m");
-                                    let stream = engine.submit(text).await;
-                                    if let Err(e) = print_stream(stream).await {
-                                        eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                                // Concatenate all text blocks from the notification
+                                let text: String = u.content.iter().filter_map(|b| {
+                                    if let claude_core::message::ContentBlock::Text { text } = b {
+                                        Some(text.as_str())
+                                    } else {
+                                        None
                                     }
+                                }).collect::<Vec<_>>().join("\n");
+                                if text.is_empty() { continue; }
+                                eprintln!("\x1b[33m[Task notification received]\x1b[0m");
+                                let stream = engine.submit(&text).await;
+                                if let Err(e) = print_stream(stream).await {
+                                    eprintln!("\x1b[31mError: {}\x1b[0m", e);
                                 }
                             }
                         }

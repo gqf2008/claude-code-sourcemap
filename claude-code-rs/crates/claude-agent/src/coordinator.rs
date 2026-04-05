@@ -158,12 +158,13 @@ impl AgentTracker {
         };
 
         let summary = if result.len() > 200 {
-            format!("{}...", &result[..200])
+            let truncated: String = result.chars().take(200).collect();
+            format!("{}...", truncated)
         } else {
             result.clone()
         };
 
-        let _ = self.notification_tx.send(TaskNotification {
+        if let Err(e) = self.notification_tx.send(TaskNotification {
             agent_id: agent_id.to_string(),
             status: AgentStatus::Completed,
             summary,
@@ -171,7 +172,9 @@ impl AgentTracker {
             total_tokens: tokens,
             tool_uses,
             duration_ms,
-        });
+        }) {
+            tracing::warn!("Failed to send task notification for {}: {}", agent_id, e);
+        }
     }
 
     /// Mark an agent as failed.
@@ -188,7 +191,7 @@ impl AgentTracker {
             }
         };
 
-        let _ = self.notification_tx.send(TaskNotification {
+        if let Err(e) = self.notification_tx.send(TaskNotification {
             agent_id: agent_id.to_string(),
             status: AgentStatus::Failed,
             summary: error.clone(),
@@ -196,7 +199,9 @@ impl AgentTracker {
             total_tokens: 0,
             tool_uses: 0,
             duration_ms,
-        });
+        }) {
+            tracing::warn!("Failed to send task notification for {}: {}", agent_id, e);
+        }
     }
 
     /// Mark an agent as killed.
@@ -212,7 +217,7 @@ impl AgentTracker {
             }
         };
 
-        let _ = self.notification_tx.send(TaskNotification {
+        if let Err(e) = self.notification_tx.send(TaskNotification {
             agent_id: agent_id.to_string(),
             status: AgentStatus::Killed,
             summary: "Agent was stopped by coordinator".to_string(),
@@ -220,7 +225,9 @@ impl AgentTracker {
             total_tokens: 0,
             tool_uses: 0,
             duration_ms,
-        });
+        }) {
+            tracing::warn!("Failed to send task notification for {}: {}", agent_id, e);
+        }
     }
 
     /// Get all agent statuses.
@@ -381,6 +388,8 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Build the list of tool names available to workers (excludes coordinator-only tools).

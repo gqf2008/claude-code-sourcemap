@@ -172,24 +172,31 @@ impl QueryEngineBuilder {
         let sub_registry = Arc::new(ToolRegistry::with_defaults());
 
         // ── Coordinator mode setup ───────────────────────────────────────────
-        let (agent_tracker, notification_rx) = if self.coordinator_mode {
+        let (agent_tracker, notification_rx, coord_cancel_tokens, coord_agent_channels) = if self.coordinator_mode {
             let (tracker, rx) = AgentTracker::new();
-            let agent_channels = Arc::new(RwLock::new(HashMap::new()));
-            let cancel_tokens = Arc::new(RwLock::new(HashMap::new()));
+            let agent_channels: Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>> =
+                Arc::new(RwLock::new(HashMap::new()));
+            let cancel_tokens: Arc<RwLock<HashMap<String, tokio_util::sync::CancellationToken>>> =
+                Arc::new(RwLock::new(HashMap::new()));
 
             // Register coordinator-only tools
             registry.register(SendMessageTool {
                 tracker: tracker.clone(),
-                agent_channels,
+                agent_channels: agent_channels.clone(),
             });
             registry.register(TaskStopTool {
                 tracker: tracker.clone(),
-                cancel_tokens,
+                cancel_tokens: cancel_tokens.clone(),
             });
 
-            (Some(tracker), Some(tokio::sync::Mutex::new(rx)))
+            (
+                Some(tracker),
+                Some(tokio::sync::Mutex::new(rx)),
+                Some(cancel_tokens),
+                Some(agent_channels),
+            )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
 
         let dispatch_tool = DispatchAgentTool {
@@ -204,6 +211,8 @@ impl QueryEngineBuilder {
                 max_turns: self.max_turns,
             },
             agent_tracker,
+            cancel_tokens: coord_cancel_tokens,
+            agent_channels: coord_agent_channels,
         };
         registry.register(dispatch_tool);
 

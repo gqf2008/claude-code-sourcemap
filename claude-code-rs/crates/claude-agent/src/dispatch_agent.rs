@@ -100,6 +100,10 @@ pub struct DispatchAgentTool {
     pub config: SubAgentConfig,
     /// Optional tracker for background agent execution (coordinator mode).
     pub agent_tracker: Option<AgentTracker>,
+    /// Shared cancel tokens — used by TaskStop to abort background agents.
+    pub cancel_tokens: Option<Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>>>,
+    /// Shared agent message channels — used by SendMessage to deliver follow-ups.
+    pub agent_channels: Option<Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>>,
 }
 
 #[async_trait]
@@ -247,9 +251,25 @@ impl Tool for DispatchAgentTool {
                 let agent_id = format!("agent-{}", &Uuid::new_v4().to_string()[..8]);
                 tracker.register(&agent_id, &prompt).await;
 
+                // Create a CancellationToken so TaskStop can abort this agent
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+                if let Some(ref tokens) = self.cancel_tokens {
+                    tokens.write().await.insert(agent_id.clone(), cancel_token.clone());
+                }
+
+                // Override the abort signal with one linked to the cancel token
+                let agent_abort = claude_core::tool::AbortSignal::new();
+                let tool_context = ToolContext {
+                    cwd: tool_context.cwd,
+                    abort_signal: agent_abort.clone(),
+                    permission_mode: tool_context.permission_mode,
+                    messages: Vec::new(),
+                };
+
                 let client = self.client.clone();
                 let tracker = tracker.clone();
                 let agent_id_clone = agent_id.clone();
+                let cancel_tokens = self.cancel_tokens.clone();
 
                 tokio::spawn(async move {
                     let mut stream = query_stream(
@@ -267,24 +287,42 @@ impl Tool for DispatchAgentTool {
                     let mut tool_use_count: u32 = 0;
                     let mut total_tokens: u64 = 0;
 
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            AgentEvent::TextDelta(text) => output.push_str(&text),
-                            AgentEvent::ToolUseStart { .. } => tool_use_count += 1,
-                            AgentEvent::UsageUpdate(u) => {
-                                total_tokens += u.input_tokens + u.output_tokens;
+                    loop {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                // TaskStop was called — abort the agent
+                                agent_abort.abort();
+                                tracker.kill(&agent_id_clone).await;
+                                break;
                             }
-                            AgentEvent::Error(e) => {
-                                tracker.fail(&agent_id_clone, e).await;
-                                return;
+                            event = stream.next() => {
+                                match event {
+                                    Some(AgentEvent::TextDelta(text)) => output.push_str(&text),
+                                    Some(AgentEvent::ToolUseStart { .. }) => tool_use_count += 1,
+                                    Some(AgentEvent::UsageUpdate(u)) => {
+                                        total_tokens += u.input_tokens + u.output_tokens;
+                                    }
+                                    Some(AgentEvent::Error(e)) => {
+                                        tracker.fail(&agent_id_clone, e).await;
+                                        break;
+                                    }
+                                    None => {
+                                        // Stream ended — agent completed
+                                        tracker
+                                            .complete(&agent_id_clone, output, total_tokens, tool_use_count)
+                                            .await;
+                                        break;
+                                    }
+                                    _ => {}
+                                }
                             }
-                            _ => {}
                         }
                     }
 
-                    tracker
-                        .complete(&agent_id_clone, output, total_tokens, tool_use_count)
-                        .await;
+                    // Clean up cancel token
+                    if let Some(ref tokens) = cancel_tokens {
+                        tokens.write().await.remove(&agent_id_clone);
+                    }
                 });
 
                 return Ok(ToolResult::text(

@@ -14,7 +14,7 @@ impl Tool for FileEditTool {
     fn description(&self) -> &str {
         "Performs exact string replacements in files. You must use Read at least once before \
          editing. The edit will FAIL if old_string is not unique in the file — provide more \
-         surrounding context to make it unique, or use replace_all to change every instance. \
+         surrounding context to make it unique. \
          Preserve exact indentation from the file content (after the line number prefix). \
          ALWAYS prefer editing existing files over creating new ones."
     }
