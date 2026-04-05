@@ -161,14 +161,10 @@ fn extract_list(yaml: &str, key: &str) -> Option<Vec<String>> {
                 let items: Vec<String> = lines[i + 1..]
                     .iter()
                     .take_while(|l| l.trim().starts_with("- "))
-                    .map(|l| {
+                    .filter_map(|l| {
                         l.trim()
                             .strip_prefix("- ")
-                            .unwrap()
-                            .trim()
-                            .trim_matches('"')
-                            .trim_matches('\'')
-                            .to_string()
+                            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                     })
                     .collect();
                 if !items.is_empty() {

@@ -303,6 +303,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

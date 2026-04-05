@@ -106,9 +106,7 @@ fn html_to_markdown(html: &str) -> String {
     }
 
     // Collapse excessive whitespace
-    let re = regex::Regex::new(r"\n{3,}").unwrap();
-    let cleaned = re.replace_all(result.trim(), "\n\n");
-    cleaned.to_string()
+    claude_core::text_util::collapse_blank_lines(&result)
 }
 
 /// Try to extract the main content from an HTML page (heuristic).

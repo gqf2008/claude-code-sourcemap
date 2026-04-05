@@ -81,17 +81,10 @@ pub fn calculate_cost(model: &str, usage: &Usage) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// Per-model usage accumulator
+// Per-model usage accumulator (uses state::ModelUsage)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
-pub struct ModelUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cost_usd: f64,
-}
+use crate::state::ModelUsage;
 
 /// Thread-safe cost tracker that accumulates usage across turns.
 #[derive(Debug, Clone)]
@@ -115,25 +108,31 @@ impl CostTracker {
     /// Add a single API response usage to the running totals.
     pub fn add(&self, model: &str, usage: &Usage) {
         let cost = calculate_cost(model, usage);
-        let mut inner = self.inner.lock().expect("CostTracker lock poisoned");
+        let Ok(mut inner) = self.inner.lock() else {
+            tracing::warn!("CostTracker lock poisoned, skipping add");
+            return;
+        };
         inner.total_cost_usd += cost;
 
         let entry = inner.by_model.entry(canonical_model(model).to_string()).or_default();
         entry.input_tokens += usage.input_tokens;
         entry.output_tokens += usage.output_tokens;
         entry.cache_read_tokens += usage.cache_read_input_tokens.unwrap_or(0);
-        entry.cache_write_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+        entry.cache_creation_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+        entry.api_calls += 1;
         entry.cost_usd += cost;
     }
 
     /// Get the total accumulated USD cost.
     pub fn total_usd(&self) -> f64 {
-        self.inner.lock().expect("CostTracker lock poisoned").total_cost_usd
+        self.inner.lock().map(|g| g.total_cost_usd).unwrap_or(0.0)
     }
 
     /// Format a human-readable cost summary (aligned with TS `formatTotalCost`).
     pub fn format_summary(&self, total_input: u64, total_output: u64, turn_count: u32) -> String {
-        let inner = self.inner.lock().expect("CostTracker lock poisoned");
+        let Ok(inner) = self.inner.lock() else {
+            return "  (cost data unavailable)".to_string();
+        };
         let mut lines = Vec::new();
 
         lines.push(format!("  Total cost:   {}", format_usd(inner.total_cost_usd)));
@@ -153,7 +152,7 @@ impl CostTracker {
                     format_number(usage.input_tokens),
                     format_number(usage.output_tokens),
                     format_number(usage.cache_read_tokens),
-                    format_number(usage.cache_write_tokens),
+                    format_number(usage.cache_creation_tokens),
                     format_usd(usage.cost_usd),
                 ));
             }

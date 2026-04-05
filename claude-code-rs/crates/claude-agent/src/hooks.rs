@@ -125,7 +125,7 @@ impl HookEvent {
 // ── Context passed to every hook invocation ──────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HookContext {
+pub(crate) struct HookContext {
     pub event: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
@@ -369,7 +369,7 @@ impl HookRegistry {
     }
 
     /// Run all matching hooks for `event`.  Returns the first non-Continue decision.
-    pub async fn run(&self, event: HookEvent, ctx: HookContext) -> HookDecision {
+    pub(crate) async fn run(&self, event: HookEvent, ctx: HookContext) -> HookDecision {
         let rules = self.rules_for(event);
         let tool_name = ctx.tool_name.as_deref().unwrap_or("");
 
@@ -406,7 +406,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for tool events.
-    pub fn tool_ctx(&self, event: HookEvent, tool_name: &str, input: Option<Value>, output: Option<String>, is_error: Option<bool>) -> HookContext {
+    pub(crate) fn tool_ctx(&self, event: HookEvent, tool_name: &str, input: Option<Value>, output: Option<String>, is_error: Option<bool>) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: Some(tool_name.to_string()),
@@ -424,7 +424,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for tool failure events.
-    pub fn tool_failure_ctx(&self, tool_name: &str, input: Option<Value>, error_msg: &str) -> HookContext {
+    pub(crate) fn tool_failure_ctx(&self, tool_name: &str, input: Option<Value>, error_msg: &str) -> HookContext {
         HookContext {
             event: HookEvent::PostToolUseFailure.as_str().to_string(),
             tool_name: Some(tool_name.to_string()),
@@ -442,7 +442,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for session / prompt events.
-    pub fn prompt_ctx(&self, event: HookEvent, prompt: Option<String>) -> HookContext {
+    pub(crate) fn prompt_ctx(&self, event: HookEvent, prompt: Option<String>) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: None,
@@ -460,7 +460,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for compaction events.
-    pub fn compact_ctx(&self, event: HookEvent, trigger: &str, summary: Option<String>) -> HookContext {
+    pub(crate) fn compact_ctx(&self, event: HookEvent, trigger: &str, summary: Option<String>) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: None,
@@ -478,7 +478,8 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for subagent events.
-    pub fn subagent_ctx(&self, event: HookEvent, agent_id: &str) -> HookContext {
+    #[allow(dead_code)] // reserved for SubagentStart/End hook events
+    pub(crate) fn subagent_ctx(&self, event: HookEvent, agent_id: &str) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: None,
@@ -496,7 +497,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for permission events.
-    pub fn permission_ctx(&self, event: HookEvent, tool_name: &str, input: &Value, reason: &str) -> HookContext {
+    pub(crate) fn permission_ctx(&self, event: HookEvent, tool_name: &str, input: &Value, reason: &str) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: Some(tool_name.to_string()),
@@ -514,7 +515,8 @@ impl HookRegistry {
     }
 
     /// Build a minimal `HookContext` for lifecycle events (CwdChanged, ConfigChange, etc.).
-    pub fn lifecycle_ctx(&self, event: HookEvent) -> HookContext {
+    #[allow(dead_code)] // reserved for lifecycle hook events
+    pub(crate) fn lifecycle_ctx(&self, event: HookEvent) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: None,
@@ -532,7 +534,7 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for task events.
-    pub fn task_ctx(&self, event: HookEvent, task_desc: &str, status: Option<String>) -> HookContext {
+    pub(crate) fn task_ctx(&self, event: HookEvent, task_desc: &str, status: Option<String>) -> HookContext {
         let mut input = serde_json::json!({"task": task_desc});
         if let Some(s) = status {
             input["status"] = serde_json::Value::String(s);
@@ -554,7 +556,7 @@ impl HookRegistry {
     }
 
     /// Returns true if there are any hooks configured for the given event.
-    pub fn has_hooks(&self, event: HookEvent) -> bool {
+    pub(crate) fn has_hooks(&self, event: HookEvent) -> bool {
         !self.rules_for(event).is_empty()
     }
 }

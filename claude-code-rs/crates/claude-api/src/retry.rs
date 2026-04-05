@@ -131,5 +131,5 @@ where
         }
     }
 
-    Err(anyhow::anyhow!("{}", last_err.unwrap()))
+    Err(anyhow::anyhow!("{}", last_err.expect("retry loop ran at least once")))
 }

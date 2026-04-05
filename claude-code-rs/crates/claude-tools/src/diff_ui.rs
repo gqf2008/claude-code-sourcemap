@@ -30,8 +30,7 @@ pub fn print_diff(label: &str, old: &str, new: &str) {
 
     for group in diff.grouped_ops(CONTEXT_LINES) {
         // Hunk header: @@ -old_start,old_len +new_start,new_len @@
-        let first = group.first().unwrap();
-        let _last = group.last().unwrap();
+        let Some(first) = group.first() else { continue };
         let old_start = first.old_range().start + 1;
         let old_len: usize = group.iter().map(|op| op.old_range().len()).sum();
         let new_start = first.new_range().start + 1;

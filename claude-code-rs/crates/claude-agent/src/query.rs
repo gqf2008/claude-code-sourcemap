@@ -105,43 +105,7 @@ pub fn query_stream(
             }
 
             let api_messages = messages_to_api(&messages);
-            let system = if config.system_prompt.is_empty() {
-                None
-            } else {
-                // Split system prompt at the dynamic boundary for prompt caching.
-                // The static prefix (identity, guidelines) gets a global cache scope,
-                // while the dynamic suffix (env, memory, CLAUDE.md) is session-specific.
-                let boundary = config.system_prompt.find(
-                    crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY
-                );
-                match boundary {
-                    Some(pos) => {
-                        let static_prefix = config.system_prompt[..pos].trim();
-                        let dynamic_suffix = config.system_prompt[pos..].trim();
-                        let mut blocks = vec![SystemBlock {
-                            block_type: "text".into(),
-                            text: static_prefix.to_string(),
-                            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
-                        }];
-                        if !dynamic_suffix.is_empty() {
-                            blocks.push(SystemBlock {
-                                block_type: "text".into(),
-                                text: dynamic_suffix.to_string(),
-                                cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
-                            });
-                        }
-                        Some(blocks)
-                    }
-                    None => {
-                        // No boundary marker — send as single block
-                        Some(vec![SystemBlock {
-                            block_type: "text".into(),
-                            text: config.system_prompt.clone(),
-                            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
-                        }])
-                    }
-                }
-            };
+            let system = build_system_blocks(&config.system_prompt);
 
             let request = MessagesRequest {
                 model: { state.read().await.model.clone() },
@@ -160,71 +124,32 @@ pub fn query_stream(
                 Ok(s) => s,
                 Err(e) => {
                     let err_str = format!("{}", e);
-
-                    // ── Prompt-too-long recovery ─────────────────────────────
-                    let is_prompt_too_long = err_str.contains("prompt is too long")
-                        || err_str.contains("413")
-                        || err_str.contains("too many tokens");
-                    if is_prompt_too_long && !has_attempted_reactive_compact {
-                        has_attempted_reactive_compact = true;
-                        yield AgentEvent::TextDelta(
-                            "\n\x1b[33m[Prompt too long — triggering auto-compact…]\x1b[0m\n".to_string()
-                        );
-                        // Signal the caller that compaction is needed.
-                        // The engine's auto-compact will handle it on the next
-                        // submit() call.  Here we simply trim the oldest
-                        // user+assistant pair to get below the limit.
-                        if messages.len() > 3 {
-                            messages.drain(1..3);
-                            continue;
-                        }
-                    }
-
-                    // ── Transient error retry with exponential backoff ─────
-                    let is_retryable = err_str.contains("rate")
-                        || err_str.contains("529")
-                        || err_str.contains("500")
-                        || err_str.contains("503")
-                        || err_str.contains("overloaded");
-
                     consecutive_errors += 1;
-                    const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+                    state.write().await.record_error(error_category(&err_str));
 
-                    // Record error in state for diagnostics
-                    {
-                        let error_cat = if err_str.contains("rate") || err_str.contains("429") {
-                            "rate_limit"
-                        } else if err_str.contains("overloaded") || err_str.contains("529") {
-                            "overloaded"
-                        } else if err_str.contains("500") || err_str.contains("503") {
-                            "server_error"
-                        } else {
-                            "api_error"
-                        };
-                        state.write().await.record_error(error_cat);
-                    }
-
-                    if is_retryable && consecutive_errors <= MAX_CONSECUTIVE_ERRORS && turn_count + 1 < config.max_turns {
-                        // Parse Retry-After header hint from error message if present
-                        let wait_ms = if let Some(pos) = err_str.find("retry-after:") {
-                            let after = &err_str[pos + 12..];
-                            after.trim().split_whitespace().next()
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .map(|secs| secs * 1000)
-                                .unwrap_or(retry_delay_ms)
-                        } else {
-                            retry_delay_ms
-                        };
-
-                        yield AgentEvent::TextDelta(format!(
-                            "\n\x1b[33m[Retrying after API error ({}/{}) in {}ms: {}]\x1b[0m\n",
-                            consecutive_errors, MAX_CONSECUTIVE_ERRORS, wait_ms, err_str
-                        ));
-                        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-
-                        // Exponential backoff: double delay, cap at 32s
-                        retry_delay_ms = (retry_delay_ms * 2).min(32_000);
-                        continue;
+                    match classify_api_error(&err_str, has_attempted_reactive_compact, consecutive_errors, retry_delay_ms) {
+                        ApiErrorAction::ReactiveCompact => {
+                            has_attempted_reactive_compact = true;
+                            yield AgentEvent::TextDelta(
+                                "\n\x1b[33m[Prompt too long — triggering auto-compact…]\x1b[0m\n".to_string()
+                            );
+                            if messages.len() > 3 {
+                                messages.drain(1..3);
+                                continue;
+                            }
+                        }
+                        ApiErrorAction::Retry { wait_ms } => {
+                            if turn_count + 1 < config.max_turns {
+                                yield AgentEvent::TextDelta(format!(
+                                    "\n\x1b[33m[Retrying after API error ({}) in {}ms: {}]\x1b[0m\n",
+                                    consecutive_errors, wait_ms, err_str
+                                ));
+                                tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                                retry_delay_ms = (retry_delay_ms * 2).min(32_000);
+                                continue;
+                            }
+                        }
+                        ApiErrorAction::Fatal => {}
                     }
                     state.write().await.messages = messages.clone();
                     yield AgentEvent::Error(format!("API error: {}", e));
@@ -396,24 +321,8 @@ pub fn query_stream(
 
                 // Context usage warning
                 let total_input = { state.read().await.total_input_tokens };
-                let warning = crate::compact::calculate_token_warning(
-                    total_input,
-                    crate::compact::AUTO_COMPACT_THRESHOLD,
-                );
-                if warning != crate::compact::TokenWarningState::Normal {
-                    let pct = total_input as f64 / crate::compact::AUTO_COMPACT_THRESHOLD as f64;
-                    let msg = match warning {
-                        crate::compact::TokenWarningState::Warning =>
-                            "Approaching context limit — consider saving progress".to_string(),
-                        crate::compact::TokenWarningState::Critical =>
-                            "Context nearly full — auto-compaction may trigger soon".to_string(),
-                        crate::compact::TokenWarningState::Imminent =>
-                            "Context limit imminent — auto-compaction will trigger".to_string(),
-                        _ => String::new(),
-                    };
-                    if !msg.is_empty() {
-                        yield AgentEvent::ContextWarning { usage_pct: pct, message: msg };
-                    }
+                if let Some(warning_event) = build_context_warning(total_input) {
+                    yield warning_event;
                 }
 
                 // Budget enforcement
@@ -459,7 +368,6 @@ pub fn query_stream(
                     { let mut s = state.write().await; s.turn_count = turn_count; }
                 }
 
-                // ── max_output_tokens recovery (aligned with TS query.ts) ────
                 StopReason::MaxTokens => {
                     // Strategy 1: Escalate max_tokens to model's upper limit
                     if effective_max_tokens < escalated_max_tokens {
@@ -468,15 +376,7 @@ pub fn query_stream(
                             "\n\x1b[33m[Output truncated — escalating max_tokens to {}K]\x1b[0m\n",
                             escalated_max_tokens / 1000
                         ));
-                        // Inject continuation message
-                        let cont_msg = UserMessage {
-                            uuid: Uuid::new_v4().to_string(),
-                            content: vec![ContentBlock::Text {
-                                text: "Output token limit hit. Resume directly — no apology, \
-                                       no recap. Continue exactly where you left off.".to_string(),
-                            }],
-                        };
-                        messages.push(Message::User(cont_msg));
+                        messages.push(Message::User(make_continuation_message(0, MAX_TOKENS_RECOVERY_LIMIT)));
                         turn_count += 1;
                         { let mut s = state.write().await; s.turn_count = turn_count; }
                         continue;
@@ -489,20 +389,13 @@ pub fn query_stream(
                             "\n\x1b[33m[Output truncated — recovery attempt {}/{}]\x1b[0m\n",
                             max_tokens_recovery_count, MAX_TOKENS_RECOVERY_LIMIT
                         ));
-                        let cont_msg = UserMessage {
-                            uuid: Uuid::new_v4().to_string(),
-                            content: vec![ContentBlock::Text {
-                                text: "Output token limit hit again. Continue where you left off. \
-                                       Break remaining work into smaller pieces.".to_string(),
-                            }],
-                        };
-                        messages.push(Message::User(cont_msg));
+                        messages.push(Message::User(make_continuation_message(max_tokens_recovery_count, MAX_TOKENS_RECOVERY_LIMIT)));
                         turn_count += 1;
                         { let mut s = state.write().await; s.turn_count = turn_count; }
                         continue;
                     }
 
-                    // Exhausted recovery — surface to caller
+                    // Exhausted recovery
                     yield AgentEvent::TextDelta(
                         "\n\x1b[31m[Max output tokens recovery exhausted]\x1b[0m\n".to_string()
                     );
@@ -557,6 +450,142 @@ pub fn query_stream(
         }
     };
     Box::pin(stream)
+}
+
+// ── Extracted helpers for query_stream ────────────────────────────────────────
+
+/// Build system prompt blocks with cache control and dynamic boundary splitting.
+fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock>> {
+    if system_prompt.is_empty() {
+        return None;
+    }
+    let boundary = system_prompt.find(
+        crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+    );
+    match boundary {
+        Some(pos) => {
+            let static_prefix = system_prompt[..pos].trim();
+            let dynamic_suffix = system_prompt[pos..].trim();
+            let mut blocks = vec![SystemBlock {
+                block_type: "text".into(),
+                text: static_prefix.to_string(),
+                cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+            }];
+            if !dynamic_suffix.is_empty() {
+                blocks.push(SystemBlock {
+                    block_type: "text".into(),
+                    text: dynamic_suffix.to_string(),
+                    cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                });
+            }
+            Some(blocks)
+        }
+        None => Some(vec![SystemBlock {
+            block_type: "text".into(),
+            text: system_prompt.to_string(),
+            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+        }]),
+    }
+}
+
+/// Classify API errors for retry logic.
+enum ApiErrorAction {
+    /// Trigger reactive compaction (prompt too long).
+    ReactiveCompact,
+    /// Retry after a delay (transient error).
+    Retry { wait_ms: u64 },
+    /// Fatal error — give up.
+    Fatal,
+}
+
+/// Classify an API error string and determine retry action.
+fn classify_api_error(
+    err_str: &str,
+    has_attempted_reactive_compact: bool,
+    consecutive_errors: u32,
+    retry_delay_ms: u64,
+) -> ApiErrorAction {
+    let is_prompt_too_long = err_str.contains("prompt is too long")
+        || err_str.contains("413")
+        || err_str.contains("too many tokens");
+    if is_prompt_too_long && !has_attempted_reactive_compact {
+        return ApiErrorAction::ReactiveCompact;
+    }
+
+    let is_retryable = err_str.contains("rate")
+        || err_str.contains("529")
+        || err_str.contains("500")
+        || err_str.contains("503")
+        || err_str.contains("overloaded");
+
+    const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+    if is_retryable && consecutive_errors <= MAX_CONSECUTIVE_ERRORS {
+        let wait_ms = if let Some(pos) = err_str.find("retry-after:") {
+            let after = &err_str[pos + 12..];
+            after.trim().split_whitespace().next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|secs| secs * 1000)
+                .unwrap_or(retry_delay_ms)
+        } else {
+            retry_delay_ms
+        };
+        return ApiErrorAction::Retry { wait_ms };
+    }
+
+    ApiErrorAction::Fatal
+}
+
+/// Classify an error string into a tracking category.
+fn error_category(err_str: &str) -> &'static str {
+    if err_str.contains("rate") || err_str.contains("429") {
+        "rate_limit"
+    } else if err_str.contains("overloaded") || err_str.contains("529") {
+        "overloaded"
+    } else if err_str.contains("500") || err_str.contains("503") {
+        "server_error"
+    } else {
+        "api_error"
+    }
+}
+
+/// Build a context warning event if token usage is elevated.
+fn build_context_warning(total_input: u64) -> Option<AgentEvent> {
+    let warning = crate::compact::calculate_token_warning(
+        total_input,
+        crate::compact::AUTO_COMPACT_THRESHOLD,
+    );
+    if warning == crate::compact::TokenWarningState::Normal {
+        return None;
+    }
+    let pct = total_input as f64 / crate::compact::AUTO_COMPACT_THRESHOLD as f64;
+    let msg = match warning {
+        crate::compact::TokenWarningState::Warning =>
+            "Approaching context limit — consider saving progress".to_string(),
+        crate::compact::TokenWarningState::Critical =>
+            "Context nearly full — auto-compaction may trigger soon".to_string(),
+        crate::compact::TokenWarningState::Imminent =>
+            "Context limit imminent — auto-compaction will trigger".to_string(),
+        _ => return None,
+    };
+    Some(AgentEvent::ContextWarning { usage_pct: pct, message: msg })
+}
+
+/// Create a continuation message for max_tokens recovery.
+fn make_continuation_message(attempt: u32, limit: u32) -> UserMessage {
+    let text = if attempt == 0 {
+        "Output token limit hit. Resume directly — no apology, \
+         no recap. Continue exactly where you left off.".to_string()
+    } else {
+        format!(
+            "Output token limit hit again (attempt {}/{}). Continue where you left off. \
+             Break remaining work into smaller pieces.",
+            attempt, limit
+        )
+    };
+    UserMessage {
+        uuid: Uuid::new_v4().to_string(),
+        content: vec![ContentBlock::Text { text }],
+    }
 }
 
 fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {

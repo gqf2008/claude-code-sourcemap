@@ -1025,9 +1025,12 @@ fn handle_login() {
         eprintln!("\x1b[31mFailed to create config dir: {}\x1b[0m", e);
         return;
     }
-    match std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()) {
-        Ok(_) => println!("\x1b[32m✓ API key saved to {}\x1b[0m", settings_path.display()),
-        Err(e) => eprintln!("\x1b[31mFailed to save settings: {}\x1b[0m", e),
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => match std::fs::write(&settings_path, json) {
+            Ok(_) => println!("\x1b[32m✓ API key saved to {}\x1b[0m", settings_path.display()),
+            Err(e) => eprintln!("\x1b[31mFailed to save settings: {}\x1b[0m", e),
+        },
+        Err(e) => eprintln!("\x1b[31mFailed to serialize settings: {}\x1b[0m", e),
     }
 }
 
@@ -1054,10 +1057,15 @@ fn handle_logout() {
         return;
     }
 
-    settings.as_object_mut().unwrap().remove("api_key");
-    match std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()) {
-        Ok(_) => println!("\x1b[32m✓ API key removed from settings\x1b[0m"),
-        Err(e) => eprintln!("\x1b[31mFailed to update settings: {}\x1b[0m", e),
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("api_key");
+    }
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => match std::fs::write(&settings_path, json) {
+            Ok(_) => println!("\x1b[32m✓ API key removed from settings\x1b[0m"),
+            Err(e) => eprintln!("\x1b[31mFailed to update settings: {}\x1b[0m", e),
+        },
+        Err(e) => eprintln!("\x1b[31mFailed to serialize settings: {}\x1b[0m", e),
     }
 }
 
@@ -1165,7 +1173,8 @@ async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, format: &str
                     }),
                 }).collect::<Vec<_>>(),
             });
-            match std::fs::write(&path, serde_json::to_string_pretty(&export).unwrap()) {
+            let json = serde_json::to_string_pretty(&export).unwrap_or_else(|_| "{}".into());
+            match std::fs::write(&path, json) {
                 Ok(_) => println!("\x1b[32m✓ Exported to {}\x1b[0m", path.display()),
                 Err(e) => eprintln!("\x1b[31mExport failed: {}\x1b[0m", e),
             }

@@ -87,8 +87,7 @@ pub fn format_compact_summary(raw: &str) -> String {
     };
 
     // Collapse excessive blank lines
-    let re = regex::Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(result.trim(), "\n\n").to_string()
+    claude_core::text_util::collapse_blank_lines(&result)
 }
 
 // ── Message serialisation for compact call ───────────────────────────────────

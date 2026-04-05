@@ -90,16 +90,29 @@ fn load_manifest() -> SessionManifest {
     if !path.exists() {
         return SessionManifest::default();
     }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            tracing::warn!("Corrupt session manifest, using default: {}", e);
+            SessionManifest::default()
+        }),
+        Err(e) => {
+            tracing::warn!("Failed to read session manifest: {}", e);
+            SessionManifest::default()
+        }
+    }
 }
 
 fn save_manifest(manifest: &SessionManifest) {
     let path = manifest_path();
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(&path, json);
+    match serde_json::to_string_pretty(manifest) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!("Failed to save session manifest: {}", e);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to serialize session manifest: {}", e);
+        }
     }
 }
 

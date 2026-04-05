@@ -113,7 +113,8 @@ impl Tool for MultiEditTool {
         // Apply edits sequentially (safe since we pre-validated)
         let mut content = original.clone();
         for (i, edit) in edits.iter().enumerate() {
-            let old_str = edit["old_string"].as_str().unwrap();
+            let old_str = edit["old_string"].as_str()
+                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'old_string'", i))?;
             let new_str = edit["new_string"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", i))?;

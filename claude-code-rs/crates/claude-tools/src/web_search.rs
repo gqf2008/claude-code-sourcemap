@@ -87,7 +87,7 @@ impl Tool for WebSearchTool {
 
         let results = do_search(
             &base_url,
-            api_key.as_deref().unwrap(),
+            api_key.as_deref().expect("checked above"),
             query,
             &allowed_domains,
             &blocked_domains,
