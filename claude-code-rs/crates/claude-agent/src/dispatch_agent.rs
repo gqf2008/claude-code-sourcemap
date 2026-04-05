@@ -101,27 +101,12 @@ impl AgentType {
 pub fn resolve_agent_model(alias: Option<&str>, parent_model: &str) -> String {
     match alias {
         None | Some("inherit") => parent_model.to_string(),
-        Some("haiku") => resolve_model_alias("haiku", parent_model),
-        Some("sonnet") => resolve_model_alias("sonnet", parent_model),
-        Some("opus") => resolve_model_alias("opus", parent_model),
-        Some(concrete) => concrete.to_string(),
-    }
-}
-
-/// Map a tier alias to a concrete model, preserving the parent's date suffix
-/// pattern when possible.
-fn resolve_model_alias(tier: &str, parent_model: &str) -> String {
-    // Extract date suffix from parent model if present (e.g., "-20250514")
-    let date_suffix = parent_model.rsplit('-').next()
-        .filter(|s| s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()))
-        .map(|d| format!("-{}", d))
-        .unwrap_or_default();
-
-    match tier {
-        "haiku" => format!("claude-haiku-4-5{}", date_suffix),
-        "sonnet" => format!("claude-sonnet-4{}", date_suffix),
-        "opus" => format!("claude-opus-4{}", date_suffix),
-        _ => tier.to_string(),
+        Some(other) => {
+            // Try alias resolution via model module
+            claude_core::model::resolve_alias(other)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| other.to_string())
+        }
     }
 }
 

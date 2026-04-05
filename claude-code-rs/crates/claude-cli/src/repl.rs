@@ -39,11 +39,13 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                 engine.clear_history().await;
                                 println!("Conversation history cleared.");
                             }
-                            CommandResult::SetModel(model) => {
+                            CommandResult::SetModel(input) => {
+                                let resolved = claude_core::model::resolve_model_string(&input);
                                 let state = engine.state();
                                 let mut s = state.write().await;
-                                s.model = model.clone();
-                                println!("Model set to: {}", model);
+                                s.model = resolved.clone();
+                                let display = claude_core::model::display_name(&resolved);
+                                println!("Model set to: {} ({})", display, resolved);
                             }
                             CommandResult::ShowCost => {
                                 let state = engine.state();
@@ -336,7 +338,7 @@ fn handle_diff_command(cwd: &std::path::Path) {
 async fn handle_status_command(engine: &QueryEngine, cwd: &std::path::Path) {
     let s = engine.state().read().await;
     println!("Session:  {}", &engine.session_id()[..8]);
-    println!("Model:    {}", s.model);
+    println!("Model:    {} ({})", claude_core::model::display_name(&s.model), s.model);
     println!("Turns:    {}", s.turn_count);
     println!("Messages: {}", s.messages.len());
     println!("Tokens:   {}↑ {}↓", s.total_input_tokens, s.total_output_tokens);

@@ -16,6 +16,8 @@
 
 use std::path::Path;
 
+use claude_core::model;
+
 /// Marker that separates globally-cacheable prefix from session-specific suffix.
 /// The API prompt-caching layer uses this to apply different cache scopes.
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
@@ -128,7 +130,7 @@ fn section_tone_style() -> &'static str {
 }
 
 /// Dynamic: environment information (CWD, platform, git status, model).
-fn section_environment(cwd: &Path, model: &str) -> String {
+fn section_environment(cwd: &Path, model_id: &str) -> String {
     let platform = std::env::consts::OS;
     let shell = if cfg!(windows) { "PowerShell" } else { "bash" };
     let is_git = cwd.join(".git").exists()
@@ -139,8 +141,8 @@ fn section_environment(cwd: &Path, model: &str) -> String {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-    let model_desc = canonical_model_description(model);
-    let cutoff = knowledge_cutoff(model);
+    let model_desc = model::display_name(model_id);
+    let cutoff = model::knowledge_cutoff(model_id);
 
     let mut env = format!(
         r#"
@@ -156,7 +158,7 @@ fn section_environment(cwd: &Path, model: &str) -> String {
         is_git,
     );
 
-    if !model_desc.is_empty() {
+    if model_desc != "Claude" {
         env.push_str(&format!("\n- Model: {}", model_desc));
     }
     if !cutoff.is_empty() {
@@ -406,50 +408,6 @@ When you complete the task, respond with a concise report covering what was done
 and any key findings — the caller will relay this to the user, \
 so it only needs the essentials.";
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Map a model ID to a human-readable description.
-fn canonical_model_description(model: &str) -> &'static str {
-    let m = model.to_lowercase();
-    if m.contains("opus-4-6") || m.contains("opus-4.6") {
-        "Claude Opus 4.6"
-    } else if m.contains("opus-4-5") || m.contains("opus-4.5") {
-        "Claude Opus 4.5"
-    } else if m.contains("opus-4") || m.contains("opus4") {
-        "Claude Opus 4"
-    } else if m.contains("sonnet-4-6") || m.contains("sonnet-4.6") {
-        "Claude Sonnet 4.6"
-    } else if m.contains("sonnet-4-5") || m.contains("sonnet-4.5") {
-        "Claude Sonnet 4.5"
-    } else if m.contains("sonnet-4") || m.contains("sonnet4") {
-        "Claude Sonnet 4"
-    } else if m.contains("haiku-4-5") || m.contains("haiku-4.5") {
-        "Claude Haiku 4.5"
-    } else if m.contains("haiku-3-5") || m.contains("haiku-3.5") {
-        "Claude Haiku 3.5"
-    } else {
-        ""
-    }
-}
-
-/// Knowledge cutoff date by model family.
-fn knowledge_cutoff(model: &str) -> &'static str {
-    let m = model.to_lowercase();
-    if m.contains("sonnet-4-6") || m.contains("sonnet-4.6") {
-        "August 2025"
-    } else if m.contains("opus-4-6") || m.contains("opus-4.6")
-        || m.contains("opus-4-5") || m.contains("opus-4.5")
-    {
-        "May 2025"
-    } else if m.contains("haiku-4") {
-        "February 2025"
-    } else if m.contains("opus-4") || m.contains("sonnet-4") {
-        "January 2025"
-    } else {
-        ""
-    }
-}
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -592,20 +550,20 @@ mod tests {
     }
 
     #[test]
-    fn test_knowledge_cutoff() {
-        assert_eq!(knowledge_cutoff("claude-sonnet-4-6-20250820"), "August 2025");
-        assert_eq!(knowledge_cutoff("claude-opus-4-5-20250515"), "May 2025");
-        assert_eq!(knowledge_cutoff("claude-haiku-4-5-20250210"), "February 2025");
-        assert_eq!(knowledge_cutoff("claude-sonnet-4-20250514"), "January 2025");
-        assert_eq!(knowledge_cutoff("some-unknown-model"), "");
+    fn test_knowledge_cutoff_via_model() {
+        assert_eq!(model::knowledge_cutoff("claude-sonnet-4-6"), "August 2025");
+        assert_eq!(model::knowledge_cutoff("claude-opus-4-5-20250515"), "May 2025");
+        assert_eq!(model::knowledge_cutoff("claude-haiku-4-5-20250210"), "February 2025");
+        assert_eq!(model::knowledge_cutoff("claude-sonnet-4-20250514"), "January 2025");
+        assert_eq!(model::knowledge_cutoff("some-unknown-model"), "");
     }
 
     #[test]
-    fn test_canonical_model_description() {
-        assert_eq!(canonical_model_description("claude-sonnet-4-20250514"), "Claude Sonnet 4");
-        assert_eq!(canonical_model_description("claude-opus-4-5-20250515"), "Claude Opus 4.5");
-        assert_eq!(canonical_model_description("claude-haiku-4-5-20250210"), "Claude Haiku 4.5");
-        assert_eq!(canonical_model_description("unknown"), "");
+    fn test_display_name_via_model() {
+        assert_eq!(model::display_name("claude-sonnet-4-20250514"), "Claude Sonnet 4");
+        assert_eq!(model::display_name("claude-opus-4-5-20250515"), "Claude Opus 4.5");
+        assert_eq!(model::display_name("claude-haiku-4-5-20250210"), "Claude Haiku 4.5");
+        assert_eq!(model::display_name("unknown"), "Claude");
     }
 
     #[test]

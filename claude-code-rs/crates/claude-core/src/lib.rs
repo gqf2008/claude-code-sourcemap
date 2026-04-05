@@ -7,3 +7,4 @@ pub mod skills;
 pub mod memory;
 pub mod session;
 pub mod token_estimation;
+pub mod model;

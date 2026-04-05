@@ -61,22 +61,12 @@ const TIER_HAIKU_45: ModelPricing = ModelPricing {
 
 /// Look up the pricing tier for a model name.
 pub fn pricing_for_model(model: &str) -> ModelPricing {
-    let m = model.to_lowercase();
-    if m.contains("opus") {
-        if m.contains("4-5") || m.contains("4.5") || m.contains("4-6") || m.contains("4.6") {
-            TIER_OPUS_45
-        } else {
-            TIER_OPUS
-        }
-    } else if m.contains("haiku") {
-        if m.contains("4-5") || m.contains("4.5") {
-            TIER_HAIKU_45
-        } else {
-            TIER_HAIKU_35
-        }
-    } else {
-        // Default to sonnet tier (covers sonnet-3.5, sonnet-4, etc.)
-        TIER_SONNET
+    match claude_core::model::canonical_name(model) {
+        "claude-opus-4-5" | "claude-opus-4-6" => TIER_OPUS_45,
+        "claude-opus-4" | "claude-opus-4-1" => TIER_OPUS,
+        "claude-haiku-4-5" => TIER_HAIKU_45,
+        "claude-3-5-haiku" => TIER_HAIKU_35,
+        _ => TIER_SONNET, // sonnet family is the default
     }
 }
 
@@ -179,30 +169,9 @@ impl Default for CostTracker {
     }
 }
 
-/// Shorten model names for display (e.g. "claude-sonnet-4-20250514" → "Sonnet 4").
-fn canonical_model(model: &str) -> &str {
-    let m = model.to_lowercase();
-    if m.contains("opus-4-6") || m.contains("opus-4.6") {
-        "Opus 4.6"
-    } else if m.contains("opus-4-5") || m.contains("opus-4.5") {
-        "Opus 4.5"
-    } else if m.contains("opus") {
-        "Opus 4"
-    } else if m.contains("sonnet-4-6") || m.contains("sonnet-4.6") {
-        "Sonnet 4.6"
-    } else if m.contains("sonnet-4-5") || m.contains("sonnet-4.5") {
-        "Sonnet 4.5"
-    } else if m.contains("sonnet-4") {
-        "Sonnet 4"
-    } else if m.contains("sonnet-3") {
-        "Sonnet 3.x"
-    } else if m.contains("haiku-4-5") || m.contains("haiku-4.5") {
-        "Haiku 4.5"
-    } else if m.contains("haiku") {
-        "Haiku 3.5"
-    } else {
-        model
-    }
+/// Shorten model names for display.
+fn canonical_model(model: &str) -> &'static str {
+    claude_core::model::display_name(model)
 }
 
 fn format_usd(cost: f64) -> String {
@@ -245,7 +214,7 @@ mod tests {
         let opus45 = pricing_for_model("claude-opus-4-5-20250601");
         assert!((opus45.input - 5.0).abs() < 0.001);
 
-        let haiku = pricing_for_model("claude-haiku-3-5-20250101");
+        let haiku = pricing_for_model("claude-3-5-haiku-20241022");
         assert!((haiku.input - 0.8).abs() < 0.001);
     }
 
