@@ -221,6 +221,9 @@ impl AnthropicClient {
             tools,
             stream: false,
             stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            thinking: None,
         }
     }
 }

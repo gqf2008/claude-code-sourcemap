@@ -215,6 +215,9 @@ pub async fn compact_conversation(
         tools: None,
         stream: false,
         stop_sequences: None,
+        temperature: None,
+        top_p: None,
+        thinking: None,
     };
 
     let response = client.messages(&request).await

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use claude_api::client::AnthropicClient;
-use claude_api::types::ToolDefinition;
+use claude_api::types::{CacheControl, ToolDefinition};
 use claude_core::claude_md::load_claude_md;
 use claude_core::config::HooksConfig;
 use claude_core::memory::load_memories_for_prompt;
@@ -205,6 +205,8 @@ impl QueryEngineBuilder {
                 system_prompt,
                 max_turns: self.max_turns,
                 max_tokens: self.max_tokens,
+                temperature: None,
+                thinking: None,
             },
             hooks,
             cwd: self.cwd,
@@ -224,7 +226,7 @@ impl QueryEngine {
     }
 
     fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.registry
+        let mut defs: Vec<ToolDefinition> = self.registry
             .all()
             .iter()
             .filter(|t| t.is_enabled())
@@ -232,8 +234,15 @@ impl QueryEngine {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
+                cache_control: None,
             })
-            .collect()
+            .collect();
+
+        // Enable prompt caching on the last tool definition (mirrors TS behavior)
+        if let Some(last) = defs.last_mut() {
+            last.cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+        }
+        defs
     }
 
     /// Submit a user message and get back a stream of AgentEvents.
@@ -289,6 +298,8 @@ impl QueryEngine {
                 system_prompt: self.config.system_prompt.clone(),
                 max_turns: self.config.max_turns,
                 max_tokens: self.config.max_tokens,
+                temperature: self.config.temperature,
+                thinking: self.config.thinking.clone(),
             },
             messages,
             tools,

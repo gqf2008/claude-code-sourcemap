@@ -14,6 +14,13 @@ pub struct MessagesRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    /// Extended thinking (chain of thought) configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +36,17 @@ pub struct SystemBlock {
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub control_type: String,
+}
+
+/// Extended thinking configuration — enables chain-of-thought reasoning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    /// "enabled" to turn on extended thinking.
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    /// Token budget for thinking (e.g. 10000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +97,8 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 // ── Response types ──

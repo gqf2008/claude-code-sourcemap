@@ -32,6 +32,8 @@ pub struct QueryConfig {
     pub system_prompt: String,
     pub max_turns: u32,
     pub max_tokens: u32,
+    pub temperature: Option<f32>,
+    pub thinking: Option<claude_api::types::ThinkingConfig>,
 }
 
 impl Default for QueryConfig {
@@ -40,6 +42,8 @@ impl Default for QueryConfig {
             system_prompt: String::new(),
             max_turns: 100,
             max_tokens: 16384,
+            temperature: None,
+            thinking: None,
         }
     }
 }
@@ -78,10 +82,12 @@ pub fn query_stream(
             let system = if config.system_prompt.is_empty() {
                 None
             } else {
+                // Use prompt caching (ephemeral) on the system prompt to save
+                // input tokens across turns — mirrors the TS implementation.
                 Some(vec![SystemBlock {
                     block_type: "text".into(),
                     text: config.system_prompt.clone(),
-                    cache_control: None,
+                    cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
                 }])
             };
 
@@ -93,6 +99,9 @@ pub fn query_stream(
                 tools: if tools.is_empty() { None } else { Some(tools.clone()) },
                 stream: true,
                 stop_sequences: None,
+                temperature: config.temperature,
+                top_p: None,
+                thinking: config.thinking.clone(),
             };
 
             let event_stream = match client.messages_stream(&request).await {

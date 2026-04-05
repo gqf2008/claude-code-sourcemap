@@ -183,6 +183,7 @@ impl Tool for DispatchAgentTool {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
+                cache_control: None,
             })
             .collect();
 
@@ -216,6 +217,8 @@ impl Tool for DispatchAgentTool {
             system_prompt,
             max_turns: agent_type.max_turns(self.config.max_turns),
             max_tokens: self.config.max_tokens,
+            temperature: None,
+            thinking: None,
         };
 
         // Sub-agents run without user-defined hooks to avoid re-entrant hook side effects
