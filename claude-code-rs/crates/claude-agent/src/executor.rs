@@ -165,8 +165,8 @@ impl ToolExecutor {
                 }
 
                 let desc = format!("{}: {}", tool_name, serde_json::to_string(&input).unwrap_or_default());
-                let (allowed, always) = PermissionChecker::prompt_user(tool_name, &desc);
-                if !allowed {
+                let response = PermissionChecker::prompt_user(tool_name, &desc, &perm.suggestions);
+                if !response.allowed {
                     // Fire PermissionDenied hook
                     if self.hooks.has_hooks(HookEvent::PermissionDenied) {
                         let ctx = self.hooks.permission_ctx(
@@ -183,9 +183,8 @@ impl ToolExecutor {
                         is_error: true,
                     };
                 }
-                if always {
-                    self.permission_checker.session_allow(tool_name);
-                }
+                // Apply the response (session allow, suggestion rule, etc.)
+                self.permission_checker.apply_response(tool_name, &response, &perm);
             }
             PermissionBehavior::Allow => {}
         }
@@ -332,4 +331,235 @@ fn partition_tool_calls(
     batches
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::message::ToolResultContent;
+    use claude_core::permissions::{PermissionMode, PermissionRule};
+    use serde_json::json;
 
+    // ── validate_tool_result_pairing ──────────────────────────────────
+
+    #[test]
+    fn test_validate_tool_result_pairing_ok() {
+        let uses = vec![("t1".into(), "Read".into(), json!({}))];
+        let results = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".into(),
+            content: vec![ToolResultContent::Text { text: "ok".into() }],
+            is_error: false,
+        }];
+        assert!(validate_tool_result_pairing(&uses, &results).is_empty());
+    }
+
+    #[test]
+    fn test_validate_tool_result_pairing_missing() {
+        let uses = vec![
+            ("t1".into(), "Read".into(), json!({})),
+            ("t2".into(), "Write".into(), json!({})),
+        ];
+        let results = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".into(),
+            content: vec![],
+            is_error: false,
+        }];
+        let errors = validate_tool_result_pairing(&uses, &results);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("t2"));
+    }
+
+    #[test]
+    fn test_validate_tool_result_pairing_orphan() {
+        let uses = vec![("t1".into(), "Read".into(), json!({}))];
+        let results = vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: vec![],
+                is_error: false,
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: "t99".into(),
+                content: vec![],
+                is_error: false,
+            },
+        ];
+        let errors = validate_tool_result_pairing(&uses, &results);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("t99"));
+    }
+
+    // ── partition_tool_calls ─────────────────────────────────────────
+
+    #[test]
+    fn test_partition_empty() {
+        let registry = ToolRegistry::with_defaults();
+        let result = partition_tool_calls(&registry, &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_partition_groups_by_safety() {
+        let registry = ToolRegistry::with_defaults();
+        // Read is concurrency-safe, Write is not
+        let uses = vec![
+            ("t1".into(), "Read".into(), json!({})),
+            ("t2".into(), "Read".into(), json!({})),
+            ("t3".into(), "Write".into(), json!({})),
+            ("t4".into(), "Read".into(), json!({})),
+        ];
+        let batches = partition_tool_calls(&registry, &uses);
+        // Should get: [safe(Read, Read), unsafe(Write), safe(Read)]
+        assert!(batches.len() >= 2);
+        assert!(batches[0].concurrency_safe);
+        assert_eq!(batches[0].items.len(), 2);
+    }
+
+    // ── ToolExecutor with bypassed permissions ──────────────────────
+
+    fn make_bypass_executor() -> ToolExecutor {
+        let registry = Arc::new(ToolRegistry::with_defaults());
+        let checker = Arc::new(PermissionChecker::new(
+            PermissionMode::BypassAll,
+            Vec::new(),
+        ));
+        ToolExecutor::new(registry.clone(), checker)
+    }
+
+    #[tokio::test]
+    async fn test_execute_unknown_tool() {
+        let executor = make_bypass_executor();
+        let ctx = claude_core::tool::ToolContext {
+            cwd: std::path::PathBuf::from("."),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: PermissionMode::BypassAll,
+            messages: Vec::new(),
+        };
+        let result = executor.execute("t1", "NonExistentTool", json!({}), &ctx).await;
+        match result {
+            ContentBlock::ToolResult { is_error, content, .. } => {
+                assert!(is_error);
+                let text = content.iter().find_map(|c| {
+                    if let ToolResultContent::Text { text } = c { Some(text.as_str()) } else { None }
+                }).unwrap_or("");
+                assert!(text.contains("Unknown tool"));
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    fn workspace_root() -> std::path::PathBuf {
+        // CARGO_MANIFEST_DIR = crates/claude-agent → parent twice = workspace root
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap()
+            .parent().unwrap()
+            .to_path_buf()
+    }
+
+    #[tokio::test]
+    async fn test_execute_read_tool() {
+        let executor = make_bypass_executor();
+        let cwd = workspace_root();
+        let ctx = claude_core::tool::ToolContext {
+            cwd: cwd.clone(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: PermissionMode::BypassAll,
+            messages: Vec::new(),
+        };
+        let cargo_toml = cwd.join("Cargo.toml");
+        let result = executor.execute(
+            "t1", "Read", json!({"file_path": cargo_toml.to_string_lossy()}), &ctx
+        ).await;
+        match result {
+            ContentBlock::ToolResult { is_error, content, .. } => {
+                if is_error {
+                    let text = content.iter().find_map(|c| {
+                        if let ToolResultContent::Text { text } = c { Some(text.as_str()) } else { None }
+                    }).unwrap_or("(no text)");
+                    panic!("Read failed: {}", text);
+                }
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_aborted() {
+        let executor = make_bypass_executor();
+        let abort_signal = claude_core::tool::AbortSignal::new();
+        abort_signal.abort();
+        let ctx = claude_core::tool::ToolContext {
+            cwd: std::path::PathBuf::from("."),
+            abort_signal,
+            permission_mode: PermissionMode::BypassAll,
+            messages: Vec::new(),
+        };
+        let result = executor.execute("t1", "Read", json!({"file_path": "Cargo.toml"}), &ctx).await;
+        match result {
+            ContentBlock::ToolResult { is_error, content, .. } => {
+                assert!(is_error);
+                let text = content.iter().find_map(|c| {
+                    if let ToolResultContent::Text { text } = c { Some(text.as_str()) } else { None }
+                }).unwrap_or("");
+                assert!(text.contains("Interrupted"));
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_permission_denied_by_rule() {
+        let registry = Arc::new(ToolRegistry::with_defaults());
+        let rules = vec![PermissionRule {
+            tool_name: "Read".to_string(),
+            behavior: claude_core::permissions::PermissionBehavior::Deny,
+            pattern: None,
+        }];
+        let checker = Arc::new(PermissionChecker::new(PermissionMode::Default, rules));
+        let executor = ToolExecutor::new(registry, checker);
+        let ctx = claude_core::tool::ToolContext {
+            cwd: std::path::PathBuf::from("."),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: Vec::new(),
+        };
+        let result = executor.execute("t1", "Read", json!({"file_path": "Cargo.toml"}), &ctx).await;
+        match result {
+            ContentBlock::ToolResult { is_error, content, .. } => {
+                assert!(is_error);
+                let text = content.iter().find_map(|c| {
+                    if let ToolResultContent::Text { text } = c { Some(text.as_str()) } else { None }
+                }).unwrap_or("");
+                assert!(text.contains("denied"));
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_plan_mode_allows_reads() {
+        let registry = Arc::new(ToolRegistry::with_defaults());
+        let checker = Arc::new(PermissionChecker::new(PermissionMode::Plan, Vec::new()));
+        let executor = ToolExecutor::new(registry, checker);
+        let cwd = workspace_root();
+        let ctx = claude_core::tool::ToolContext {
+            cwd: cwd.clone(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: PermissionMode::Plan,
+            messages: Vec::new(),
+        };
+        let cargo_toml = cwd.join("Cargo.toml");
+        let result = executor.execute(
+            "t1", "Read", json!({"file_path": cargo_toml.to_string_lossy()}), &ctx
+        ).await;
+        match result {
+            ContentBlock::ToolResult { is_error, content, .. } => {
+                if is_error {
+                    let text = content.iter().find_map(|c| {
+                        if let ToolResultContent::Text { text } = c { Some(text.as_str()) } else { None }
+                    }).unwrap_or("(no text)");
+                    panic!("Plan mode read failed: {}", text);
+                }
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+}
