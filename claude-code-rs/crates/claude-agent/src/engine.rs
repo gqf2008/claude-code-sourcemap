@@ -421,7 +421,7 @@ impl QueryEngine {
     /// - `on_progress` — callback invoked for each `TaskProgress` event
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// let result = engine.run_task("Add a README.md with project description", |p| {
     ///     if let TaskProgress::Text(t) = p { print!("{}", t); }
     /// }).await;
