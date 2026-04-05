@@ -45,6 +45,10 @@ struct Cli {
     #[arg(long, short = 'p')]
     print: bool,
 
+    /// Output format for non-interactive mode: text (default) or json
+    #[arg(long, default_value = "text")]
+    output_format: String,
+
     /// Resume the most recent session
     #[arg(long, alias = "continue")]
     resume: bool,
@@ -161,7 +165,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(prompt) = cli.prompt {
-        if cli.print {
+        if cli.output_format == "json" {
+            // JSON output: structured result for programmatic consumption
+            output::run_json(&engine, &prompt).await?;
+        } else if cli.print {
             // --print mode: only emit final text to stdout, progress to stderr
             output::run_single(&engine, &prompt).await?;
         } else {

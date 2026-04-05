@@ -15,6 +15,7 @@ pub enum SlashCommand {
     Config,
     Undo,
     Review { prompt: String },
+    Doctor,
     RunSkill { name: String, prompt: String },
     Exit,
     Unknown(String),
@@ -42,6 +43,7 @@ impl SlashCommand {
             "config" => Self::Config,
             "undo" => Self::Undo,
             "review" => Self::Review { prompt: args },
+            "doctor" => Self::Doctor,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -86,6 +88,7 @@ impl SlashCommand {
             Self::Config => CommandResult::Config,
             Self::Undo => CommandResult::Undo,
             Self::Review { prompt } => CommandResult::Review { prompt: prompt.clone() },
+            Self::Doctor => CommandResult::Doctor,
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -112,6 +115,7 @@ pub enum CommandResult {
     Config,
     Undo,
     Review { prompt: String },
+    Doctor,
     RunSkill { name: String, prompt: String },
     Exit,
 }
@@ -138,6 +142,7 @@ Available commands:
   /status            Show session and git status
   /undo              Undo last assistant turn (remove last assistant+user pair)
   /review [prompt]   Launch code review on recent changes
+  /doctor            Check environment health (API, git, config)
   /permissions       Show current permission mode and rules
   /config            Show current configuration
   /skills            List available skills

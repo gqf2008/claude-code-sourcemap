@@ -173,6 +173,37 @@ pub async fn run_single(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()
     print_stream(stream).await
 }
 
+/// Run a single prompt and output structured JSON result.
+///
+/// JSON format:
+/// ```json
+/// {
+///   "text": "assistant response text",
+///   "tool_uses": [...],
+///   "input_tokens": 1234,
+///   "output_tokens": 567,
+///   "turns": 3,
+///   "stop_reason": "end_turn"
+/// }
+/// ```
+pub async fn run_json(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> {
+    let result = run_task(engine, prompt, |_| {}).await;
+
+    let json = serde_json::json!({
+        "text": result.output,
+        "tool_uses": result.tool_uses,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "turns": result.turns,
+        "stop_reason": format!("{}", result.reason),
+        "duration_ms": result.elapsed.as_millis(),
+        "success": result.success(),
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
 /// Run a task non-interactively with a rich progress display.
 ///
 /// This is the primary path for `claude -p "task"` mode.  It shows:
