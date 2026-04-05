@@ -75,6 +75,9 @@ pub fn query_stream(
                 break;
             }
 
+            #[allow(unused_assignments)]
+            let mut retried_this_turn = false;
+
             if turn_count >= config.max_turns {
                 yield AgentEvent::MaxTurns { limit: config.max_turns };
                 break;
@@ -116,7 +119,9 @@ pub fn query_stream(
                         || err_str.contains("500")
                         || err_str.contains("503")
                         || err_str.contains("overloaded");
-                    if is_retryable && turn_count < config.max_turns {
+                    if is_retryable && !retried_this_turn && turn_count + 1 < config.max_turns {
+                        #[allow(unused_assignments)]
+                        { retried_this_turn = true; }
                         yield AgentEvent::TextDelta(format!("\n\x1b[33m[Retrying after API error: {}]\x1b[0m\n", err_str));
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue; // retry the turn

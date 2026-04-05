@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
+use crate::path_util;
+
 pub struct NotebookEditTool;
 
 #[async_trait]
@@ -54,10 +56,20 @@ impl Tool for NotebookEditTool {
 
     fn is_read_only(&self) -> bool { false }
 
-    async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
-        let path = input["notebook_path"]
+    async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
+        let notebook_path = input["notebook_path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing notebook_path"))?;
+
+        if !notebook_path.ends_with(".ipynb") {
+            return Ok(ToolResult::error("File must be a .ipynb notebook"));
+        }
+
+        let path = match path_util::resolve_path(notebook_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+        };
+
         let new_source = input["new_source"]
             .as_str()
             .unwrap_or("");
@@ -71,11 +83,7 @@ impl Tool for NotebookEditTool {
             .as_str()
             .unwrap_or("replace");
 
-        if !path.ends_with(".ipynb") {
-            return Ok(ToolResult::error("File must be a .ipynb notebook"));
-        }
-
-        let content = std::fs::read_to_string(path)
+        let content = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("Failed to read notebook: {}", e))?;
 
         let mut notebook: Value = serde_json::from_str(&content)
@@ -133,11 +141,11 @@ impl Tool for NotebookEditTool {
         }
 
         let updated = serde_json::to_string_pretty(&notebook)?;
-        std::fs::write(path, &updated)?;
+        std::fs::write(&path, &updated)?;
 
         Ok(ToolResult::text(format!(
             "Notebook {} updated: {} cell at index {}. Total cells: {}",
-            path, edit_mode, cell_number,
+            path.display(), edit_mode, cell_number,
             notebook["cells"].as_array().map(|c| c.len()).unwrap_or(0)
         )))
     }

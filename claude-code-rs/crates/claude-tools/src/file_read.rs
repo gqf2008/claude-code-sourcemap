@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::Path;
+use crate::path_util;
 
 pub struct FileReadTool;
 
@@ -32,7 +33,10 @@ impl Tool for FileReadTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'file_path'"))?;
 
-        let path = resolve_path(file_path, &context.cwd);
+        let path = match path_util::resolve_path(file_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+        };
         if !path.exists() {
             return Ok(ToolResult::error(format!("File not found: {}", path.display())));
         }
@@ -56,11 +60,6 @@ impl Tool for FileReadTool {
     }
 }
 
-fn resolve_path(file_path: &str, cwd: &Path) -> std::path::PathBuf {
-    let p = Path::new(file_path);
-    if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) }
-}
-
 async fn read_directory(path: &Path) -> anyhow::Result<ToolResult> {
     let mut entries = Vec::new();
     let mut dir = tokio::fs::read_dir(path).await?;
@@ -75,4 +74,3 @@ async fn read_directory(path: &Path) -> anyhow::Result<ToolResult> {
     entries.sort();
     Ok(ToolResult::text(entries.join("\n")))
 }
-

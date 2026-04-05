@@ -25,87 +25,91 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
         let readline = rl.readline("\x1b[1;32m> \x1b[0m");
         match readline {
             Ok(line) => {
-                let mut input_buf = line;
+                let trimmed = line.trim();
+                if trimmed.is_empty() { continue; }
 
-                // Support multiline input: trailing `\` continues on next line
+                // Parse slash commands BEFORE multiline expansion
+                if trimmed.starts_with('/') {
+                    let _ = rl.add_history_entry(trimmed);
+                    if let Some(cmd) = SlashCommand::parse(trimmed, &skills) {
+                        match cmd.execute(&skills) {
+                            CommandResult::Print(text) => println!("{}", text),
+                            CommandResult::Exit => { println!("Goodbye!"); break; }
+                            CommandResult::ClearHistory => {
+                                engine.clear_history().await;
+                                println!("Conversation history cleared.");
+                            }
+                            CommandResult::SetModel(model) => {
+                                let state = engine.state();
+                                let mut s = state.write().await;
+                                s.model = model.clone();
+                                println!("Model set to: {}", model);
+                            }
+                            CommandResult::ShowCost => {
+                                let state = engine.state();
+                                let s = state.read().await;
+                                println!(
+                                    "Tokens: input={}, output={}, turns={}",
+                                    s.total_input_tokens, s.total_output_tokens, s.turn_count
+                                );
+                            }
+                            CommandResult::Compact { instructions } => {
+                                println!("\x1b[33mCompacting conversation…\x1b[0m");
+                                match engine.compact("manual", instructions.as_deref()).await {
+                                    Ok(summary) => {
+                                        println!("\x1b[32m✓ Compacted.\x1b[0m");
+                                        let preview: String = summary.lines().take(5).collect::<Vec<_>>().join("\n");
+                                        println!("\x1b[2m{}\x1b[0m", preview);
+                                    }
+                                    Err(e) => eprintln!("\x1b[31mCompact failed: {}\x1b[0m", e),
+                                }
+                            }
+                            CommandResult::Memory { sub } => {
+                                handle_memory_command(&sub, &cwd);
+                            }
+                            CommandResult::Session { sub } => {
+                                handle_session_command(&sub, &engine).await;
+                            }
+                            CommandResult::Diff => {
+                                handle_diff_command(&cwd);
+                            }
+                            CommandResult::Status => {
+                                handle_status_command(&engine, &cwd).await;
+                            }
+                            CommandResult::Permissions => {
+                                let s = engine.state().read().await;
+                                println!("Permission mode: {:?}", s.permission_mode);
+                            }
+                            CommandResult::Config => {
+                                handle_config_command(&cwd);
+                            }
+                            CommandResult::Undo => {
+                                handle_undo(&engine).await;
+                            }
+                            CommandResult::Review { prompt } => {
+                                handle_review(&engine, &prompt, &cwd).await;
+                            }
+                            CommandResult::RunSkill { name, prompt } => {
+                                run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Non-slash input: support multiline with trailing `\`
+                let mut input_buf = line;
                 while input_buf.ends_with('\\') {
-                    input_buf.pop(); // remove the trailing backslash
+                    input_buf.pop(); // remove trailing backslash
                     input_buf.push('\n');
                     match rl.readline("\x1b[2m. \x1b[0m") {
                         Ok(cont) => input_buf.push_str(&cont),
                         _ => break,
                     }
                 }
-
                 let input = input_buf.trim();
                 if input.is_empty() { continue; }
                 let _ = rl.add_history_entry(input);
-
-                if let Some(cmd) = SlashCommand::parse(input, &skills) {
-                    match cmd.execute(&skills) {
-                        CommandResult::Print(text) => println!("{}", text),
-                        CommandResult::Exit => { println!("Goodbye!"); break; }
-                        CommandResult::ClearHistory => {
-                            engine.clear_history().await;
-                            println!("Conversation history cleared.");
-                        }
-                        CommandResult::SetModel(model) => {
-                            let state = engine.state();
-                            let mut s = state.write().await;
-                            s.model = model.clone();
-                            println!("Model set to: {}", model);
-                        }
-                        CommandResult::ShowCost => {
-                            let state = engine.state();
-                            let s = state.read().await;
-                            println!(
-                                "Tokens: input={}, output={}, turns={}",
-                                s.total_input_tokens, s.total_output_tokens, s.turn_count
-                            );
-                        }
-                        CommandResult::Compact { instructions } => {
-                            println!("\x1b[33mCompacting conversation…\x1b[0m");
-                            match engine.compact("manual", instructions.as_deref()).await {
-                                Ok(summary) => {
-                                    println!("\x1b[32m✓ Compacted.\x1b[0m");
-                                    // Print first few lines of summary as preview
-                                    let preview: String = summary.lines().take(5).collect::<Vec<_>>().join("\n");
-                                    println!("\x1b[2m{}\x1b[0m", preview);
-                                }
-                                Err(e) => eprintln!("\x1b[31mCompact failed: {}\x1b[0m", e),
-                            }
-                        }
-                        CommandResult::Memory { sub } => {
-                            handle_memory_command(&sub, &cwd);
-                        }
-                        CommandResult::Session { sub } => {
-                            handle_session_command(&sub, &engine).await;
-                        }
-                        CommandResult::Diff => {
-                            handle_diff_command(&cwd);
-                        }
-                        CommandResult::Status => {
-                            handle_status_command(&engine, &cwd).await;
-                        }
-                        CommandResult::Permissions => {
-                            let s = engine.state().read().await;
-                            println!("Permission mode: {:?}", s.permission_mode);
-                        }
-                        CommandResult::Config => {
-                            handle_config_command(&cwd);
-                        }
-                        CommandResult::Undo => {
-                            handle_undo(&engine).await;
-                        }
-                        CommandResult::Review { prompt } => {
-                            handle_review(&engine, &prompt, &cwd).await;
-                        }
-                        CommandResult::RunSkill { name, prompt } => {
-                            run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
-                        }
-                    }
-                    continue;
-                }
 
                 // Check auto-compact before submitting
                 if engine.should_auto_compact().await {
@@ -441,7 +445,9 @@ async fn handle_undo(engine: &QueryEngine) {
         return;
     }
 
-    // Remove messages from the end until we've popped one assistant message
+    // Remove messages from the end until we've popped one assistant message.
+    // Then also remove the preceding user message (if any) to keep the
+    // conversation in a valid state (user→assistant pairs).
     let mut removed_assistant = false;
     while !s.messages.is_empty() {
         let last = s.messages.last().unwrap();
@@ -450,6 +456,15 @@ async fn handle_undo(engine: &QueryEngine) {
         if is_assistant {
             removed_assistant = true;
             break;
+        }
+    }
+
+    // Also remove the preceding user message that triggered the assistant turn
+    if removed_assistant {
+        if let Some(last) = s.messages.last() {
+            if matches!(last, claude_core::message::Message::User(_)) {
+                s.messages.pop();
+            }
         }
     }
 

@@ -51,18 +51,19 @@ impl AnthropicClient {
         self
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self) -> anyhow::Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "x-api-key",
-            HeaderValue::from_str(&self.api_key).expect("Invalid API key"),
+            HeaderValue::from_str(&self.api_key)
+                .map_err(|_| anyhow::anyhow!("Invalid API key format"))?,
         );
         headers.insert(
             "anthropic-version",
             HeaderValue::from_static(API_VERSION),
         );
-        headers
+        Ok(headers)
     }
 
     /// Extract `Retry-After` header value (seconds) from response headers.
@@ -77,6 +78,7 @@ impl AnthropicClient {
     pub async fn messages(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
         let url = format!("{}/v1/messages", self.base_url);
         let request = request.clone();
+        let headers = self.headers()?;
 
         with_retry(
             &self.retry_config,
@@ -84,7 +86,7 @@ impl AnthropicClient {
                 let url = url.clone();
                 let request = request.clone();
                 let http = self.http.clone();
-                let headers = self.headers();
+                let headers = headers.clone();
                 async move {
                     let response = http
                         .post(&url)
@@ -130,6 +132,7 @@ impl AnthropicClient {
         let url = format!("{}/v1/messages", self.base_url);
         let mut req = request.clone();
         req.stream = true;
+        let headers = self.headers()?;
 
         // Retry only the initial connection — once streaming starts, errors
         // propagate via the stream (mid-stream retries would lose partial state).
@@ -139,7 +142,7 @@ impl AnthropicClient {
                 let url = url.clone();
                 let req = req.clone();
                 let http = self.http.clone();
-                let headers = self.headers();
+                let headers = headers.clone();
                 async move {
                     let response = http
                         .post(&url)

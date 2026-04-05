@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
+use crate::path_util;
+
 pub struct GlobTool;
 
 #[async_trait]
@@ -28,10 +30,10 @@ impl Tool for GlobTool {
     async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
         let pattern = input["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'pattern'"))?;
         let search_dir = match input["path"].as_str() {
-            Some(p) => {
-                let pa = std::path::Path::new(p);
-                if pa.is_absolute() { pa.to_path_buf() } else { context.cwd.join(pa) }
-            }
+            Some(p) => match path_util::resolve_path(p, &context.cwd) {
+                Ok(resolved) => resolved,
+                Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            },
             None => context.cwd.clone(),
         };
         let full = search_dir.join(pattern).to_string_lossy().to_string();

@@ -26,6 +26,7 @@ pub mod git;
 pub mod context;
 pub mod worktree;
 pub mod lsp;
+pub mod path_util;
 
 use std::collections::HashMap;
 use std::sync::Arc;

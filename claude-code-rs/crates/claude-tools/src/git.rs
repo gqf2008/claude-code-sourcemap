@@ -66,7 +66,7 @@ impl Tool for GitTool {
 
         // Safety: block dangerous patterns
         for arg in &args {
-            if arg.contains("--force") || arg.contains("-f") && subcommand == "push" {
+            if (arg.contains("--force") || arg.contains("-f")) && subcommand == "push" {
                 return Ok(ToolResult::error("Force push is not allowed for safety."));
             }
         }

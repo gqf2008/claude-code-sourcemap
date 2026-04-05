@@ -64,6 +64,11 @@ pub fn sessions_dir() -> PathBuf {
 
 /// Path for a specific session file.
 fn session_path(id: &str) -> PathBuf {
+    // Validate session ID to prevent path traversal
+    assert!(
+        id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+        "Invalid session ID: must be alphanumeric, dash, or underscore"
+    );
     sessions_dir().join(format!("{}.json", id))
 }
 

@@ -130,7 +130,10 @@ impl Tool for ReplTool {
             }
         }
 
-        // Wait with timeout
+        // Get child PID for kill on timeout
+        let child_pid = child.id();
+
+        // Wait with timeout — use select! so we can kill on timeout
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             child.wait_with_output(),
@@ -169,9 +172,21 @@ impl Tool for ReplTool {
             }
             Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {}", e))),
             Err(_) => {
-                // Timeout — we can't kill because wait_with_output consumed `child`
+                // Timeout — kill the child process
+                if let Some(pid) = child_pid {
+                    #[cfg(unix)]
+                    {
+                        use std::process::Command as StdCommand;
+                        let _ = StdCommand::new("kill").arg("-9").arg(pid.to_string()).status();
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::process::Command as StdCommand;
+                        let _ = StdCommand::new("taskkill").args(["/F", "/PID", &pid.to_string()]).status();
+                    }
+                }
                 Ok(ToolResult::error(format!(
-                    "Execution timed out after {}s", timeout_secs
+                    "Execution timed out after {}s (process killed)", timeout_secs
                 )))
             }
         }

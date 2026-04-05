@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
-use std::path::Path;
+
+use crate::path_util;
 
 pub struct LsTool;
 
@@ -41,10 +42,9 @@ impl Tool for LsTool {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
-        let dir = if Path::new(raw_path).is_absolute() {
-            std::path::PathBuf::from(raw_path)
-        } else {
-            context.cwd.join(raw_path)
+        let dir = match path_util::resolve_path(raw_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
 
         if !dir.exists() {

@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
-use std::path::Path;
 
 use crate::diff_ui::print_diff;
+use crate::path_util;
 
 pub struct FileEditTool;
 
@@ -32,10 +32,9 @@ impl Tool for FileEditTool {
         let old_string = input["old_string"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'old_string'"))?;
         let new_string = input["new_string"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'new_string'"))?;
 
-        let path = if Path::new(file_path).is_absolute() {
-            std::path::PathBuf::from(file_path)
-        } else {
-            context.cwd.join(file_path)
+        let path = match path_util::resolve_path(file_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
 
         let content = tokio::fs::read_to_string(&path).await?;

@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
-use std::path::Path;
 
 use crate::diff_ui::print_create_diff;
+use crate::path_util;
 
 pub struct FileWriteTool;
 
@@ -30,10 +30,9 @@ impl Tool for FileWriteTool {
         let file_path = input["file_path"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'file_path'"))?;
         let content = input["content"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'content'"))?;
 
-        let path = if Path::new(file_path).is_absolute() {
-            std::path::PathBuf::from(file_path)
-        } else {
-            context.cwd.join(file_path)
+        let path = match path_util::resolve_path(file_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
 
         let is_new = !path.exists();

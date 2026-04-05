@@ -112,11 +112,19 @@ fn glob_match(text: &str, pattern: &str) -> bool {
     if !pattern.contains('*') && !pattern.contains('?') {
         return text == pattern;
     }
-    // Convert glob to regex
-    let regex_str = pattern
-        .replace('.', r"\.")
-        .replace('*', ".*")
-        .replace('?', ".");
+    // Escape all regex special characters, then convert glob wildcards
+    let mut regex_str = String::with_capacity(pattern.len() * 2);
+    for ch in pattern.chars() {
+        match ch {
+            '*' => regex_str.push_str(".*"),
+            '?' => regex_str.push('.'),
+            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '\\' => {
+                regex_str.push('\\');
+                regex_str.push(ch);
+            }
+            _ => regex_str.push(ch),
+        }
+    }
     regex::Regex::new(&format!("^{}$", regex_str))
         .map(|re| re.is_match(text))
         .unwrap_or(false)

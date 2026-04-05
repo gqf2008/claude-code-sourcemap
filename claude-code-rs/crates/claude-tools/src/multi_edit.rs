@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
-use std::path::Path;
+
+use crate::path_util;
 
 /// Applies multiple consecutive string replacements to a single file atomically.
 /// This is more efficient than calling Edit multiple times for the same file.
@@ -53,10 +54,9 @@ impl Tool for MultiEditTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'file_path'"))?;
 
-        let path = if Path::new(file_path).is_absolute() {
-            std::path::PathBuf::from(file_path)
-        } else {
-            context.cwd.join(file_path)
+        let path = match path_util::resolve_path(file_path, &context.cwd) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
         };
 
         let edits = input["edits"]
