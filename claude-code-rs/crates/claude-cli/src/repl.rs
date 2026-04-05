@@ -25,7 +25,19 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
         let readline = rl.readline("\x1b[1;32m> \x1b[0m");
         match readline {
             Ok(line) => {
-                let input = line.trim();
+                let mut input_buf = line;
+
+                // Support multiline input: trailing `\` continues on next line
+                while input_buf.ends_with('\\') {
+                    input_buf.pop(); // remove the trailing backslash
+                    input_buf.push('\n');
+                    match rl.readline("\x1b[2m. \x1b[0m") {
+                        Ok(cont) => input_buf.push_str(&cont),
+                        _ => break,
+                    }
+                }
+
+                let input = input_buf.trim();
                 if input.is_empty() { continue; }
                 let _ = rl.add_history_entry(input);
 

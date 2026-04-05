@@ -35,23 +35,71 @@ fn format_tool_start(name: &str, input: &serde_json::Value) -> String {
             .or_else(|| input["path"].as_str())
             .map(|p| format!(" \x1b[2m{}\x1b[0m", short_path(p)))
             .unwrap_or_default(),
+        "MultiEdit" | "MultiEditTool" => {
+            let files = input["edits"].as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e["file_path"].as_str().or_else(|| e["path"].as_str()))
+                        .map(short_path)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if files.is_empty() { String::new() } else { format!(" \x1b[2m[{}]\x1b[0m", files) }
+        }
         "Bash" => input["command"].as_str()
             .map(|c| {
                 let short = if c.len() > 60 { format!("{}…", &c[..57]) } else { c.to_string() };
                 format!(" \x1b[2m`{}`\x1b[0m", short)
             })
             .unwrap_or_default(),
+        "PowerShell" => input["command"].as_str()
+            .map(|c| {
+                let short = if c.len() > 60 { format!("{}…", &c[..57]) } else { c.to_string() };
+                format!(" \x1b[2m`{}`\x1b[0m", short)
+            })
+            .unwrap_or_default(),
+        "REPL" | "ReplTool" => {
+            let lang = input["language"].as_str().unwrap_or("?");
+            let code = input["code"].as_str().unwrap_or("");
+            let first_line = code.lines().next().unwrap_or("");
+            let short = if first_line.len() > 50 { format!("{}…", &first_line[..47]) } else { first_line.to_string() };
+            format!(" \x1b[2m[{}] {}\x1b[0m", lang, short)
+        }
         "Glob" | "GlobTool" => input["pattern"].as_str()
             .map(|p| format!(" \x1b[2m{}\x1b[0m", p))
             .unwrap_or_default(),
         "Grep" | "GrepTool" => input["pattern"].as_str()
             .map(|p| format!(" \x1b[2m/{}/\x1b[0m", p))
             .unwrap_or_default(),
+        "Git" | "GitTool" => {
+            let sub = input["subcommand"].as_str().unwrap_or("");
+            let args = input["args"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            format!(" \x1b[2m{} {}\x1b[0m", sub, args)
+        }
+        "GitStatus" | "GitStatusTool" => String::new(),
         "dispatch_agent" => input["agent_type"].as_str()
             .map(|t| format!(" \x1b[2m({})\x1b[0m", t))
             .unwrap_or_default(),
         "WebFetch" => input["url"].as_str()
             .map(|u| format!(" \x1b[2m{}\x1b[0m", u))
+            .unwrap_or_default(),
+        "WebSearch" => input["query"].as_str()
+            .map(|q| {
+                let short = if q.len() > 50 { format!("{}…", &q[..47]) } else { q.to_string() };
+                format!(" \x1b[2m\"{}\"\x1b[0m", short)
+            })
+            .unwrap_or_default(),
+        "Skill" | "SkillTool" => input["skill_name"].as_str()
+            .map(|n| format!(" \x1b[2m{}\x1b[0m", n))
+            .unwrap_or_default(),
+        "Ls" | "LsTool" => input["path"].as_str()
+            .map(|p| format!(" \x1b[2m{}\x1b[0m", short_path(p)))
+            .unwrap_or_default(),
+        "TodoWrite" | "TodoRead" => input["action"].as_str()
+            .map(|a| format!(" \x1b[2m{}\x1b[0m", a))
             .unwrap_or_default(),
         _ => String::new(),
     };
@@ -78,7 +126,12 @@ pub async fn print_stream(
                 use std::io::Write;
                 std::io::stdout().flush().ok();
             }
-            AgentEvent::ThinkingDelta(_) => {}
+            AgentEvent::ThinkingDelta(text) => {
+                // Show thinking in dim italic text
+                eprint!("\x1b[2;3m{}\x1b[0m", text);
+                use std::io::Write;
+                std::io::stderr().flush().ok();
+            }
             AgentEvent::ToolUseStart { name, .. } => {
                 last_tool_name = name.clone();
                 // Initial indicator — full detail shown at ToolUseReady
