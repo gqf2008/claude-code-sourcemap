@@ -68,6 +68,8 @@ pub struct QueryEngineBuilder {
     allowed_tools: Vec<String>,
     /// Extended thinking configuration.
     thinking: Option<claude_api::types::ThinkingConfig>,
+    /// Additional text appended to the system prompt.
+    append_system_prompt: Option<String>,
 }
 
 impl QueryEngineBuilder {
@@ -87,6 +89,7 @@ impl QueryEngineBuilder {
             coordinator_mode: false,
             allowed_tools: Vec::new(),
             thinking: None,
+            append_system_prompt: None,
         }
     }
 
@@ -148,6 +151,11 @@ impl QueryEngineBuilder {
 
     pub fn thinking(mut self, config: Option<claude_api::types::ThinkingConfig>) -> Self {
         self.thinking = config;
+        self
+    }
+
+    pub fn append_system_prompt(mut self, text: Option<String>) -> Self {
+        self.append_system_prompt = text;
         self
     }
 
@@ -213,6 +221,14 @@ impl QueryEngineBuilder {
                 ));
             }
             parts.join("\n")
+        };
+
+        // Apply --append-system-prompt
+        let system_prompt = match self.append_system_prompt {
+            Some(ref append) if !append.is_empty() => {
+                format!("{}\n\n{}", system_prompt, append)
+            }
+            _ => system_prompt,
         };
 
         let sub_registry = Arc::new(ToolRegistry::with_defaults());

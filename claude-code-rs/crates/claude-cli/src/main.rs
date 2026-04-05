@@ -88,6 +88,10 @@ struct Cli {
     /// Token budget for extended thinking (default 10000)
     #[arg(long, default_value = "10000")]
     thinking_budget: u32,
+
+    /// Additional system prompt text appended to the default prompt
+    #[arg(long)]
+    append_system_prompt: Option<String>,
 }
 
 #[tokio::main]
@@ -144,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         })
+        .append_system_prompt(cli.append_system_prompt)
         .build();
 
     // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
