@@ -24,6 +24,8 @@ pub mod repl;
 pub mod send_message;
 pub mod git;
 pub mod context;
+pub mod worktree;
+pub mod lsp;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -91,6 +93,9 @@ impl ToolRegistry {
         registry.register(git::GitStatusTool);
         registry.register(context::ContextInspectTool);
         registry.register(context::VerifyTool);
+        registry.register(worktree::EnterWorktreeTool);
+        registry.register(worktree::ExitWorktreeTool);
+        registry.register(lsp::LspTool);
         // MCP tools registered but disabled until MCP is implemented
         registry.register(mcp::ListMcpResourcesTool);
         registry.register(mcp::ReadMcpResourceTool);
