@@ -471,3 +471,106 @@ fn format_task_list(tasks: &[Task]) -> String {
 
     out
 }
+
+// ── TaskOutputTool ───────────────────────────────────────────────────────────
+
+pub struct TaskOutputTool;
+
+#[async_trait]
+impl Tool for TaskOutputTool {
+    fn name(&self) -> &str { "task_output" }
+
+    fn description(&self) -> &str {
+        "Get the detailed output or description of a specific task. Use this to \
+         review what a task produced or to check its current state before deciding \
+         next steps."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task ID to get output from"
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    fn is_read_only(&self) -> bool { true }
+
+    async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
+        let task_id = input["task_id"].as_str().unwrap_or("");
+        if task_id.is_empty() {
+            return Ok(ToolResult::error("task_id is required"));
+        }
+
+        match load_task(task_id) {
+            Some(task) => {
+                let mut out = format_task_detail(&task);
+                if !task.metadata.is_empty() {
+                    out.push_str(&format!("\n\nMetadata: {}", serde_json::to_string_pretty(&task.metadata)?));
+                }
+                Ok(ToolResult::text(out))
+            }
+            None => Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+        }
+    }
+}
+
+// ── TaskStopTool ─────────────────────────────────────────────────────────────
+
+pub struct TaskStopTool;
+
+#[async_trait]
+impl Tool for TaskStopTool {
+    fn name(&self) -> &str { "task_stop" }
+
+    fn description(&self) -> &str {
+        "Stop/cancel a running task by marking it as deleted. Use this when a task \
+         is no longer needed or should be abandoned."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task ID to stop/cancel"
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    fn is_read_only(&self) -> bool { false }
+    fn is_concurrency_safe(&self) -> bool { false }
+
+    async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
+        let task_id = input["task_id"].as_str().unwrap_or("");
+        if task_id.is_empty() {
+            return Ok(ToolResult::error("task_id is required"));
+        }
+
+        let mut task = match load_task(task_id) {
+            Some(t) => t,
+            None => return Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+        };
+
+        if task.status == TaskStatus::Deleted {
+            return Ok(ToolResult::text(format!("Task {} is already deleted.", task_id)));
+        }
+
+        let prev_status = task.status.to_string();
+        task.status = TaskStatus::Deleted;
+        save_task(&task)?;
+
+        Ok(ToolResult::text(format!(
+            "Task {} stopped (was: {}, now: deleted) — {}",
+            task.id, prev_status, task.subject
+        )))
+    }
+}

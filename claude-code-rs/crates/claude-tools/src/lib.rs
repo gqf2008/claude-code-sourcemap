@@ -72,6 +72,8 @@ impl ToolRegistry {
         registry.register(task::TaskUpdateTool);
         registry.register(task::TaskGetTool);
         registry.register(task::TaskListTool);
+        registry.register(task::TaskOutputTool);
+        registry.register(task::TaskStopTool);
         registry.register(web_search::WebSearchTool);
         registry.register(notebook::NotebookEditTool);
         registry.register(plan_mode::EnterPlanModeTool);
