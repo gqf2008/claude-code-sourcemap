@@ -387,7 +387,34 @@ async fn handle_status_command(engine: &QueryEngine, cwd: &std::path::Path) {
     println!("Model:    {} ({})", claude_core::model::display_name(&s.model), s.model);
     println!("Turns:    {}", s.turn_count);
     println!("Messages: {}", s.messages.len());
-    println!("Tokens:   {}↑ {}↓", s.total_input_tokens, s.total_output_tokens);
+    println!("Tokens:   {}↑ {}↓", format_tokens(s.total_input_tokens), format_tokens(s.total_output_tokens));
+
+    // Cache statistics
+    if s.total_cache_read_tokens > 0 || s.total_cache_creation_tokens > 0 {
+        let cache_total = s.total_cache_read_tokens + s.total_cache_creation_tokens;
+        let hit_rate = if cache_total > 0 {
+            s.total_cache_read_tokens as f64 / cache_total as f64 * 100.0
+        } else { 0.0 };
+        println!("Cache:    {} read, {} write ({:.0}% hit rate)",
+            format_tokens(s.total_cache_read_tokens),
+            format_tokens(s.total_cache_creation_tokens),
+            hit_rate);
+    }
+
+    // Cost
+    let cost = engine.cost_tracker().total_usd();
+    if cost > 0.0 {
+        println!("Cost:     {}", format_cost(cost));
+    }
+
+    // Errors
+    if s.total_errors > 0 {
+        let breakdown: Vec<String> = s.error_counts.iter()
+            .map(|(k, v)| format!("{}:{}", k, v))
+            .collect();
+        println!("Errors:   {} ({})", s.total_errors, breakdown.join(", "));
+    }
+
     println!("Mode:     {:?}", s.permission_mode);
     println!("CWD:      {}", cwd.display());
 
@@ -415,6 +442,26 @@ async fn handle_status_command(engine: &QueryEngine, cwd: &std::path::Path) {
         } else {
             println!("Git:      {} changed file(s)", count);
         }
+    }
+}
+
+fn format_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+fn format_cost(cost: f64) -> String {
+    if cost >= 0.5 {
+        format!("${:.2}", cost)
+    } else if cost >= 0.0001 {
+        format!("${:.4}", cost)
+    } else {
+        "$0.00".to_string()
     }
 }
 

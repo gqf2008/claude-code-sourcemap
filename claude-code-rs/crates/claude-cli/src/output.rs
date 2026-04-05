@@ -122,32 +122,47 @@ pub async fn print_stream(
     cost_tracker: Option<&CostTracker>,
 ) -> anyhow::Result<()> {
     let mut last_tool_name = String::new();
+    let mut tool_start_time: Option<std::time::Instant> = None;
+    let mut thinking_started = false;
 
     while let Some(event) = stream.next().await {
         match event {
             AgentEvent::TextDelta(text) => {
+                if thinking_started {
+                    // End of thinking phase
+                    thinking_started = false;
+                    eprintln!("\x1b[0m"); // reset italic
+                }
                 print!("{}", text);
                 use std::io::Write;
                 std::io::stdout().flush().ok();
             }
             AgentEvent::ThinkingDelta(text) => {
-                // Show thinking in dim italic text
-                eprint!("\x1b[2;3m{}\x1b[0m", text);
+                if !thinking_started {
+                    thinking_started = true;
+                    eprint!("\x1b[2;3m💭 ");
+                }
+                eprint!("{}", text);
                 use std::io::Write;
                 std::io::stderr().flush().ok();
             }
             AgentEvent::ToolUseStart { name, .. } => {
                 last_tool_name = name.clone();
-                // Initial indicator — full detail shown at ToolUseReady
+                tool_start_time = Some(std::time::Instant::now());
             }
             AgentEvent::ToolUseReady { name, input, .. } => {
                 eprintln!("\n{}", format_tool_start(&name, &input));
             }
             AgentEvent::ToolResult { is_error, text, .. } => {
+                let elapsed = tool_start_time
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default();
+                tool_start_time = None;
+
                 if is_error {
-                    eprintln!("\x1b[31m  ✗ failed\x1b[0m");
+                    eprintln!("\x1b[31m  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
                 } else {
-                    eprintln!("\x1b[32m  ✓ done\x1b[0m");
+                    eprintln!("\x1b[32m  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
                 }
                 // Show inline summary for task/todo tools
                 if let Some(ref result_text) = text {
@@ -157,7 +172,23 @@ pub async fn print_stream(
                 }
             }
             AgentEvent::AssistantMessage(_) => {}
-            AgentEvent::TurnComplete { .. } => { println!(); }
+            AgentEvent::TurnComplete { .. } => {
+                // Show per-turn cost summary
+                if let Some(tracker) = cost_tracker {
+                    let cost = tracker.total_usd();
+                    if cost > 0.0 {
+                        let cost_str = if cost >= 0.5 {
+                            format!("${:.2}", cost)
+                        } else if cost >= 0.0001 {
+                            format!("${:.4}", cost)
+                        } else {
+                            "$0.00".to_string()
+                        };
+                        eprintln!("\x1b[2m  [{}]\x1b[0m", cost_str);
+                    }
+                }
+                println!();
+            }
             AgentEvent::UsageUpdate(u) => {
                 if let Some(tracker) = cost_tracker {
                     tracker.add(model, &u);
@@ -257,14 +288,23 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
 
     // Final newline + summary to stderr
     println!();
+    let cost = engine.cost_tracker().total_usd();
+    let cost_str = if cost >= 0.5 {
+        format!(" | ${:.2}", cost)
+    } else if cost >= 0.0001 {
+        format!(" | ${:.4}", cost)
+    } else {
+        String::new()
+    };
     eprint!(
-        "\x1b[2m[{} | {} turns | {} tool calls | {}↑ {}↓ tokens | {:.1}s]\x1b[0m",
+        "\x1b[2m[{} | {} turns | {} tool calls | {}↑ {}↓ tokens | {:.1}s{}]\x1b[0m",
         result.reason,
         result.turns,
         result.tool_uses,
         result.input_tokens,
         result.output_tokens,
         result.elapsed.as_secs_f64(),
+        cost_str,
     );
     eprintln!();
 
