@@ -19,6 +19,12 @@ use tracing::debug;
 /// Maximum depth for recursive `@include` resolution.
 const MAX_INCLUDE_DEPTH: usize = 5;
 
+/// Maximum number of lines per memory file (TS: 200).
+const MAX_LINES_PER_FILE: usize = 200;
+
+/// Maximum byte size per memory file (TS: 25KB — handles files with very long lines).
+const MAX_BYTES_PER_FILE: usize = 25 * 1024;
+
 // ── Discovery ────────────────────────────────────────────────────────────────
 
 /// Discover all CLAUDE.md, rules/, and .local.md files in priority order.
@@ -181,11 +187,16 @@ fn resolve_includes(content: &str, base_dir: &Path, depth: usize, visited: &mut 
 
 /// Extract an include path from a line like `@./path` or `@~/path`.
 fn extract_include_path(line: &str) -> Option<String> {
-    // Must start with @ and be the only thing on the line (trimmed)
-    if !line.starts_with('@') {
+    // Must start with @ followed immediately by a path character (no space)
+    if !line.starts_with('@') || line.len() < 2 {
         return None;
     }
-    let path = line[1..].trim();
+    let after_at = &line[1..];
+    // @ must be immediately followed by a path character (no space)
+    if after_at.starts_with(' ') || after_at.starts_with('\t') {
+        return None;
+    }
+    let path = after_at.trim();
     if path.is_empty() || path.contains(' ') {
         return None;
     }
@@ -204,6 +215,104 @@ fn resolve_include_target(path: &str, base_dir: &Path) -> Option<PathBuf> {
         // Relative to the including file's directory
         Some(base_dir.join(path))
     }
+}
+
+// ── Content transformations ──────────────────────────────────────────────────
+
+/// Strip block-level HTML comments (`<!-- ... -->`) from content.
+/// Inline comments (on a line with other text) are left intact.
+fn strip_html_comments(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut in_comment = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if in_comment {
+            // Look for end of comment
+            if let Some(pos) = trimmed.find("-->") {
+                // Check if there's content after the closing tag
+                let after = trimmed[pos + 3..].trim();
+                if !after.is_empty() {
+                    result.push_str(after);
+                    result.push('\n');
+                }
+                in_comment = false;
+            }
+            // Skip lines inside comment
+            continue;
+        }
+
+        // Check for block-level comment start (line starts with <!--)
+        if trimmed.starts_with("<!--") {
+            if let Some(pos) = trimmed[4..].find("-->") {
+                // Single-line comment: <!-- ... -->
+                let after = trimmed[4 + pos + 3..].trim();
+                if !after.is_empty() {
+                    result.push_str(after);
+                    result.push('\n');
+                }
+                continue;
+            }
+            // Multi-line comment starts
+            in_comment = true;
+            continue;
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    // Remove trailing newline added by iteration
+    if result.ends_with('\n') && !content.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Truncate content to `MAX_LINES_PER_FILE` lines and `MAX_BYTES_PER_FILE` bytes.
+/// Returns the truncated content with a notice if truncation occurred.
+fn truncate_content(content: &str, path: &Path) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let byte_len = content.len();
+
+    let line_truncated = lines.len() > MAX_LINES_PER_FILE;
+    let byte_truncated = byte_len > MAX_BYTES_PER_FILE;
+
+    if !line_truncated && !byte_truncated {
+        return content.to_string();
+    }
+
+    let truncated = if line_truncated {
+        lines[..MAX_LINES_PER_FILE].join("\n")
+    } else {
+        // Byte-truncate at a char boundary
+        let mut end = MAX_BYTES_PER_FILE;
+        while end > 0 && !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Find last newline to avoid cutting mid-line
+        if let Some(last_nl) = content[..end].rfind('\n') {
+            content[..last_nl].to_string()
+        } else {
+            content[..end].to_string()
+        }
+    };
+
+    debug!(
+        "Truncated {} ({} lines, {} bytes → {} bytes)",
+        path.display(),
+        lines.len(),
+        byte_len,
+        truncated.len()
+    );
+
+    format!(
+        "{}\n\n[… truncated — file exceeds {} limit]",
+        truncated,
+        if line_truncated { "200-line" } else { "25KB" }
+    )
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -246,7 +355,11 @@ pub fn load_claude_md(cwd: &Path) -> String {
                 visited.insert(path.clone());
                 let resolved = resolve_includes(content.trim(), base_dir, 0, &mut visited);
 
-                sections.push(resolved);
+                // Strip HTML comments and truncate
+                let cleaned = strip_html_comments(&resolved);
+                let final_content = truncate_content(&cleaned, &path);
+
+                sections.push(final_content);
             }
             Ok(_) => {}
             Err(e) => debug!("Could not read {}: {}", path.display(), e),
@@ -254,4 +367,83 @@ pub fn load_claude_md(cwd: &Path) -> String {
     }
 
     sections.join("\n\n---\n\n")
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_html_comments_single_line() {
+        let input = "before\n<!-- this is a comment -->\nafter";
+        let result = strip_html_comments(input);
+        assert_eq!(result, "before\nafter");
+    }
+
+    #[test]
+    fn test_strip_html_comments_multi_line() {
+        let input = "before\n<!--\nmulti\nline\ncomment\n-->\nafter";
+        let result = strip_html_comments(input);
+        assert_eq!(result, "before\nafter");
+    }
+
+    #[test]
+    fn test_strip_html_comments_preserves_inline() {
+        let input = "some text <!-- inline --> more text";
+        let result = strip_html_comments(input);
+        // Inline comment on a non-block line is preserved
+        assert!(result.contains("some text"));
+    }
+
+    #[test]
+    fn test_truncate_content_within_limits() {
+        let content = "line 1\nline 2\nline 3\n";
+        let result = truncate_content(content, Path::new("test.md"));
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_truncate_content_exceeds_lines() {
+        let lines: Vec<String> = (1..=250).map(|i| format!("line {}", i)).collect();
+        let content = lines.join("\n");
+        let result = truncate_content(&content, Path::new("test.md"));
+
+        assert!(result.contains("line 1"));
+        assert!(result.contains("line 200"));
+        assert!(!result.contains("line 201"));
+        assert!(result.contains("[… truncated — file exceeds 200-line limit]"));
+    }
+
+    #[test]
+    fn test_truncate_content_exceeds_bytes() {
+        // Create content within line limit but exceeding 25KB
+        let long_line = "x".repeat(5000);
+        let lines: Vec<String> = (0..10).map(|_| long_line.clone()).collect();
+        let content = lines.join("\n"); // 10 lines, ~50KB
+
+        let result = truncate_content(&content, Path::new("test.md"));
+        assert!(result.len() < 30_000); // truncated + notice
+        assert!(result.contains("[… truncated — file exceeds 25KB limit]"));
+    }
+
+    #[test]
+    fn test_extract_include_path() {
+        assert_eq!(extract_include_path("@./foo.md"), Some("./foo.md".into()));
+        assert_eq!(extract_include_path("@~/bar.md"), Some("~/bar.md".into()));
+        assert_eq!(extract_include_path("@/abs/path"), Some("/abs/path".into()));
+        assert_eq!(extract_include_path("@path#heading"), Some("path".into()));
+        assert_eq!(extract_include_path("not an include"), None);
+        assert_eq!(extract_include_path("@ space"), None);
+        assert_eq!(extract_include_path("@"), None);
+    }
+
+    #[test]
+    fn test_resolve_includes_skips_code_blocks() {
+        let content = "before\n```\n@./should-not-include.md\n```\nafter";
+        let mut visited = HashSet::new();
+        let result = resolve_includes(content, Path::new("."), 0, &mut visited);
+        assert!(result.contains("@./should-not-include.md")); // preserved, not resolved
+    }
 }

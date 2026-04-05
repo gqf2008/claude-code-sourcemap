@@ -113,20 +113,11 @@ async fn main() -> anyhow::Result<()> {
         anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key.")
     })?;
 
-    let system_prompt = config::build_system_prompt(
-        cli.system_prompt.as_deref(),
-        settings.custom_system_prompt.as_deref(),
-        settings.append_system_prompt.as_deref(),
-    );
-
-    // Append dynamic environment context
-    let env_context = config::build_env_context(&cwd, &cli.model, cli.coordinator);
-    let system_prompt = if cli.coordinator {
-        // In coordinator mode, append coordinator prompt to the user's prompt
-        format!("{}\n\n{}\n\n{}", system_prompt, config::COORDINATOR_SYSTEM_PROMPT, env_context)
-    } else {
-        format!("{}\n\n{}", system_prompt, env_context)
-    };
+    // Build system prompt: if user specified --system-prompt, use that.
+    // Otherwise the engine will build the full modular prompt via system_prompt.rs.
+    let system_prompt = cli.system_prompt
+        .or(settings.custom_system_prompt)
+        .unwrap_or_default();
 
     let permission_mode = config::parse_permission_mode(&cli.permission_mode);
     let skills = load_skills(&cwd);

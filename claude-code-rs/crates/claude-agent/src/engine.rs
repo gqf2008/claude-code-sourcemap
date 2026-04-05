@@ -22,6 +22,7 @@ use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
 use crate::query::{query_stream, AgentEvent, QueryConfig};
 use crate::state::{new_shared_state, SharedState};
+use crate::system_prompt::{build_system_prompt, coordinator_system_prompt};
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
 pub struct QueryEngine {
@@ -162,32 +163,56 @@ impl QueryEngineBuilder {
         let permission_checker = Arc::new(self.permission_checker);
 
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
-        let system_prompt = if self.load_claude_md {
-            let md = load_claude_md(&self.cwd);
-            if md.is_empty() {
-                self.system_prompt.clone()
-            } else if self.system_prompt.is_empty() {
-                md
-            } else {
-                format!("{}\n\n---\n\n{}", md, self.system_prompt)
-            }
+
+        // ── Assemble system prompt via modular builder ────────────────────────
+        let claude_md_content = if self.load_claude_md {
+            load_claude_md(&self.cwd)
         } else {
-            self.system_prompt.clone()
+            String::new()
         };
 
-        // Optionally prepend memory files
-        let system_prompt = if self.load_memory {
-            if let Some(mem) = load_memories_for_prompt(&self.cwd) {
-                if system_prompt.is_empty() {
-                    mem
-                } else {
-                    format!("{}\n\n---\n\n{}", mem, system_prompt)
-                }
-            } else {
-                system_prompt
-            }
+        let memory_content = if self.load_memory {
+            load_memories_for_prompt(&self.cwd).unwrap_or_default()
         } else {
-            system_prompt
+            String::new()
+        };
+
+        // Collect enabled tool names for tool-specific guidance
+        let enabled_tool_names: Vec<String> = registry
+            .all()
+            .iter()
+            .filter(|t| t.is_enabled())
+            .map(|t| t.name().to_string())
+            .collect();
+
+        let system_prompt = if self.coordinator_mode {
+            coordinator_system_prompt()
+        } else if self.system_prompt.is_empty() {
+            build_system_prompt(
+                &self.cwd,
+                &model_name,
+                &enabled_tool_names,
+                &claude_md_content,
+                &memory_content,
+            )
+            .text
+        } else {
+            // User provided a custom system prompt — still inject CLAUDE.md + memory
+            let mut parts = Vec::new();
+            parts.push(self.system_prompt.clone());
+            if !claude_md_content.is_empty() {
+                parts.push(format!(
+                    "\n## Project Instructions (CLAUDE.md)\n\n<project-instructions>\n{}\n</project-instructions>",
+                    claude_md_content
+                ));
+            }
+            if !memory_content.is_empty() {
+                parts.push(format!(
+                    "\n## Agent Memory\n\n<memory>\n{}\n</memory>",
+                    memory_content
+                ));
+            }
+            parts.join("\n")
         };
 
         let sub_registry = Arc::new(ToolRegistry::with_defaults());

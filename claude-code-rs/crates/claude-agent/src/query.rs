@@ -92,11 +92,39 @@ pub fn query_stream(
             let system = if config.system_prompt.is_empty() {
                 None
             } else {
-                Some(vec![SystemBlock {
-                    block_type: "text".into(),
-                    text: config.system_prompt.clone(),
-                    cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
-                }])
+                // Split system prompt at the dynamic boundary for prompt caching.
+                // The static prefix (identity, guidelines) gets a global cache scope,
+                // while the dynamic suffix (env, memory, CLAUDE.md) is session-specific.
+                let boundary = config.system_prompt.find(
+                    crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+                );
+                match boundary {
+                    Some(pos) => {
+                        let static_prefix = config.system_prompt[..pos].trim();
+                        let dynamic_suffix = config.system_prompt[pos..].trim();
+                        let mut blocks = vec![SystemBlock {
+                            block_type: "text".into(),
+                            text: static_prefix.to_string(),
+                            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                        }];
+                        if !dynamic_suffix.is_empty() {
+                            blocks.push(SystemBlock {
+                                block_type: "text".into(),
+                                text: dynamic_suffix.to_string(),
+                                cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                            });
+                        }
+                        Some(blocks)
+                    }
+                    None => {
+                        // No boundary marker — send as single block
+                        Some(vec![SystemBlock {
+                            block_type: "text".into(),
+                            text: config.system_prompt.clone(),
+                            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                        }])
+                    }
+                }
             };
 
             let request = MessagesRequest {
