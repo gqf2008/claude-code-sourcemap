@@ -304,8 +304,26 @@ async fn handle_session_command(sub: &str, engine: &QueryEngine) {
                 }
             }
         }
+        "delete" | "rm" => {
+            let id = parts.get(1).copied().unwrap_or("").trim();
+            if id.is_empty() {
+                println!("Usage: /session delete <id>");
+                return;
+            }
+            let sessions = claude_core::session::list_sessions();
+            let found = sessions.iter().find(|s| s.id.starts_with(id));
+            match found {
+                Some(meta) => {
+                    match claude_core::session::delete_session(&meta.id) {
+                        Ok(()) => println!("\x1b[32m✓ Deleted session {:.8} ({})\x1b[0m", meta.id, meta.title),
+                        Err(e) => eprintln!("\x1b[31mFailed to delete: {}\x1b[0m", e),
+                    }
+                }
+                None => println!("No session found matching '{}'. Use /session list.", id),
+            }
+        }
         other => {
-            println!("Unknown session subcommand: '{}'. Use save, list, or load <id>.", other);
+            println!("Unknown session subcommand: '{}'. Use save, list, load <id>, or delete <id>.", other);
         }
     }
 }

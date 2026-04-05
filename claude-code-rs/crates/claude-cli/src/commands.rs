@@ -151,11 +151,13 @@ Available commands:
   /session save      Save current session
   /session list      List saved sessions
   /session load <id> Resume a saved session
+  /session delete <id> Delete a saved session
   /exit              Exit the CLI
 
 Tips:
   • End a line with \\ to continue on the next line (multiline input)
   • Use --resume to restore the most recent session on startup
-  • Use --init to create CLAUDE.md and project scaffolding";
+  • Use --init to create CLAUDE.md and project scaffolding
+  • Model aliases: sonnet, opus, haiku, best (e.g., /model opus)";
 
 

@@ -70,10 +70,14 @@ pub fn query_stream(
         // ── Recovery state (aligned with TS query.ts) ────────────────────────
         let mut max_tokens_recovery_count: u32 = 0;
         const MAX_TOKENS_RECOVERY_LIMIT: u32 = 3;
-        const ESCALATED_MAX_TOKENS: u32 = 65536;
         let mut effective_max_tokens = config.max_tokens;
         let mut has_attempted_reactive_compact = false;
         let mut retried_this_turn = false;
+
+        // Look up model capabilities for smart max_tokens escalation
+        let model_name = { state.read().await.model.clone() };
+        let caps = claude_core::model::model_capabilities(&model_name);
+        let escalated_max_tokens = caps.upper_max_output;
 
         loop {
             // Check abort at the top of every turn
@@ -329,12 +333,13 @@ pub fn query_stream(
 
                 // ── max_output_tokens recovery (aligned with TS query.ts) ────
                 StopReason::MaxTokens => {
-                    // Strategy 1: Escalate max_tokens (8k → 64k)
-                    if effective_max_tokens < ESCALATED_MAX_TOKENS {
-                        effective_max_tokens = ESCALATED_MAX_TOKENS;
-                        yield AgentEvent::TextDelta(
-                            "\n\x1b[33m[Output truncated — escalating max_tokens to 64K]\x1b[0m\n".to_string()
-                        );
+                    // Strategy 1: Escalate max_tokens to model's upper limit
+                    if effective_max_tokens < escalated_max_tokens {
+                        effective_max_tokens = escalated_max_tokens;
+                        yield AgentEvent::TextDelta(format!(
+                            "\n\x1b[33m[Output truncated — escalating max_tokens to {}K]\x1b[0m\n",
+                            escalated_max_tokens / 1000
+                        ));
                         // Inject continuation message
                         let cont_msg = UserMessage {
                             uuid: Uuid::new_v4().to_string(),
