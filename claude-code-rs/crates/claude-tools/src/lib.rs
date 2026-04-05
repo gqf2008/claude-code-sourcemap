@@ -22,6 +22,8 @@ pub mod mcp;
 pub mod skill_tool;
 pub mod repl;
 pub mod send_message;
+pub mod git;
+pub mod context;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,6 +87,10 @@ impl ToolRegistry {
         registry.register(skill_tool::SkillTool);
         registry.register(repl::ReplTool);
         registry.register(send_message::SendUserMessageTool);
+        registry.register(git::GitTool);
+        registry.register(git::GitStatusTool);
+        registry.register(context::ContextInspectTool);
+        registry.register(context::VerifyTool);
         // MCP tools registered but disabled until MCP is implemented
         registry.register(mcp::ListMcpResourcesTool);
         registry.register(mcp::ReadMcpResourceTool);
