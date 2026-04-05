@@ -19,6 +19,9 @@ pub mod notebook;
 pub mod plan_mode;
 pub mod tool_search;
 pub mod mcp;
+pub mod skill_tool;
+pub mod repl;
+pub mod send_message;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,6 +82,9 @@ impl ToolRegistry {
         registry.register(plan_mode::EnterPlanModeTool);
         registry.register(plan_mode::ExitPlanModeTool);
         registry.register(tool_search::ToolSearchTool);
+        registry.register(skill_tool::SkillTool);
+        registry.register(repl::ReplTool);
+        registry.register(send_message::SendUserMessageTool);
         // MCP tools registered but disabled until MCP is implemented
         registry.register(mcp::ListMcpResourcesTool);
         registry.register(mcp::ReadMcpResourceTool);
