@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
 use crate::engine::QueryEngine;
+use crate::hooks::HookEvent;
 use crate::query::AgentEvent;
 use claude_core::message::StopReason;
 
@@ -127,6 +128,12 @@ where
 
     on_progress(TaskProgress::TurnStart { turn: 0 });
 
+    // ── TaskCreated hook ─────────────────────────────────────────────────
+    if engine.hooks().has_hooks(HookEvent::TaskCreated) {
+        let ctx = engine.hooks().task_ctx(HookEvent::TaskCreated, task, None);
+        let _ = engine.hooks().run(HookEvent::TaskCreated, ctx).await;
+    }
+
     let mut stream = engine.submit(task).await;
 
     while let Some(event) = stream.next().await {
@@ -205,6 +212,16 @@ where
         output_tokens,
         reason,
     };
+
+    // ── TaskCompleted hook ───────────────────────────────────────────────
+    if engine.hooks().has_hooks(HookEvent::TaskCompleted) {
+        let ctx = engine.hooks().task_ctx(
+            HookEvent::TaskCompleted,
+            task,
+            Some(result.reason.to_string()),
+        );
+        let _ = engine.hooks().run(HookEvent::TaskCompleted, ctx).await;
+    }
 
     on_progress(TaskProgress::Done(result.clone()));
     result

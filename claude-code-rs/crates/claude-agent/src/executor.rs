@@ -134,6 +134,16 @@ impl ToolExecutor {
         let perm = self.permission_checker.check(tool.as_ref(), &input).await;
         match perm.behavior {
             PermissionBehavior::Deny => {
+                // Fire PermissionDenied hook
+                if self.hooks.has_hooks(HookEvent::PermissionDenied) {
+                    let ctx = self.hooks.permission_ctx(
+                        HookEvent::PermissionDenied,
+                        tool_name,
+                        &input,
+                        "denied_by_rule",
+                    );
+                    let _ = self.hooks.run(HookEvent::PermissionDenied, ctx).await;
+                }
                 return ContentBlock::ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content: vec![ToolResultContent::Text {
@@ -143,9 +153,30 @@ impl ToolExecutor {
                 };
             }
             PermissionBehavior::Ask => {
+                // Fire PermissionRequest hook
+                if self.hooks.has_hooks(HookEvent::PermissionRequest) {
+                    let ctx = self.hooks.permission_ctx(
+                        HookEvent::PermissionRequest,
+                        tool_name,
+                        &input,
+                        "ask",
+                    );
+                    let _ = self.hooks.run(HookEvent::PermissionRequest, ctx).await;
+                }
+
                 let desc = format!("{}: {}", tool_name, serde_json::to_string(&input).unwrap_or_default());
                 let (allowed, always) = PermissionChecker::prompt_user(tool_name, &desc);
                 if !allowed {
+                    // Fire PermissionDenied hook
+                    if self.hooks.has_hooks(HookEvent::PermissionDenied) {
+                        let ctx = self.hooks.permission_ctx(
+                            HookEvent::PermissionDenied,
+                            tool_name,
+                            &input,
+                            "denied_by_user",
+                        );
+                        let _ = self.hooks.run(HookEvent::PermissionDenied, ctx).await;
+                    }
                     return ContentBlock::ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: vec![ToolResultContent::Text { text: "User denied permission".into() }],

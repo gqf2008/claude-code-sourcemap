@@ -284,6 +284,99 @@ const SUMMARIZE_TOOL_RESULTS: &str = "\
 When working with tool results, write down any important information you might need \
 later in your response, as the original tool result may be cleared later.";
 
+// ── Additional dynamic section generators ───────────────────────────────────
+
+/// Dynamic: token budget guidance (when a spend limit is set).
+fn section_token_budget(budget: u64) -> Option<String> {
+    if budget == 0 { return None; }
+    Some(format!(
+        "\n# Token Budget\n\n\
+         You have a token budget of {} tokens for this task. Be mindful of token usage:\n\
+         - Minimize unnecessary tool calls and verbose output.\n\
+         - Prefer targeted reads over full-file reads when possible.\n\
+         - If you're running low on budget, focus on the most critical remaining work.\n\
+         - The system will stop you if you exceed the budget.",
+        budget
+    ))
+}
+
+/// Dynamic: proactive / autonomous task mode guidance.
+fn section_proactive_mode() -> &'static str {
+    r#"
+# Autonomous Work
+
+When working on tasks autonomously:
+
+## Pacing
+- Work at a sustainable pace. For long-running tasks, take incremental steps rather than trying to do everything at once.
+
+## Bias toward action
+- When you have enough context, act on it. Don't ask for confirmation on routine operations.
+- If something fails, try an alternative approach before reporting the failure.
+- For ambiguous instructions, make reasonable assumptions and note them.
+
+## Be concise
+- During autonomous work, minimize narration. Focus on actions and results.
+- Report status at natural milestones, not every step.
+
+## Staying responsive
+- Check for abort signals between major steps.
+- If a task is taking too long, report progress and ask if the user wants to continue."#
+}
+
+/// Dynamic: file editing best practices.
+fn section_file_editing() -> &'static str {
+    r#"
+# File editing best practices
+
+- Always read a file before editing it to understand the current state.
+- When using FileEditTool, provide enough context in `old_str` to uniquely identify the target.
+  Include surrounding lines if the target line is ambiguous.
+- For large-scale refactoring, prefer multiple targeted edits over rewriting entire files.
+- After editing, verify the change by reading back the affected section.
+- If an edit fails (no match found), re-read the file — it may have been modified externally.
+- Do NOT create new files when you should be editing existing ones."#
+}
+
+/// Dynamic: git operations guidance.
+fn section_git_guidance() -> &'static str {
+    r#"
+# Git operations
+
+When working with git:
+- Check `git status` before making commits to verify what will be included.
+- Write clear, concise commit messages that describe what changed and why.
+- Use conventional commit format when the project follows it (e.g., `feat:`, `fix:`, `refactor:`).
+- Prefer small, atomic commits over large monolithic ones.
+- When resolving merge conflicts, understand both sides before choosing a resolution.
+- Do not force-push to shared branches unless explicitly asked."#
+}
+
+/// Dynamic: testing best practices.
+fn section_testing_guidance() -> &'static str {
+    r#"
+# Testing
+
+- Always run existing tests after making changes to verify nothing is broken.
+- When adding new functionality, add corresponding tests.
+- Prefer running specific test files/suites over the full test suite for faster feedback.
+- When tests fail, read the error output carefully before making changes.
+- Do not modify test assertions to make tests pass — fix the underlying code instead.
+- For flaky tests, investigate the root cause rather than adding retries."#
+}
+
+/// Dynamic: debugging guidance.
+fn section_debugging_guidance() -> &'static str {
+    r#"
+# Debugging
+
+- Start with reading error messages and stack traces carefully.
+- Use targeted logging/print statements to narrow down the issue.
+- Check recent changes (git diff, git log) when investigating regressions.
+- Reproduce the issue before attempting a fix.
+- After fixing, verify the fix resolves the original issue and doesn't introduce new ones."#
+}
+
 // ── Builder ─────────────────────────────────────────────────────────────────
 
 /// Assembled system prompt with cache boundary information.
@@ -318,6 +411,18 @@ pub struct DynamicSections<'a> {
     pub mcp_instructions: Vec<(String, String)>,
     /// Scratchpad directory path
     pub scratchpad_dir: Option<&'a str>,
+    /// Token budget (0 = unlimited)
+    pub token_budget: u64,
+    /// Enable proactive/autonomous mode section
+    pub proactive_mode: bool,
+    /// Include file editing best practices
+    pub include_editing_guidance: bool,
+    /// Include git operations guidance
+    pub include_git_guidance: bool,
+    /// Include testing guidance
+    pub include_testing_guidance: bool,
+    /// Include debugging guidance
+    pub include_debugging_guidance: bool,
 }
 
 /// Build the default system prompt from modular sections.
@@ -408,6 +513,30 @@ pub fn build_system_prompt_ext(
     // Scratchpad
     if let Some(sp) = section_scratchpad(dynamic.scratchpad_dir) {
         dynamic_parts.push(sp);
+    }
+
+    // Token budget
+    if let Some(tb) = section_token_budget(dynamic.token_budget) {
+        dynamic_parts.push(tb);
+    }
+
+    // Proactive/autonomous mode
+    if dynamic.proactive_mode {
+        dynamic_parts.push(section_proactive_mode().to_string());
+    }
+
+    // Best-practice guidance sections
+    if dynamic.include_editing_guidance {
+        dynamic_parts.push(section_file_editing().to_string());
+    }
+    if dynamic.include_git_guidance {
+        dynamic_parts.push(section_git_guidance().to_string());
+    }
+    if dynamic.include_testing_guidance {
+        dynamic_parts.push(section_testing_guidance().to_string());
+    }
+    if dynamic.include_debugging_guidance {
+        dynamic_parts.push(section_debugging_guidance().to_string());
     }
 
     // Summarize tool results reminder
@@ -749,6 +878,7 @@ mod tests {
             output_style: Some(("Academic", "Write formally.")),
             mcp_instructions: vec![("test".to_string(), "Use test tools.".to_string())],
             scratchpad_dir: Some("/tmp/scratch"),
+            ..Default::default()
         };
         let prompt = build_system_prompt_ext(&cwd, "claude-sonnet-4-6", &[], "", "", &dynamic);
         assert!(prompt.text.contains("# Language"));
@@ -757,5 +887,52 @@ mod tests {
         assert!(prompt.text.contains("# MCP Server Instructions"));
         assert!(prompt.text.contains("# Scratchpad Directory"));
         assert!(prompt.text.contains(SUMMARIZE_TOOL_RESULTS));
+    }
+
+    #[test]
+    fn test_token_budget_section() {
+        assert!(section_token_budget(0).is_none());
+        let tb = section_token_budget(50_000).unwrap();
+        assert!(tb.contains("# Token Budget"));
+        assert!(tb.contains("50000"));
+    }
+
+    #[test]
+    fn test_proactive_mode_section() {
+        let s = section_proactive_mode();
+        assert!(s.contains("# Autonomous Work"));
+        assert!(s.contains("Bias toward action"));
+    }
+
+    #[test]
+    fn test_guidance_sections() {
+        assert!(section_file_editing().contains("# File editing"));
+        assert!(section_git_guidance().contains("# Git operations"));
+        assert!(section_testing_guidance().contains("# Testing"));
+        assert!(section_debugging_guidance().contains("# Debugging"));
+    }
+
+    #[test]
+    fn test_build_with_all_dynamic_sections() {
+        let cwd = PathBuf::from(".");
+        let dynamic = DynamicSections {
+            language: Some("English"),
+            output_style: None,
+            mcp_instructions: Vec::new(),
+            scratchpad_dir: None,
+            token_budget: 100_000,
+            proactive_mode: true,
+            include_editing_guidance: true,
+            include_git_guidance: true,
+            include_testing_guidance: true,
+            include_debugging_guidance: true,
+        };
+        let prompt = build_system_prompt_ext(&cwd, "claude-sonnet-4-6", &[], "", "", &dynamic);
+        assert!(prompt.text.contains("# Token Budget"));
+        assert!(prompt.text.contains("# Autonomous Work"));
+        assert!(prompt.text.contains("# File editing"));
+        assert!(prompt.text.contains("# Git operations"));
+        assert!(prompt.text.contains("# Testing"));
+        assert!(prompt.text.contains("# Debugging"));
     }
 }

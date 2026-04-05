@@ -13,7 +13,7 @@ use claude_core::permissions::PermissionMode;
 use claude_tools::ToolRegistry;
 use tokio::sync::RwLock;
 
-use crate::compact::{compact_conversation, compact_context_message, AUTO_COMPACT_THRESHOLD};
+use crate::compact::{compact_conversation, compact_context_message, AutoCompactState, AUTO_COMPACT_THRESHOLD};
 use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool, TaskNotification};
 use crate::cost::CostTracker;
 use crate::dispatch_agent::{DispatchAgentTool, SubAgentConfig};
@@ -22,7 +22,7 @@ use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
 use crate::query::{query_stream, AgentEvent, QueryConfig};
 use crate::state::{new_shared_state, SharedState};
-use crate::system_prompt::{build_system_prompt, coordinator_system_prompt};
+use crate::system_prompt::{build_system_prompt_ext, coordinator_system_prompt, DynamicSections};
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
 pub struct QueryEngine {
@@ -45,6 +45,10 @@ pub struct QueryEngine {
     allowed_tools: Vec<String>,
     /// Tracks accumulated API usage costs per model.
     cost_tracker: CostTracker,
+    /// Auto-compact state machine (circuit breaker, dynamic threshold).
+    auto_compact: tokio::sync::Mutex<AutoCompactState>,
+    /// Model context window size (for auto-compact threshold calculation).
+    context_window: u64,
 }
 
 pub struct QueryEngineBuilder {
@@ -70,6 +74,14 @@ pub struct QueryEngineBuilder {
     thinking: Option<claude_api::types::ThinkingConfig>,
     /// Additional text appended to the system prompt.
     append_system_prompt: Option<String>,
+    /// Language preference (e.g. "中文").
+    language: Option<String>,
+    /// Output style (name, prompt) — e.g. ("Concise", "Be brief.").
+    output_style: Option<(String, String)>,
+    /// MCP server instructions: (name, instructions) pairs.
+    mcp_instructions: Vec<(String, String)>,
+    /// Scratchpad directory path.
+    scratchpad_dir: Option<String>,
 }
 
 impl QueryEngineBuilder {
@@ -90,6 +102,10 @@ impl QueryEngineBuilder {
             allowed_tools: Vec::new(),
             thinking: None,
             append_system_prompt: None,
+            language: None,
+            output_style: None,
+            mcp_instructions: Vec::new(),
+            scratchpad_dir: None,
         }
     }
 
@@ -159,6 +175,26 @@ impl QueryEngineBuilder {
         self
     }
 
+    pub fn language(mut self, lang: Option<String>) -> Self {
+        self.language = lang;
+        self
+    }
+
+    pub fn output_style(mut self, name: String, prompt: String) -> Self {
+        self.output_style = Some((name, prompt));
+        self
+    }
+
+    pub fn mcp_instructions(mut self, instructions: Vec<(String, String)>) -> Self {
+        self.mcp_instructions = instructions;
+        self
+    }
+
+    pub fn scratchpad_dir(mut self, dir: Option<String>) -> Self {
+        self.scratchpad_dir = dir;
+        self
+    }
+
     pub fn build(self) -> QueryEngine {
         let mut client = AnthropicClient::new(self.api_key);
         if let Some(ref model) = self.model {
@@ -171,6 +207,7 @@ impl QueryEngineBuilder {
         let permission_checker = Arc::new(self.permission_checker);
 
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
+        let caps = claude_core::model::model_capabilities(&model_name);
 
         // ── Assemble system prompt via modular builder ────────────────────────
         let claude_md_content = if self.load_claude_md {
@@ -196,12 +233,20 @@ impl QueryEngineBuilder {
         let system_prompt = if self.coordinator_mode {
             coordinator_system_prompt()
         } else if self.system_prompt.is_empty() {
-            build_system_prompt(
+            let dynamic = DynamicSections {
+                language: self.language.as_deref(),
+                output_style: self.output_style.as_ref().map(|(n, p)| (n.as_str(), p.as_str())),
+                mcp_instructions: self.mcp_instructions.clone(),
+                scratchpad_dir: self.scratchpad_dir.as_deref(),
+                ..Default::default()
+            };
+            build_system_prompt_ext(
                 &self.cwd,
                 &model_name,
                 &enabled_tool_names,
                 &claude_md_content,
                 &memory_content,
+                &dynamic,
             )
             .text
         } else {
@@ -321,6 +366,8 @@ impl QueryEngineBuilder {
             coordinator_mode: self.coordinator_mode,
             allowed_tools: self.allowed_tools,
             cost_tracker: CostTracker::new(),
+            auto_compact: tokio::sync::Mutex::new(AutoCompactState::new()),
+            context_window: caps.context_window,
         }
     }
 }
@@ -462,6 +509,11 @@ impl QueryEngine {
         self.abort_signal.abort();
     }
 
+    /// Access the hook registry (for firing lifecycle events from task_runner, etc.)
+    pub(crate) fn hooks(&self) -> &Arc<HookRegistry> {
+        &self.hooks
+    }
+
     /// Run a task autonomously to completion, streaming progress events.
     ///
     /// This is the primary entry point for non-interactive / programmatic use.
@@ -575,22 +627,41 @@ impl QueryEngine {
         Ok(summary)
     }
 
-    /// Check if auto-compact should trigger (returns true if over threshold).
+    /// Check if auto-compact should trigger.
     ///
-    /// Uses API-reported tokens when available; falls back to local estimation
-    /// (e.g., when resuming a session before any API calls are made).
+    /// Uses the `AutoCompactState` circuit breaker and model-specific context
+    /// window when available; falls back to the simple fixed threshold for
+    /// legacy callers that set a custom `compact_threshold`.
     pub async fn should_auto_compact(&self) -> bool {
         if self.compact_threshold == 0 {
             return false;
         }
         let s = self.state.read().await;
-        if s.total_input_tokens > 0 {
-            return s.total_input_tokens >= self.compact_threshold;
+        let current_tokens = if s.total_input_tokens > 0 {
+            s.total_input_tokens
+        } else {
+            claude_core::token_estimation::estimate_messages_tokens(&s.messages)
+                + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt)
+        };
+        drop(s);
+
+        let ac = self.auto_compact.lock().await;
+        if self.context_window > 0 {
+            ac.should_auto_compact(current_tokens, self.context_window)
+        } else {
+            // Fallback to simple threshold
+            current_tokens >= self.compact_threshold
         }
-        // No API-reported tokens yet — use local estimation
-        let estimated = claude_core::token_estimation::estimate_messages_tokens(&s.messages)
-            + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt);
-        estimated >= self.compact_threshold
+    }
+
+    /// Record a successful auto-compact (resets the circuit breaker).
+    pub async fn record_compact_success(&self) {
+        self.auto_compact.lock().await.record_success();
+    }
+
+    /// Record a failed auto-compact attempt (increments circuit breaker counter).
+    pub async fn record_compact_failure(&self) {
+        self.auto_compact.lock().await.record_failure();
     }
 
     /// Clear conversation history and reset token counters.

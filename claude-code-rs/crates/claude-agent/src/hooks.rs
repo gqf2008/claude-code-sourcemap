@@ -496,14 +496,14 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for permission events.
-    pub fn permission_ctx(&self, event: HookEvent, tool_name: &str, input: Option<Value>) -> HookContext {
+    pub fn permission_ctx(&self, event: HookEvent, tool_name: &str, input: &Value, reason: &str) -> HookContext {
         HookContext {
             event: event.as_str().to_string(),
             tool_name: Some(tool_name.to_string()),
-            tool_input: input,
+            tool_input: Some(input.clone()),
             tool_output: None,
             tool_error: None,
-            error: None,
+            error: Some(reason.to_string()),
             prompt: None,
             trigger: None,
             summary: None,
@@ -532,11 +532,15 @@ impl HookRegistry {
     }
 
     /// Build a `HookContext` for task events.
-    pub fn task_ctx(&self, event: HookEvent, task_id: &str) -> HookContext {
+    pub fn task_ctx(&self, event: HookEvent, task_desc: &str, status: Option<String>) -> HookContext {
+        let mut input = serde_json::json!({"task": task_desc});
+        if let Some(s) = status {
+            input["status"] = serde_json::Value::String(s);
+        }
         HookContext {
             event: event.as_str().to_string(),
             tool_name: None,
-            tool_input: Some(serde_json::json!({"task_id": task_id})),
+            tool_input: Some(input),
             tool_output: None,
             tool_error: None,
             error: None,
