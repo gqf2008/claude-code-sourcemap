@@ -94,7 +94,7 @@ pub enum TaskProgress {
     /// A tool invocation has started.
     ToolUse { name: String, turn: u32 },
     /// A tool invocation completed.
-    ToolDone { name: String, is_error: bool },
+    ToolDone { name: String, is_error: bool, text: Option<String> },
     /// Token usage update.
     Tokens { input: u64, output: u64 },
     /// Task fully completed.
@@ -143,11 +143,12 @@ where
                 on_progress(TaskProgress::ToolUse { name, turn: turns });
             }
 
-            AgentEvent::ToolResult { is_error, .. } => {
+            AgentEvent::ToolResult { is_error, text, .. } => {
                 tool_uses += 1;
                 on_progress(TaskProgress::ToolDone {
                     name: current_tool_name.clone(),
                     is_error,
+                    text,
                 });
             }
 

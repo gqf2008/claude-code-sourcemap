@@ -5,6 +5,7 @@ pub mod file_write;
 pub mod glob_tool;
 pub mod grep;
 pub mod web_fetch;
+pub mod web_search;
 pub mod ask_user;
 pub mod ls;
 pub mod todo;
@@ -14,6 +15,10 @@ pub mod diff_ui;
 pub mod sleep;
 pub mod config_tool;
 pub mod powershell;
+pub mod notebook;
+pub mod plan_mode;
+pub mod tool_search;
+pub mod mcp;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,6 +72,15 @@ impl ToolRegistry {
         registry.register(task::TaskUpdateTool);
         registry.register(task::TaskGetTool);
         registry.register(task::TaskListTool);
+        registry.register(web_search::WebSearchTool);
+        registry.register(notebook::NotebookEditTool);
+        registry.register(plan_mode::EnterPlanModeTool);
+        registry.register(plan_mode::ExitPlanModeTool);
+        registry.register(tool_search::ToolSearchTool);
+        // MCP tools registered but disabled until MCP is implemented
+        registry.register(mcp::ListMcpResourcesTool);
+        registry.register(mcp::ReadMcpResourceTool);
+        registry.register(mcp::McpTool);
         registry
     }
 }

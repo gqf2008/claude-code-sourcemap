@@ -19,7 +19,7 @@ pub enum AgentEvent {
     TextDelta(String),
     ThinkingDelta(String),
     ToolUseStart { id: String, name: String },
-    ToolResult { id: String, is_error: bool },
+    ToolResult { id: String, is_error: bool, text: Option<String> },
     AssistantMessage(AssistantMessage),
     TurnComplete { stop_reason: StopReason },
     UsageUpdate(Usage),
@@ -226,8 +226,15 @@ pub fn query_stream(
                     };
                     messages.push(Message::User(tool_result_msg));
                     for result in &results {
-                        if let ContentBlock::ToolResult { tool_use_id, is_error, .. } = result {
-                            yield AgentEvent::ToolResult { id: tool_use_id.clone(), is_error: *is_error };
+                        if let ContentBlock::ToolResult { tool_use_id, is_error, content } = result {
+                            let result_text = content.first().and_then(|c| {
+                                if let claude_core::message::ToolResultContent::Text { text } = c {
+                                    Some(text.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            yield AgentEvent::ToolResult { id: tool_use_id.clone(), is_error: *is_error, text: result_text };
                         }
                     }
                     turn_count += 1;
