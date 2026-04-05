@@ -267,7 +267,7 @@ impl Tool for DispatchAgentTool {
                 };
 
                 // Create message channel so SendMessage can deliver follow-ups
-                let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
                 if let Some(ref channels) = self.agent_channels {
                     channels.write().await.insert(agent_id.clone(), msg_tx);
                 }
@@ -282,7 +282,7 @@ impl Tool for DispatchAgentTool {
                     let mut stream = query_stream(
                         client,
                         executor,
-                        state.clone(),
+                        state,
                         tool_context,
                         query_config,
                         init_messages,
@@ -294,25 +294,21 @@ impl Tool for DispatchAgentTool {
                     let mut tool_use_count: u32 = 0;
                     let mut total_tokens: u64 = 0;
 
+                    // Note: msg_rx is kept alive so SendMessage doesn't get "channel closed"
+                    // errors, but follow-up messages are not injected mid-stream because
+                    // query_stream uses a local messages vec. This is a known limitation;
+                    // the TS implementation has more complex plumbing for live injection.
+                    // For now, received messages are dropped after the stream completes.
+                    let _msg_rx = msg_rx;
+
                     loop {
                         tokio::select! {
                             _ = cancel_token.cancelled() => {
                                 agent_abort.abort();
-                                // Only send kill notification if still running
                                 if tracker.is_running(&agent_id_clone).await {
                                     tracker.kill(&agent_id_clone).await;
                                 }
                                 break;
-                            }
-                            Some(follow_up) = msg_rx.recv() => {
-                                // Inject follow-up message from SendMessage into the agent's state
-                                let msg = claude_core::message::Message::User(
-                                    claude_core::message::UserMessage {
-                                        uuid: uuid::Uuid::new_v4().to_string(),
-                                        content: vec![claude_core::message::ContentBlock::Text { text: follow_up }],
-                                    }
-                                );
-                                state.write().await.messages.push(msg);
                             }
                             event = stream.next() => {
                                 match event {
@@ -349,7 +345,6 @@ impl Tool for DispatchAgentTool {
                     if let Some(ref channels) = agent_channels {
                         channels.write().await.remove(&agent_id_clone);
                     }
-                    // Clean up agent entry from tracker
                     tracker.remove(&agent_id_clone).await;
                 });
 

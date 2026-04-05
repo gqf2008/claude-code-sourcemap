@@ -57,6 +57,11 @@ impl Tool for FileWriteTool {
                 tokio::fs::write(&path, content).await?;
                 Ok(ToolResult::text(format!("Created {}", path.display())))
             }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                // Existing binary file — overwrite without diff
+                tokio::fs::write(&path, content).await?;
+                Ok(ToolResult::text(format!("Wrote {} (binary file, no diff)", path.display())))
+            }
             Err(e) => {
                 Ok(ToolResult::error(format!("Cannot read existing file: {}", e)))
             }

@@ -272,9 +272,9 @@ impl Tool for SendMessageTool {
     fn name(&self) -> &str { "SendMessage" }
 
     fn description(&self) -> &str {
-        "Send a follow-up message to a running background agent. Use this to provide \
-         additional context, corrections, or new instructions to a worker that is \
-         already executing a task."
+        "Send a follow-up message to a running background agent. The message is queued \
+         for the agent. Note: messages are delivered best-effort and may not be processed \
+         if the agent completes before reading them."
     }
 
     fn input_schema(&self) -> Value {

@@ -78,6 +78,10 @@ impl Tool for MultiEditTool {
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", i))?;
 
+            if old_str.is_empty() {
+                return Ok(ToolResult::error(format!("Edit {}: old_string must not be empty", i)));
+            }
+
             let count = content.matches(old_str).count();
             if count == 0 {
                 return Ok(ToolResult::error(format!(
@@ -114,6 +118,6 @@ impl Tool for MultiEditTool {
     }
 }
 
-fn truncate(s: &str, max_chars: usize) -> &str {
-    if s.len() <= max_chars { s } else { &s[..max_chars] }
+fn truncate(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
