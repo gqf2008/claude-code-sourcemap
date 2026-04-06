@@ -143,7 +143,7 @@ pub fn scan_memory_dir(dir: &Path) -> Vec<MemoryHeader> {
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.file_type().is_file()
-                && e.path().extension().map_or(false, |x| x == "md")
+                && e.path().extension().is_some_and(|x| x == "md")
                 && e.file_name() != "MEMORY.md"
         });
 

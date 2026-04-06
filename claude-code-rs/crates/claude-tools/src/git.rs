@@ -73,13 +73,12 @@ impl Tool for GitTool {
 
         // Safety: block dangerous patterns
         for arg in &args {
-            if arg.contains("--force") || arg == "-f" {
-                if subcommand == "push" {
+            if (arg.contains("--force") || arg == "-f")
+                && subcommand == "push" {
                     return Ok(ToolResult::error(
                         "Force push is not allowed for safety. Use --force-with-lease if needed."
                     ));
                 }
-            }
             if arg == "--hard" && subcommand == "reset" {
                 return Ok(ToolResult::error(
                     "Hard reset blocked — could lose uncommitted changes."

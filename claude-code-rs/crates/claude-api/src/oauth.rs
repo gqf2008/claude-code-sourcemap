@@ -278,9 +278,9 @@ async fn wait_for_code(listener: &tokio::net::TcpListener) -> anyhow::Result<Str
         .nth(1)
         .and_then(|qs| {
             qs.split('&').find_map(|pair| {
-                let mut kv = pair.splitn(2, '=');
-                let key = kv.next()?;
-                let val = kv.next()?;
+                let (key, val) = pair.split_once('=')?;
+                
+                
                 if key == "code" { Some(val.to_string()) } else { None }
             })
         })

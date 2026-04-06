@@ -65,11 +65,10 @@ impl PermissionChecker {
         }
 
         // AcceptEdits mode: auto-allow filesystem edit tools by category
-        if self.mode == PermissionMode::AcceptEdits {
-            if tool.category() == ToolCategory::FileSystem {
+        if self.mode == PermissionMode::AcceptEdits
+            && tool.category() == ToolCategory::FileSystem {
                 return PermissionResult::allow();
             }
-        }
 
         // Build suggestions based on tool type
         let suggestions = build_permission_suggestions(tool, input);

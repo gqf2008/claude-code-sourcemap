@@ -115,7 +115,7 @@ pub(crate) enum CommandType {
 fn extract_base_command(command: &str) -> &str {
     // Strip leading env vars, sudo, etc.
     let trimmed = command.trim();
-    let without_env = trimmed.trim_start_matches(|c: char| c == ' ')
+    let without_env = trimmed.trim_start_matches(' ')
         .strip_prefix("sudo ")
         .unwrap_or(trimmed)
         .trim();
@@ -125,7 +125,7 @@ fn extract_base_command(command: &str) -> &str {
 
     // Remove env var assignments at the start
     let mut parts = first_cmd.split_whitespace();
-    while let Some(part) = parts.next() {
+    for part in &mut parts {
         if part.contains('=') && !part.starts_with('-') {
             continue;
         }

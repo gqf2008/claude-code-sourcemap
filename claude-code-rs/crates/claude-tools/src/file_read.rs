@@ -74,8 +74,8 @@ fn similarity_score(a: &str, b: &str) -> usize {
     }
 
     // Stem match — base name without extension
-    let stem_a = a.rsplit('.').last().unwrap_or(a);
-    let stem_b = b.rsplit('.').last().unwrap_or(b);
+    let stem_a = a.rsplit('.').next_back().unwrap_or(a);
+    let stem_b = b.rsplit('.').next_back().unwrap_or(b);
     if stem_a == stem_b {
         score += 10;
     }

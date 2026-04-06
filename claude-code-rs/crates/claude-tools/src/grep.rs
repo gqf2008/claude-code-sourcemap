@@ -41,7 +41,7 @@ fn matches_type_globs(path: &std::path::Path, globs: &[&str]) -> bool {
         .and_then(|n| n.to_str())
         .unwrap_or("");
     globs.iter().any(|g| {
-        glob::Pattern::new(g).map_or(false, |p| p.matches(filename))
+        glob::Pattern::new(g).is_ok_and(|p| p.matches(filename))
     })
 }
 
@@ -128,7 +128,7 @@ impl Tool for GrepTool {
 
             let walker = WalkBuilder::new(&search_path).hidden(true).git_ignore(true).build();
             'outer: for entry in walker.flatten() {
-                if !entry.file_type().map_or(false, |ft| ft.is_file()) { continue; }
+                if !entry.file_type().is_some_and(|ft| ft.is_file()) { continue; }
                 let path = entry.path().to_owned();
 
                 // Type filter
@@ -139,7 +139,7 @@ impl Tool for GrepTool {
                 // Glob filter
                 if let Some(ref g) = include_glob {
                     let path_str = path.to_string_lossy();
-                    if !glob::Pattern::new(g).map_or(false, |p| p.matches(&path_str)) {
+                    if !glob::Pattern::new(g).is_ok_and(|p| p.matches(&path_str)) {
                         continue;
                     }
                 }
@@ -196,10 +196,11 @@ impl Tool for GrepTool {
                                     if ctx_before > 0 || ctx_after > 0 {
                                         let start = num.saturating_sub(ctx_before);
                                         let end = (num + 1 + ctx_after).min(lines.len());
-                                        for i in start..end {
+                                        for (idx, line) in lines[start..end].iter().enumerate() {
+                                            let i = start + idx;
                                             let prefix = if i == num { ">" } else { " " };
                                             file_hits.push(format!(
-                                                "  {}{}:{}: {}", prefix, path.display(), i + 1, lines[i]
+                                                "  {}{}:{}: {}", prefix, path.display(), i + 1, line
                                             ));
                                         }
                                         if end < lines.len() {

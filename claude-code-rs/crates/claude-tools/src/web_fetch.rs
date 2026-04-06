@@ -63,7 +63,7 @@ fn html_to_markdown(html: &str) -> String {
                             let href_content = &tag_name[href_start + 6..];
                             if let Some(href_end) = href_content.find('"') {
                                 let href = &href_content[..href_end];
-                                result.push_str(&format!("["));
+                                result.push('[');
                                 // We'll close with the /a tag below
                                 let _ = href; // href captured for later
                             }

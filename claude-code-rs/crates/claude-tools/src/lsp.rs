@@ -211,7 +211,7 @@ fn extract_ts_symbol(line: &str) -> Option<(&'static str, String)> {
         let name = stripped.strip_prefix("enum ")?.split([' ', '{']).next()?.trim().to_string();
         Some(("enum", name))
     } else if stripped.starts_with("const ") || stripped.starts_with("let ") || stripped.starts_with("var ") {
-        let rest = stripped.splitn(2, ' ').nth(1)?;
+        let rest = stripped.split_once(' ')?.1;
         let name = rest.split([' ', ':', '=']).next()?.trim().to_string();
         if name.len() > 1 { Some(("variable", name)) } else { None }
     } else {
@@ -420,9 +420,10 @@ fn get_hover_info(path: &Path, line: usize, word: &str) -> anyhow::Result<ToolRe
     let end = (target_idx + 4).min(lines.len());
 
     let mut context_lines = Vec::new();
-    for i in start..end {
+    for (idx, line) in lines[start..end].iter().enumerate() {
+        let i = start + idx;
         let marker = if i == target_idx { "→" } else { " " };
-        context_lines.push(format!("{} {:>4} │ {}", marker, i + 1, lines[i]));
+        context_lines.push(format!("{} {:>4} │ {}", marker, i + 1, line));
     }
 
     Ok(ToolResult::text(format!(

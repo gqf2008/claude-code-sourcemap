@@ -608,10 +608,7 @@ pub(crate) async fn handle_review(engine: &QueryEngine, custom_prompt: &str, cwd
 pub(crate) async fn handle_init(engine: &QueryEngine, cwd: &std::path::Path) {
     let claude_md_path = cwd.join("CLAUDE.md");
     let existing = if claude_md_path.exists() {
-        match std::fs::read_to_string(&claude_md_path) {
-            Ok(content) => Some(content),
-            Err(_) => None,
-        }
+        std::fs::read_to_string(&claude_md_path).ok()
     } else {
         None
     };

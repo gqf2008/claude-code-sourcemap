@@ -275,13 +275,10 @@ pub fn query_stream(
                     HookEvent::PostSampling,
                     if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) },
                 );
-                match hooks.run(HookEvent::PostSampling, ctx).await {
-                    HookDecision::Block { reason } => {
-                        yield AgentEvent::Error(format!("[PostSampling hook blocked]: {}", reason));
-                        state.write().await.messages = messages.clone();
-                        break;
-                    }
-                    _ => {}
+                if let HookDecision::Block { reason } = hooks.run(HookEvent::PostSampling, ctx).await {
+                    yield AgentEvent::Error(format!("[PostSampling hook blocked]: {}", reason));
+                    state.write().await.messages = messages.clone();
+                    break;
                 }
             }
 
@@ -522,7 +519,7 @@ fn classify_api_error(
     if is_retryable && consecutive_errors <= MAX_CONSECUTIVE_ERRORS {
         let wait_ms = if let Some(pos) = err_str.find("retry-after:") {
             let after = &err_str[pos + 12..];
-            after.trim().split_whitespace().next()
+            after.split_whitespace().next()
                 .and_then(|s| s.parse::<u64>().ok())
                 .map(|secs| secs * 1000)
                 .unwrap_or(retry_delay_ms)

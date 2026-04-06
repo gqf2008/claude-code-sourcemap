@@ -244,10 +244,10 @@ fn strip_html_comments(content: &str) -> String {
         }
 
         // Check for block-level comment start (line starts with <!--)
-        if trimmed.starts_with("<!--") {
-            if let Some(pos) = trimmed[4..].find("-->") {
+        if let Some(inner) = trimmed.strip_prefix("<!--") {
+            if let Some(pos) = inner.find("-->") {
                 // Single-line comment: <!-- ... -->
-                let after = trimmed[4 + pos + 3..].trim();
+                let after = inner[pos + 3..].trim();
                 if !after.is_empty() {
                     result.push_str(after);
                     result.push('\n');

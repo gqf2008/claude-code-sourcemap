@@ -49,13 +49,16 @@ impl Tool for GlobTool {
         let full = search_dir.join(pattern).to_string_lossy().to_string();
         let mut matches: Vec<String> = Vec::new();
         for entry in glob::glob(&full).map_err(|e| anyhow::anyhow!("Bad glob: {}", e))? {
-            if let Ok(path) = entry {
-                // Resolve symlinks and verify the result stays within the search directory
-                let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
-                let search_canonical = search_dir.canonicalize().unwrap_or_else(|_| search_dir.clone());
-                if resolved.starts_with(&search_canonical) {
-                    matches.push(path.display().to_string());
+            match entry {
+                Ok(path) => {
+                    // Resolve symlinks and verify the result stays within the search directory
+                    let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let search_canonical = search_dir.canonicalize().unwrap_or_else(|_| search_dir.clone());
+                    if resolved.starts_with(&search_canonical) {
+                        matches.push(path.display().to_string());
+                    }
                 }
+                Err(_) => continue,
             }
         }
         matches.sort();
