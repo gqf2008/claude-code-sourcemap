@@ -405,15 +405,31 @@ async fn test_auto_compact_threshold() {
             .build()
     }).await.unwrap();
 
-    // With 0 tokens, should not trigger
+    // With 0 messages, should not trigger
     assert!(!engine.should_auto_compact().await);
 
-    // Inject high token count
+    // Inject an assistant message with high Usage token count so hybrid
+    // counting picks it up (it uses token_count_with_estimation which reads
+    // the last assistant Usage).
     {
         let mut s = engine.state().write().await;
-        s.total_input_tokens = 200_000;
+        s.messages.push(claude_core::message::Message::Assistant(
+            claude_core::message::AssistantMessage {
+                uuid: "compact-test".into(),
+                content: vec![claude_core::message::ContentBlock::Text {
+                    text: "test".into(),
+                }],
+                stop_reason: None,
+                usage: Some(claude_core::message::Usage {
+                    input_tokens: 200_000,
+                    output_tokens: 5_000,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                }),
+            },
+        ));
     }
 
-    // Should now trigger
+    // Should now trigger (200K + 5K tokens >> 1000 threshold)
     assert!(engine.should_auto_compact().await);
 }

@@ -279,6 +279,55 @@ pub fn resolve_model_string(input: &str) -> String {
     base.to_string()
 }
 
+// ── Small/fast model for cheap tasks ────────────────────────────────────────
+
+/// Return the small/fast model for cheap operations (compaction, token counting).
+///
+/// Priority: `ANTHROPIC_SMALL_FAST_MODEL` env → default Haiku.
+/// Matches TS `getSmallFastModel()`.
+pub fn small_fast_model() -> String {
+    if let Ok(m) = env::var("ANTHROPIC_SMALL_FAST_MODEL") {
+        if !m.is_empty() {
+            return resolve_model_string(&m);
+        }
+    }
+    default_haiku_model()
+}
+
+/// Default Opus model, overridable via `ANTHROPIC_DEFAULT_OPUS_MODEL`.
+pub fn default_opus_model() -> String {
+    env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| defaults::OPUS.to_string())
+}
+
+/// Default Sonnet model, overridable via `ANTHROPIC_DEFAULT_SONNET_MODEL`.
+pub fn default_sonnet_model() -> String {
+    env::var("ANTHROPIC_DEFAULT_SONNET_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| defaults::SONNET.to_string())
+}
+
+/// Default Haiku model, overridable via `ANTHROPIC_DEFAULT_HAIKU_MODEL`.
+pub fn default_haiku_model() -> String {
+    env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| defaults::HAIKU.to_string())
+}
+
+/// List all available model aliases with their current resolved values.
+pub fn list_aliases() -> Vec<(&'static str, String)> {
+    vec![
+        ("sonnet", default_sonnet_model()),
+        ("opus", default_opus_model()),
+        ("haiku", default_haiku_model()),
+        ("best", default_opus_model()),
+    ]
+}
+
 /// Human-readable display name for a model.
 pub fn display_name(model: &str) -> &'static str {
     match canonical_name(model) {
@@ -696,5 +745,37 @@ mod tests {
         assert_eq!(format_cost(0.42), "$0.42");
         assert_eq!(format_cost(1.5), "$1.50");
         assert_eq!(format_cost(12.345), "$12.35");
+    }
+
+    // ── P24 new tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_small_fast_model_default() {
+        // When env var not set, returns Haiku
+        std::env::remove_var("ANTHROPIC_SMALL_FAST_MODEL");
+        let model = small_fast_model();
+        assert!(model.contains("haiku"), "expected haiku, got {}", model);
+    }
+
+    #[test]
+    fn test_default_model_functions_return_defaults() {
+        std::env::remove_var("ANTHROPIC_DEFAULT_OPUS_MODEL");
+        std::env::remove_var("ANTHROPIC_DEFAULT_SONNET_MODEL");
+        std::env::remove_var("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+
+        assert_eq!(default_opus_model(), defaults::OPUS);
+        assert_eq!(default_sonnet_model(), defaults::SONNET);
+        assert!(default_haiku_model().contains("haiku"));
+    }
+
+    #[test]
+    fn test_list_aliases_has_all_entries() {
+        let aliases = list_aliases();
+        assert_eq!(aliases.len(), 4);
+        let names: Vec<&str> = aliases.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"sonnet"));
+        assert!(names.contains(&"opus"));
+        assert!(names.contains(&"haiku"));
+        assert!(names.contains(&"best"));
     }
 }

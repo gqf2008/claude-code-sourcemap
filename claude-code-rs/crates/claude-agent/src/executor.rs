@@ -191,11 +191,25 @@ impl ToolExecutor {
 
         debug!("Executing tool: {}", tool_name);
         match tool.call(input.clone(), context).await {
-            Ok(result) => ContentBlock::ToolResult {
-                tool_use_id: tool_use_id.to_string(),
-                content: result.content,
-                is_error: result.is_error,
-            },
+            Ok(result) => {
+                // Apply tool result size limiting to prevent context explosion
+                let limited_content = result.content.into_iter().map(|c| {
+                    if let ToolResultContent::Text { text } = c {
+                        let limited = claude_core::token_estimation::limit_tool_result(
+                            &text,
+                            claude_core::token_estimation::DEFAULT_MAX_TOOL_RESULT_TOKENS,
+                        );
+                        ToolResultContent::Text { text: limited }
+                    } else {
+                        c
+                    }
+                }).collect();
+                ContentBlock::ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: limited_content,
+                    is_error: result.is_error,
+                }
+            }
             Err(e) => {
                 warn!("Tool {} failed: {}", tool_name, e);
                 let error_msg = format!("Tool error: {}", e);

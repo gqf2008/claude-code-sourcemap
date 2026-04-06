@@ -76,7 +76,18 @@ impl SlashCommand {
             Self::Help => CommandResult::Print(build_help_text(known_skills)),
             Self::Clear => CommandResult::ClearHistory,
             Self::Model(name) if name.is_empty() => {
-                CommandResult::Print("Usage: /model <name>".to_string())
+                let aliases = claude_core::model::list_aliases();
+                let mut out = String::from("Usage: /model <name|alias>\n\nAliases:\n");
+                for (alias, resolved) in &aliases {
+                    let display = claude_core::model::display_name(resolved);
+                    out.push_str(&format!("  {:<10} → {} ({})\n", alias, display, resolved));
+                }
+                out.push_str(&format!(
+                    "\nSmall/fast model: {} (for compaction)\n",
+                    claude_core::model::display_name(&claude_core::model::small_fast_model()),
+                ));
+                out.push_str("\nExamples: /model sonnet  /model opus  /model haiku  /model claude-sonnet-4-5");
+                CommandResult::Print(out)
             }
             Self::Model(name) => CommandResult::SetModel(name.clone()),
             Self::Compact { instructions } => CommandResult::Compact {

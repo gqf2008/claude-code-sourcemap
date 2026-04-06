@@ -34,25 +34,10 @@ impl Tool for ContextInspectTool {
         let cwd = context.cwd.display().to_string();
         let permission_mode = format!("{:?}", context.permission_mode);
 
-        // Estimate token count from message text (rough: 1 token ≈ 4 chars)
-        let char_count: usize = context.messages.iter().map(|m| {
-            match m {
-                claude_core::message::Message::User(u) => {
-                    u.content.iter().map(|b| match b {
-                        claude_core::message::ContentBlock::Text { text } => text.len(),
-                        _ => 50, // approximate for non-text blocks
-                    }).sum::<usize>()
-                }
-                claude_core::message::Message::Assistant(a) => {
-                    a.content.iter().map(|b| match b {
-                        claude_core::message::ContentBlock::Text { text } => text.len(),
-                        _ => 50,
-                    }).sum::<usize>()
-                }
-                claude_core::message::Message::System(s) => s.message.len(),
-            }
-        }).sum();
-        let estimated_tokens = char_count / 4;
+        // Use hybrid counting: real API usage + rough estimation for tail
+        let estimated_tokens = claude_core::token_estimation::token_count_with_estimation(
+            &context.messages,
+        );
 
         let result = json!({
             "messages": msg_count,

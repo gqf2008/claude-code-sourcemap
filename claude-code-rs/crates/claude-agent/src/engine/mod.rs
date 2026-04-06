@@ -320,20 +320,17 @@ impl QueryEngine {
 
     /// Check if auto-compact should trigger.
     ///
-    /// Uses the `AutoCompactState` circuit breaker and model-specific context
-    /// window when available; falls back to the simple fixed threshold for
-    /// legacy callers that set a custom `compact_threshold`.
+    /// Uses hybrid token counting: last API response's real token count plus
+    /// rough estimation for messages added since.  Falls back to the simple
+    /// fixed threshold for legacy callers that set a custom `compact_threshold`.
     pub async fn should_auto_compact(&self) -> bool {
         if self.compact_threshold == 0 {
             return false;
         }
         let s = self.state.read().await;
-        let current_tokens = if s.total_input_tokens > 0 {
-            s.total_input_tokens
-        } else {
-            claude_core::token_estimation::estimate_messages_tokens(&s.messages)
-                + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt)
-        };
+        // Hybrid counting: prefer API-reported usage + rough tail estimate
+        let current_tokens = claude_core::token_estimation::token_count_with_estimation(&s.messages)
+            + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt);
         drop(s);
 
         let ac = self.auto_compact.lock().await;
