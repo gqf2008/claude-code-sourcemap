@@ -1081,4 +1081,195 @@ mod tests {
         let has_error = events.iter().any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("Stream error")));
         assert!(has_error, "expected stream error event, got: {:?}", events);
     }
+
+    #[tokio::test]
+    async fn e2e_multi_turn_tool_execution() {
+        // Turn 1: model returns tool_use → executor runs tool → sends result
+        // Turn 2: model returns end_turn text
+        let tool_response = mock_tool_response("tool_1", "echo_tool", serde_json::json!({"text": "hello"}));
+        let text_response = mock_text_response("Done with tool execution.");
+
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(tool_response))
+            .with_stream_events(make_stream_events(text_response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            max_turns: 5,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Use the echo tool".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state.clone(), tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have tool_use start + ready events from turn 1
+        let has_tool_start = events.iter().any(|e| matches!(e, AgentEvent::ToolUseStart { name, .. } if name == "echo_tool"));
+        let has_tool_ready = events.iter().any(|e| matches!(e, AgentEvent::ToolUseReady { name, .. } if name == "echo_tool"));
+        // Should have tool result (error since echo_tool isn't registered)
+        let has_tool_result = events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. }));
+        // Should have text from turn 2
+        let has_final_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Done with tool execution."));
+        // Should have 2 assistant messages (one per turn)
+        let assistant_count = events.iter().filter(|e| matches!(e, AgentEvent::AssistantMessage(_))).count();
+
+        assert!(has_tool_start, "expected ToolUseStart");
+        assert!(has_tool_ready, "expected ToolUseReady");
+        assert!(has_tool_result, "expected ToolResult");
+        assert!(has_final_text, "expected final text delta");
+        assert_eq!(assistant_count, 2, "expected 2 assistant messages (2 turns)");
+
+        // State should show 2 turns
+        let s = state.read().await;
+        assert_eq!(s.turn_count, 1); // turn_count tracks tool turns only
+        assert_eq!(s.messages.len(), 4); // user + assistant(tool) + user(result) + assistant(text)
+    }
+
+    #[tokio::test]
+    async fn e2e_token_budget_enforced() {
+        // Set a very tight token budget and verify it stops
+        let response = mock_text_response("Hello!");
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            token_budget: 1, // impossibly low budget
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have the text delta (response processed) then budget error
+        let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Hello!"));
+        let has_budget_error = events.iter().any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("Token budget exceeded")));
+        assert!(has_text, "expected text delta before budget stop");
+        assert!(has_budget_error, "expected token budget exceeded error, got: {:?}", events);
+    }
+
+    #[tokio::test]
+    async fn e2e_max_tokens_recovery_escalation() {
+        // First response: stop_reason = max_tokens → should escalate and retry
+        // Second response: normal end_turn
+        let truncated = MessagesResponse {
+            id: "msg_1".into(),
+            response_type: "message".into(),
+            role: "assistant".into(),
+            content: vec![ResponseContentBlock::Text { text: "Partial output...".into() }],
+            model: "claude-sonnet-4-20250514".into(),
+            stop_reason: Some("max_tokens".into()),
+            usage: ApiUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        };
+        let complete = mock_text_response("...complete!");
+
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(truncated))
+            .with_stream_events(make_stream_events(complete));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            max_turns: 10,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Write a long essay".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state.clone(), tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have partial text from first turn
+        let has_partial = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Partial output..."));
+        // Should have escalation message
+        let has_escalation = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("escalating max_tokens")));
+        // Should have complete text from second turn
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "...complete!"));
+        // Should end with TurnComplete
+        let has_turn_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { stop_reason: StopReason::EndTurn }));
+
+        assert!(has_partial, "expected partial text delta");
+        assert!(has_escalation, "expected max_tokens escalation message");
+        assert!(has_complete, "expected complete text delta");
+        assert!(has_turn_complete, "expected TurnComplete at end");
+    }
 }
