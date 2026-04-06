@@ -67,6 +67,35 @@ impl AppState {
         entry.cost_usd += cost_usd;
     }
 
+    /// Record token usage with automatic cost calculation based on model pricing.
+    pub fn record_usage_auto_cost(
+        &mut self,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read: u64,
+        cache_creation: u64,
+    ) {
+        let cost = claude_core::model::estimate_cost(
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read,
+            cache_creation,
+        );
+        self.record_model_usage(model, input_tokens, output_tokens, cache_read, cache_creation, cost);
+    }
+
+    /// Get total estimated cost across all models.
+    pub fn total_cost(&self) -> f64 {
+        self.model_usage.values().map(|u| u.cost_usd).sum()
+    }
+
+    /// Get a formatted cost summary string.
+    pub fn cost_summary(&self) -> String {
+        claude_core::model::format_cost(self.total_cost())
+    }
+
     /// Record line change statistics.
     pub fn record_line_changes(&mut self, added: u64, removed: u64) {
         self.total_lines_added += added;
@@ -153,5 +182,32 @@ mod tests {
         assert_eq!(state.total_errors, 3);
         assert_eq!(state.error_counts["rate_limit"], 2);
         assert_eq!(state.error_counts["overloaded"], 1);
+    }
+
+    #[test]
+    fn test_record_usage_auto_cost() {
+        let mut state = AppState::default();
+        // Sonnet: 10K input @ $3/MTok = $0.03, 2K output @ $15/MTok = $0.03
+        state.record_usage_auto_cost("claude-sonnet-4", 10_000, 2_000, 0, 0);
+        let cost = state.total_cost();
+        assert!(cost > 0.05 && cost < 0.07, "expected ~0.06, got {cost}");
+    }
+
+    #[test]
+    fn test_total_cost_multi_model() {
+        let mut state = AppState::default();
+        state.record_usage_auto_cost("claude-sonnet-4", 10_000, 2_000, 0, 0);
+        state.record_usage_auto_cost("claude-haiku-4-5", 10_000, 2_000, 0, 0);
+        let cost = state.total_cost();
+        // Sonnet: ~$0.06, Haiku: ~$0.016 → total ~$0.076
+        assert!(cost > 0.07 && cost < 0.08, "expected ~0.076, got {cost}");
+    }
+
+    #[test]
+    fn test_cost_summary_formatting() {
+        let mut state = AppState::default();
+        state.record_usage_auto_cost("claude-sonnet-4", 100_000, 50_000, 0, 0);
+        let summary = state.cost_summary();
+        assert!(summary.starts_with('$'));
     }
 }
