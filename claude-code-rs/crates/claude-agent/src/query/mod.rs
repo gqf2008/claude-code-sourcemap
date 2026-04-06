@@ -872,7 +872,17 @@ mod tests {
                     }));
                     events.push(Ok(claude_api::types::StreamEvent::ContentBlockStop { index: idx }));
                 }
-                _ => {}
+                ResponseContentBlock::Thinking { thinking } => {
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_block: ResponseContentBlock::Thinking { thinking: String::new() },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: claude_api::types::DeltaBlock::ThinkingDelta { thinking: thinking.clone() },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStop { index: idx }));
+                }
             }
         }
 
@@ -1478,5 +1488,79 @@ mod tests {
         // 4 messages: user + assistant(tool) + user(result) + assistant(text)
         let s = state.read().await;
         assert_eq!(s.messages.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn e2e_thinking_blocks_emitted() {
+        // Model response with a thinking block followed by text
+        let response = MessagesResponse {
+            id: "msg_think".into(),
+            response_type: "message".into(),
+            role: "assistant".into(),
+            content: vec![
+                ResponseContentBlock::Thinking { thinking: "Let me think step by step...".into() },
+                ResponseContentBlock::Text { text: "The answer is 42.".into() },
+            ],
+            model: "claude-sonnet-4-20250514".into(),
+            stop_reason: Some("end_turn".into()),
+            usage: ApiUsage {
+                input_tokens: 100,
+                output_tokens: 200,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        };
+
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            thinking: Some(claude_api::types::ThinkingConfig {
+                thinking_type: "enabled".into(),
+                budget_tokens: Some(10000),
+            }),
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "What is the meaning of life?".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have thinking delta
+        let has_thinking = events.iter().any(|e| matches!(e, AgentEvent::ThinkingDelta(t) if t.contains("step by step")));
+        // Should have text delta
+        let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "The answer is 42."));
+        // Should complete
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { stop_reason: StopReason::EndTurn }));
+
+        assert!(has_thinking, "expected thinking delta, got: {:?}", events);
+        assert!(has_text, "expected text delta");
+        assert!(has_complete, "expected TurnComplete");
     }
 }
