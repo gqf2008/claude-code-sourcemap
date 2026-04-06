@@ -385,4 +385,123 @@ mod tests {
         let (ok, _) = interpret_exit_code("npm run build", 1);
         assert!(!ok);
     }
+
+    // ── extract_base_command ────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_base_command_simple() {
+        let base = extract_base_command("ls -la");
+        assert!(base.starts_with("ls"), "expected 'ls', got '{}'", base);
+    }
+
+    #[test]
+    fn test_extract_base_command_sudo() {
+        let base = extract_base_command("sudo apt update");
+        assert!(base.starts_with("apt"), "expected 'apt', got '{}'", base);
+    }
+
+    #[test]
+    fn test_extract_base_command_pipeline() {
+        let base = extract_base_command("cat file | grep foo");
+        assert!(base.starts_with("cat"), "expected 'cat', got '{}'", base);
+    }
+
+    #[test]
+    fn test_extract_base_command_env_vars() {
+        let base = extract_base_command("FOO=bar BAZ=1 node script.js");
+        assert!(base.starts_with("node"), "expected 'node', got '{}'", base);
+    }
+
+    #[test]
+    fn test_extract_base_command_complex() {
+        let base = extract_base_command("sudo ENV=1 git status");
+        assert!(base.contains("git"), "expected 'git' in '{}'", base);
+    }
+
+    // ── classify_command (additional) ───────────────────────────────────
+
+    #[test]
+    fn test_classify_ls_readonly() {
+        assert_eq!(classify_command("ls"), CommandType::ReadOnly);
+    }
+
+    #[test]
+    fn test_classify_cat_readonly() {
+        assert_eq!(classify_command("cat foo"), CommandType::ReadOnly);
+    }
+
+    #[test]
+    fn test_classify_grep_search() {
+        assert_eq!(classify_command("grep pattern file"), CommandType::Search);
+    }
+
+    #[test]
+    fn test_classify_find_readonly() {
+        // `find` is in READ_ONLY_COMMANDS, not SEARCH_COMMANDS
+        assert_eq!(classify_command("find . -name '*.rs'"), CommandType::ReadOnly);
+    }
+
+    #[test]
+    fn test_classify_git_commit_write() {
+        assert_eq!(classify_command("git commit -m 'msg'"), CommandType::Write);
+    }
+
+    #[test]
+    fn test_classify_rm_write() {
+        assert_eq!(classify_command("rm -rf foo"), CommandType::Write);
+    }
+
+    #[test]
+    fn test_classify_npm_install_write() {
+        assert_eq!(classify_command("npm install"), CommandType::Write);
+    }
+
+    #[test]
+    fn test_classify_unknown_command() {
+        assert_eq!(classify_command("someunknowncommand"), CommandType::Unknown);
+    }
+
+    // ── interpret_exit_code (additional) ────────────────────────────────
+
+    #[test]
+    fn test_exit_code_success() {
+        let (ok, note) = interpret_exit_code("ls", 0);
+        assert!(ok);
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn test_exit_code_grep_no_matches() {
+        let (ok, note) = interpret_exit_code("grep foo", 1);
+        assert!(ok);
+        assert!(note.is_some());
+    }
+
+    #[test]
+    fn test_exit_code_ls_real_error() {
+        let (ok, note) = interpret_exit_code("ls", 2);
+        assert!(!ok);
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn test_exit_code_diff_differences() {
+        let (ok, note) = interpret_exit_code("diff a b", 1);
+        assert!(ok);
+        assert!(note.unwrap().contains("Differences"));
+    }
+
+    #[test]
+    fn test_exit_code_git_diff_differences() {
+        let (ok, note) = interpret_exit_code("git diff", 1);
+        assert!(ok);
+        assert!(note.unwrap().contains("Differences"));
+    }
+
+    #[test]
+    fn test_exit_code_rm_error() {
+        let (ok, note) = interpret_exit_code("rm foo", 1);
+        assert!(!ok);
+        assert!(note.is_none());
+    }
 }

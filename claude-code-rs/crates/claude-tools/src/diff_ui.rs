@@ -64,3 +64,30 @@ pub fn print_create_diff(label: &str, content: &str) {
         eprintln!("{}+{}{}", GREEN, line, RESET);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_diff_no_changes() {
+        print_diff("test.rs", "same", "same");
+    }
+
+    #[test]
+    fn test_print_diff_simple_change() {
+        print_diff("test.rs", "old\n", "new\n");
+    }
+
+    #[test]
+    fn test_print_diff_multiline() {
+        let old = "line1\nline2\nline3\nline4\nline5\n";
+        let new = "line1\nchanged\nline3\nadded\nline4\nline5\n";
+        print_diff("complex.rs", old, new);
+    }
+
+    #[test]
+    fn test_print_create_diff() {
+        print_create_diff("new.rs", "fn main() {}\n");
+    }
+}

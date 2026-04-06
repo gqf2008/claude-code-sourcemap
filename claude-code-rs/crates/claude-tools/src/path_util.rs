@@ -86,4 +86,22 @@ mod tests {
         let p = normalize_path(Path::new("/a/../../b"));
         assert_eq!(p, PathBuf::from("/b"));
     }
+
+    #[test]
+    fn test_normalize_path_identity() {
+        let p = normalize_path(Path::new("/a/b/c"));
+        assert_eq!(p, PathBuf::from("/a/b/c"));
+    }
+
+    #[test]
+    fn test_normalize_path_current_dir() {
+        let p = normalize_path(Path::new("/a/./b"));
+        assert_eq!(p, PathBuf::from("/a/b"));
+    }
+
+    #[test]
+    fn test_normalize_path_multiple_parents() {
+        let p = normalize_path(Path::new("/a/b/c/../../d"));
+        assert_eq!(p, PathBuf::from("/a/d"));
+    }
 }

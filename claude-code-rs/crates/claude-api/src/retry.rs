@@ -133,3 +133,117 @@ where
 
     Err(anyhow::anyhow!("{}", last_err.expect("retry loop ran at least once")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_retryable_status ──
+
+    #[test]
+    fn test_retryable_429() {
+        assert!(is_retryable_status(429));
+    }
+
+    #[test]
+    fn test_retryable_529() {
+        assert!(is_retryable_status(529));
+    }
+
+    #[test]
+    fn test_retryable_500() {
+        assert!(is_retryable_status(500));
+    }
+
+    #[test]
+    fn test_retryable_502() {
+        assert!(is_retryable_status(502));
+    }
+
+    #[test]
+    fn test_retryable_503() {
+        assert!(is_retryable_status(503));
+    }
+
+    #[test]
+    fn test_non_retryable_client_errors() {
+        for code in [400, 401, 403, 404] {
+            assert!(!is_retryable_status(code), "expected {} to be non-retryable", code);
+        }
+    }
+
+    // ── is_overloaded ──
+
+    #[test]
+    fn test_overloaded_529() {
+        assert!(is_overloaded(529));
+    }
+
+    #[test]
+    fn test_overloaded_not_429() {
+        assert!(!is_overloaded(429));
+    }
+
+    // ── is_rate_limited ──
+
+    #[test]
+    fn test_rate_limited_429() {
+        assert!(is_rate_limited(429));
+    }
+
+    #[test]
+    fn test_rate_limited_not_529() {
+        assert!(!is_rate_limited(529));
+    }
+
+    // ── retry_delay ──
+
+    #[test]
+    fn test_retry_delay_with_retry_after() {
+        let config = RetryConfig::default();
+        let delay = retry_delay(1, Some(5), &config);
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_retry_delay_first_attempt() {
+        let config = RetryConfig::default();
+        let delay = retry_delay(1, None, &config);
+        // base = 500ms * 2^0 = 500ms, plus up to 25% jitter
+        assert!(delay >= Duration::from_millis(500), "delay {:?} < 500ms", delay);
+        assert!(delay < Duration::from_millis(1000), "delay {:?} >= 1000ms", delay);
+    }
+
+    #[test]
+    fn test_retry_delay_second_attempt() {
+        let config = RetryConfig::default();
+        let delay = retry_delay(2, None, &config);
+        // base = 500ms * 2^1 = 1000ms, plus jitter
+        assert!(delay >= Duration::from_millis(1000), "delay {:?} < 1000ms", delay);
+    }
+
+    #[test]
+    fn test_retry_delay_capped_at_max() {
+        let config = RetryConfig::default();
+        let delay = retry_delay(20, None, &config);
+        // Jitter formula: base/8 * ((attempt*7+3) % 4), max factor = 3 → 37.5%
+        let upper_bound = Duration::from_millis(config.max_delay_ms + config.max_delay_ms * 3 / 8);
+        assert!(delay <= upper_bound, "delay {:?} exceeds cap {:?}", delay, upper_bound);
+    }
+
+    #[test]
+    fn test_retry_delay_custom_config() {
+        let config = RetryConfig {
+            base_delay_ms: 100,
+            max_delay_ms: 1000,
+            max_retries: 3,
+        };
+        let d1 = retry_delay(1, None, &config);
+        let d2 = retry_delay(2, None, &config);
+        // First attempt base = 100ms, second = 200ms; d2 should be larger
+        assert!(d2 > d1, "expected d2 {:?} > d1 {:?}", d2, d1);
+        // Both should stay within max + 25%
+        let upper = Duration::from_millis(1000 + 250);
+        assert!(d2 <= upper, "d2 {:?} exceeds cap {:?}", d2, upper);
+    }
+}

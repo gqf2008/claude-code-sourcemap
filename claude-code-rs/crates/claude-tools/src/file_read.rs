@@ -308,3 +308,62 @@ async fn read_notebook(path: &Path) -> anyhow::Result<ToolResult> {
 
     Ok(ToolResult::text(output))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_binary ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_binary_utf8_text() {
+        assert!(!is_binary(b"hello world"));
+    }
+
+    #[test]
+    fn test_is_binary_with_null_byte() {
+        assert!(is_binary(b"hello\x00world"));
+    }
+
+    #[test]
+    fn test_is_binary_empty() {
+        assert!(!is_binary(b""));
+    }
+
+    #[test]
+    fn test_is_binary_pure_binary() {
+        assert!(is_binary(&[0u8; 100]));
+    }
+
+    // ── similarity_score ────────────────────────────────────────────────
+
+    #[test]
+    fn test_similarity_exact_match() {
+        assert_eq!(similarity_score("foo.rs", "foo.rs"), 100);
+    }
+
+    #[test]
+    fn test_similarity_same_extension() {
+        let score = similarity_score("bar.rs", "baz.rs");
+        assert!(score > 0, "same extension should give non-zero score, got {}", score);
+    }
+
+    #[test]
+    fn test_similarity_contains() {
+        let score = similarity_score("main", "main.rs");
+        assert!(score > 5, "contains should give high score, got {}", score);
+    }
+
+    #[test]
+    fn test_similarity_totally_different() {
+        let score = similarity_score("xyz", "abc");
+        // No prefix, no extension match, no stem match, no contains
+        assert!(score <= 5, "totally different should give very low score, got {}", score);
+    }
+
+    #[test]
+    fn test_similarity_same_stem() {
+        let score = similarity_score("foo.rs", "foo.ts");
+        assert!(score > 0, "same stem should give non-zero score, got {}", score);
+    }
+}

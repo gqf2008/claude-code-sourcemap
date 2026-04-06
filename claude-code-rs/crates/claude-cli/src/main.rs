@@ -387,3 +387,116 @@ fn generate_claude_md_template(cwd: &std::path::Path) -> String {
 
     sections.join("\n\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::Path;
+
+    // ── CLI arg parsing ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_defaults() {
+        let cli = Cli::try_parse_from(["claude"]).unwrap();
+        assert!(cli.prompt.is_none());
+        assert_eq!(cli.model, "claude-sonnet-4-20250514");
+        assert_eq!(cli.permission_mode, "default");
+        assert_eq!(cli.max_turns, 100);
+        assert_eq!(cli.max_tokens, 16384);
+        assert!(!cli.verbose);
+        assert!(!cli.no_claude_md);
+        assert!(!cli.print);
+        assert!(!cli.resume);
+        assert!(!cli.coordinator);
+        assert!(!cli.thinking);
+        assert!(!cli.init);
+    }
+
+    #[test]
+    fn test_cli_with_prompt() {
+        let cli = Cli::try_parse_from(["claude", "hello world"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_cli_model_flag() {
+        let cli = Cli::try_parse_from(["claude", "-m", "claude-opus-4-20250514"]).unwrap();
+        assert_eq!(cli.model, "claude-opus-4-20250514");
+    }
+
+    #[test]
+    fn test_cli_verbose_and_print() {
+        let cli = Cli::try_parse_from(["claude", "-v", "-p", "hi"]).unwrap();
+        assert!(cli.verbose);
+        assert!(cli.print);
+    }
+
+    #[test]
+    fn test_cli_resume_alias() {
+        let cli = Cli::try_parse_from(["claude", "--continue"]).unwrap();
+        assert!(cli.resume);
+    }
+
+    #[test]
+    fn test_cli_thinking_flags() {
+        let cli = Cli::try_parse_from(["claude", "--thinking", "--thinking-budget", "20000"]).unwrap();
+        assert!(cli.thinking);
+        assert_eq!(cli.thinking_budget, 20000);
+    }
+
+    #[test]
+    fn test_cli_allowed_tools() {
+        let cli = Cli::try_parse_from(["claude", "--allowed-tools", "Read", "--allowed-tools", "Bash"]).unwrap();
+        assert_eq!(cli.allowed_tools, vec!["Read", "Bash"]);
+    }
+
+    #[test]
+    fn test_cli_permission_mode() {
+        let cli = Cli::try_parse_from(["claude", "--permission-mode", "bypass"]).unwrap();
+        assert_eq!(cli.permission_mode, "bypass");
+    }
+
+    #[test]
+    fn test_cli_init_flag() {
+        let cli = Cli::try_parse_from(["claude", "--init"]).unwrap();
+        assert!(cli.init);
+    }
+
+    // ── generate_claude_md_template ──────────────────────────────────
+
+    #[test]
+    fn test_template_empty_dir() {
+        let tmp = std::env::temp_dir().join("claude_test_empty_dir");
+        let _ = std::fs::create_dir_all(&tmp);
+        let md = generate_claude_md_template(&tmp);
+        assert!(md.contains("# CLAUDE.md"));
+        assert!(md.contains("## Build & Test"));
+        assert!(md.contains("## Code Style"));
+        assert!(md.contains("## Architecture"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_template_rust_project() {
+        let tmp = std::env::temp_dir().join("claude_test_rust_proj");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        let md = generate_claude_md_template(&tmp);
+        assert!(md.contains("cargo build"));
+        assert!(md.contains("cargo test"));
+        assert!(md.contains("cargo clippy"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_template_node_project() {
+        let tmp = std::env::temp_dir().join("claude_test_node_proj");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(tmp.join("package.json"), "{}").unwrap();
+        let md = generate_claude_md_template(&tmp);
+        assert!(md.contains("npm install"));
+        assert!(md.contains("npm test"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
