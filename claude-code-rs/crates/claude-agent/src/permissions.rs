@@ -217,15 +217,55 @@ impl PermissionChecker {
         }
     }
 
-    /// Apply a permission response, updating session state as needed.
-    pub fn apply_response(&self, tool_name: &str, response: &PermissionResponse, result: &PermissionResult) {
+    /// Apply a permission response, updating session state and optionally persisting.
+    pub fn apply_response(
+        &self,
+        tool_name: &str,
+        response: &PermissionResponse,
+        result: &PermissionResult,
+        cwd: &std::path::Path,
+    ) {
         if response.allowed && response.persist {
             if let Some(idx) = response.selected_suggestion {
-                // A suggestion was selected — in a full impl we'd write to the
-                // appropriate settings file. For now, apply as session rule.
                 if let Some(suggestion) = result.suggestions.get(idx) {
-                    if let Ok(mut allowed) = self.session_allowed.lock() {
-                        allowed.insert(suggestion.rule.tool_name.clone());
+                    // Map PermissionDestination to SettingsSource for persistence
+                    match suggestion.destination {
+                        PermissionDestination::Session => {
+                            if let Ok(mut allowed) = self.session_allowed.lock() {
+                                allowed.insert(suggestion.rule.tool_name.clone());
+                            }
+                        }
+                        PermissionDestination::LocalSettings => {
+                            let _ = claude_core::config::Settings::add_permission_rule(
+                                suggestion.rule.clone(),
+                                claude_core::config::SettingsSource::Local,
+                                cwd,
+                            );
+                            // Also add to session for immediate effect
+                            if let Ok(mut allowed) = self.session_allowed.lock() {
+                                allowed.insert(suggestion.rule.tool_name.clone());
+                            }
+                        }
+                        PermissionDestination::ProjectSettings => {
+                            let _ = claude_core::config::Settings::add_permission_rule(
+                                suggestion.rule.clone(),
+                                claude_core::config::SettingsSource::Project,
+                                cwd,
+                            );
+                            if let Ok(mut allowed) = self.session_allowed.lock() {
+                                allowed.insert(suggestion.rule.tool_name.clone());
+                            }
+                        }
+                        PermissionDestination::UserSettings => {
+                            let _ = claude_core::config::Settings::add_permission_rule(
+                                suggestion.rule.clone(),
+                                claude_core::config::SettingsSource::User,
+                                cwd,
+                            );
+                            if let Ok(mut allowed) = self.session_allowed.lock() {
+                                allowed.insert(suggestion.rule.tool_name.clone());
+                            }
+                        }
                     }
                 }
             } else {

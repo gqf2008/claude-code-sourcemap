@@ -52,6 +52,15 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                 s.model = resolved.clone();
                                 let display = claude_core::model::display_name(&resolved);
                                 println!("Model set to: {} ({})", display, resolved);
+
+                                // Persist to user settings
+                                if let Err(e) = claude_core::config::Settings::update_field(
+                                    claude_core::config::SettingsSource::User,
+                                    &cwd,
+                                    |s| { s.model = Some(resolved.clone()); },
+                                ) {
+                                    eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                }
                             }
                             CommandResult::ShowCost => {
                                 let state = engine.state();

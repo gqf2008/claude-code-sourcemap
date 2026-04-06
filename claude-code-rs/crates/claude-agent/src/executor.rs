@@ -184,7 +184,7 @@ impl ToolExecutor {
                     };
                 }
                 // Apply the response (session allow, suggestion rule, etc.)
-                self.permission_checker.apply_response(tool_name, &response, &perm);
+                self.permission_checker.apply_response(tool_name, &response, &perm, &context.cwd);
             }
             PermissionBehavior::Allow => {}
         }
