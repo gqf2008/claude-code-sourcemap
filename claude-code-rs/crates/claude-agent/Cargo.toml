@@ -22,3 +22,6 @@ regex = { workspace = true }
 chrono = { workspace = true }
 tokio-util = { workspace = true }
 crossterm = { workspace = true }
+
+[dev-dependencies]
+claude-api = { path = "../claude-api", features = ["test-support"] }

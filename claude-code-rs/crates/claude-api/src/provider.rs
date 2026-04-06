@@ -375,8 +375,8 @@ pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
 /// A configurable mock backend for testing.
 ///
 /// Provides canned responses, error injection, and call counting.
-/// Gated behind `#[cfg(test)]` — not available in production builds.
-#[cfg(test)]
+/// Available in test builds and when the `test-support` feature is enabled.
+#[cfg(any(test, feature = "test-support"))]
 pub struct MockBackend {
     responses: std::sync::Mutex<Vec<Result<MessagesResponse>>>,
     stream_events: std::sync::Mutex<Vec<Vec<Result<StreamEvent>>>>,
@@ -384,14 +384,14 @@ pub struct MockBackend {
     stream_call_count: std::sync::atomic::AtomicUsize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MockBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MockBackend {
     pub fn new() -> Self {
         Self {
@@ -429,7 +429,7 @@ impl MockBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[async_trait::async_trait]
 impl ApiBackend for MockBackend {
     fn provider_name(&self) -> &str { "mock" }

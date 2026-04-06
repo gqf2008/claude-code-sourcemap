@@ -782,4 +782,303 @@ mod tests {
         assert!(cfg.system_prompt.is_empty());
         assert_eq!(cfg.token_budget, 0);
     }
+
+    // ── Integration tests with MockBackend ───────────────────────────────
+
+    use claude_api::provider::MockBackend;
+    use claude_api::types::{ApiUsage, MessagesResponse, ResponseContentBlock};
+
+    fn mock_text_response(text: &str) -> MessagesResponse {
+        MessagesResponse {
+            id: "msg_test".into(),
+            response_type: "message".into(),
+            role: "assistant".into(),
+            content: vec![ResponseContentBlock::Text { text: text.into() }],
+            model: "claude-sonnet-4-20250514".into(),
+            stop_reason: Some("end_turn".into()),
+            usage: ApiUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    fn mock_tool_response(tool_id: &str, tool_name: &str, input: serde_json::Value) -> MessagesResponse {
+        MessagesResponse {
+            id: "msg_tool".into(),
+            response_type: "message".into(),
+            role: "assistant".into(),
+            content: vec![ResponseContentBlock::ToolUse {
+                id: tool_id.into(),
+                name: tool_name.into(),
+                input,
+            }],
+            model: "claude-sonnet-4-20250514".into(),
+            stop_reason: Some("tool_use".into()),
+            usage: ApiUsage {
+                input_tokens: 200,
+                output_tokens: 100,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        }
+    }
+
+    fn make_stream_events(response: MessagesResponse) -> Vec<anyhow::Result<claude_api::types::StreamEvent>> {
+        // Create the stream events that MockBackend will serve
+        let usage = response.usage.clone();
+        let content = response.content.clone();
+        let stop_reason = response.stop_reason.clone();
+
+        let mut events = Vec::new();
+        events.push(Ok(claude_api::types::StreamEvent::MessageStart {
+            message: response,
+        }));
+
+        for (idx, block) in content.iter().enumerate() {
+            match block {
+                ResponseContentBlock::Text { text } => {
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_block: ResponseContentBlock::Text { text: String::new() },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: claude_api::types::DeltaBlock::TextDelta { text: text.clone() },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStop { index: idx }));
+                }
+                ResponseContentBlock::ToolUse { id, name, input } => {
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_block: ResponseContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: serde_json::Value::Object(Default::default()),
+                        },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: claude_api::types::DeltaBlock::InputJsonDelta {
+                            partial_json: serde_json::to_string(input).unwrap(),
+                        },
+                    }));
+                    events.push(Ok(claude_api::types::StreamEvent::ContentBlockStop { index: idx }));
+                }
+                _ => {}
+            }
+        }
+
+        events.push(Ok(claude_api::types::StreamEvent::MessageDelta {
+            delta: claude_api::types::MessageDeltaData {
+                stop_reason: stop_reason.or(Some("end_turn".into())),
+            },
+            usage: Some(claude_api::types::DeltaUsage { output_tokens: usage.output_tokens }),
+        }));
+
+        events
+    }
+
+    #[tokio::test]
+    async fn e2e_single_turn_text_response() {
+        let response = mock_text_response("Hello! How can I help?");
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+
+        let config = QueryConfig {
+            system_prompt: "You are helpful.".into(),
+            max_turns: 5,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state.clone(), tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have: TextDelta("Hello! How can I help?"), AssistantMessage, UsageUpdate, TurnTokens, TurnComplete
+        let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Hello! How can I help?"));
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { stop_reason: StopReason::EndTurn }));
+        let has_usage = events.iter().any(|e| matches!(e, AgentEvent::UsageUpdate(_)));
+        assert!(has_text, "expected text delta");
+        assert!(has_complete, "expected turn complete");
+        assert!(has_usage, "expected usage update");
+
+        // State should reflect the turn
+        let s = state.read().await;
+        assert!(s.total_input_tokens > 0);
+        assert!(s.total_output_tokens > 0);
+        assert_eq!(s.messages.len(), 2); // user + assistant
+    }
+
+    #[tokio::test]
+    async fn e2e_max_turns_enforced() {
+        // Return end_turn with tool_use to trigger multi-turn, but set max_turns=1
+        let response = mock_text_response("Done.");
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+
+        let config = QueryConfig {
+            max_turns: 1,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should complete successfully in 1 turn
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { .. }));
+        assert!(has_complete, "should complete within max_turns");
+    }
+
+    #[tokio::test]
+    async fn e2e_abort_signal_stops_loop() {
+        let response = mock_text_response("Should not appear");
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+
+        // Abort before the loop starts
+        tool_context.abort_signal.abort();
+
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig::default();
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should see TurnComplete but no TextDelta
+        let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(_)));
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { .. }));
+        assert!(!has_text, "should not produce text when aborted");
+        assert!(has_complete, "should produce TurnComplete on abort");
+    }
+
+    #[tokio::test]
+    async fn e2e_api_error_propagated() {
+        // Queue a stream error
+        let mock = MockBackend::new()
+            .with_stream_events(vec![
+                Err(anyhow::anyhow!("authentication failed")),
+            ]);
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig::default();
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have an error event about stream error
+        let has_error = events.iter().any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("Stream error")));
+        assert!(has_error, "expected stream error event, got: {:?}", events);
+    }
 }

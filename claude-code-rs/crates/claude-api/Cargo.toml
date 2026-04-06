@@ -3,6 +3,10 @@ name = "claude-api"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+test-support = []  # Exposes MockBackend for dependent crate tests
+
 [dependencies]
 claude-core = { path = "../claude-core" }
 serde = { workspace = true }

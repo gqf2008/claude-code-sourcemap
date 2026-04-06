@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, RwLock};
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use claude_core::message::{ContentBlock, Message, UserMessage};
