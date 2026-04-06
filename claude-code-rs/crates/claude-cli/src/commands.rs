@@ -182,40 +182,49 @@ fn build_help_text(skills: &[SkillEntry]) -> String {
 }
 
 const HELP_TEXT_BASE: &str = "\
-Available commands:
+\x1b[1mConversation\x1b[0m
   /help              Show this help
   /clear             Clear conversation history
-  /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
-  /compact [instr]   Compact conversation history
+  /compact [instr]   Compact conversation to free tokens
+  /undo              Undo last assistant turn
   /cost              Show token usage and costs
+  /exit              Exit the CLI
+
+\x1b[1mGit & Code\x1b[0m
   /diff              Show git diff (staged + unstaged)
   /status            Show session and git status
-  /undo              Undo last assistant turn
-  /review [prompt]   Launch code review on recent changes
-  /doctor            Check environment health
-  /init              Initialize CLAUDE.md for the current project
-  /commit [msg]      Stage and commit changes (AI-generated message)
-  /pr [prompt]       Create or review a pull request
+  /commit [msg]      Stage and commit (AI-generated message)
+  /pr [prompt]       Create/review a pull request
   /bug [prompt]      Debug a problem with AI assistance
-  /version           Show version info
+  /review [prompt]   AI code review on recent changes
+  /init              Initialize CLAUDE.md for the project
+
+\x1b[1mConfiguration\x1b[0m
+  /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
   /login             Set API key interactively
   /logout            Clear saved API key
-  /context           Show loaded context (CLAUDE.md, memory, model)
-  /export [format]   Export session (markdown or json)
-  /reload-context    Reload CLAUDE.md, memory, and settings
-  /permissions       Show current permission mode and rules
   /config            Show current configuration
-  /skills            List available skills
-  /memory list       List memory files
-  /memory open <f>   Open a memory file
+  /permissions       Show permission mode and rules
+  /context           Show loaded context (CLAUDE.md, memory, model)
+  /reload-context    Reload CLAUDE.md, memory, and settings
+
+\x1b[1mSession & Memory\x1b[0m
   /session save      Save current session
   /session list      List saved sessions
   /session load <id> Resume a saved session
   /session delete <id> Delete a saved session
-  /exit              Exit the CLI
+  /export [format]   Export session (markdown or json)
+  /memory list       List memory files
+  /memory open <f>   Open a memory file
 
-Tips:
-  • End a line with \\ to continue on the next line (multiline input)
+\x1b[1mSystem\x1b[0m
+  /doctor            Check environment health
+  /skills            List available skills
+  /version           Show version info
+
+\x1b[1mTips\x1b[0m
+  • End a line with \\ to continue on the next line (multiline)
+  • Attach images: type @path/to/image.png on its own line
   • Use --resume to restore the most recent session on startup
   • Use --init to create CLAUDE.md and project scaffolding";
 

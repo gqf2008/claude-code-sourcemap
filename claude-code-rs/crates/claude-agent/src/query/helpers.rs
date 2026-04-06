@@ -210,5 +210,14 @@ pub(super) fn block_to_api(block: &ContentBlock) -> ApiContentBlock {
         ContentBlock::Thinking { thinking } => {
             ApiContentBlock::Text { text: format!("<thinking>{}</thinking>", thinking), cache_control: None }
         }
+        ContentBlock::Image { source } => {
+            ApiContentBlock::Image {
+                source: claude_api::types::ImageSource {
+                    source_type: "base64".into(),
+                    media_type: source.media_type.clone(),
+                    data: source.data.clone(),
+                },
+            }
+        }
     }
 }

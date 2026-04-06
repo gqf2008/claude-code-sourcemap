@@ -153,6 +153,84 @@ impl QueryEngine {
         )
     }
 
+    /// Submit a user message with mixed content blocks (text + images).
+    ///
+    /// Use this when the user attaches images via `@path/to/image.png` syntax.
+    /// The content blocks should be pre-built (text blocks for text, image blocks
+    /// for attached images).
+    pub async fn submit_with_content(
+        &self,
+        content: Vec<ContentBlock>,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>> {
+        if content.is_empty() {
+            let err_stream = async_stream::stream! {
+                yield AgentEvent::Error("Prompt cannot be empty".to_string());
+            };
+            return Box::pin(err_stream);
+        }
+
+        // Run UserPromptSubmit hook with text from first text block
+        let text_preview: String = content.iter().filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        }).collect::<Vec<_>>().join("\n");
+
+        let mut final_content = content;
+
+        if self.hooks.has_hooks(HookEvent::UserPromptSubmit) {
+            let ctx = self.hooks.prompt_ctx(HookEvent::UserPromptSubmit, Some(text_preview));
+            match self.hooks.run(HookEvent::UserPromptSubmit, ctx).await {
+                HookDecision::Block { reason } => {
+                    let err_stream = async_stream::stream! {
+                        yield AgentEvent::Error(format!("[UserPromptSubmit hook blocked]: {}", reason));
+                    };
+                    return Box::pin(err_stream);
+                }
+                HookDecision::AppendContext { text } => {
+                    final_content.push(ContentBlock::Text { text });
+                }
+                _ => {}
+            }
+        }
+
+        let (permission_mode, mut messages) = {
+            let s = self.state.read().await;
+            (s.permission_mode, s.messages.clone())
+        };
+
+        let user_msg = UserMessage {
+            uuid: Uuid::new_v4().to_string(),
+            content: final_content,
+        };
+        messages.push(Message::User(user_msg));
+
+        let tools = self.tool_definitions();
+        let tool_context = ToolContext {
+            cwd: self.cwd.clone(),
+            abort_signal: self.abort_signal.clone(),
+            permission_mode,
+            messages: Vec::new(),
+        };
+
+        query_stream(
+            self.client.clone(),
+            self.executor.clone(),
+            self.state.clone(),
+            tool_context,
+            QueryConfig {
+                system_prompt: self.config.system_prompt.clone(),
+                max_turns: self.config.max_turns,
+                max_tokens: self.config.max_tokens,
+                temperature: self.config.temperature,
+                thinking: self.config.thinking.clone(),
+                token_budget: self.config.token_budget,
+            },
+            messages,
+            tools,
+            self.hooks.clone(),
+        )
+    }
+
     pub fn state(&self) -> &SharedState {
         &self.state
     }

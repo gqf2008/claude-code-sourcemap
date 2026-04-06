@@ -104,6 +104,11 @@ fn user_settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
 }
 
+/// Get the user-level settings file path (`~/.claude/settings.json`).
+pub fn settings_path() -> Option<PathBuf> {
+    user_settings_path()
+}
+
 /// `$CWD/.claude/settings.json`
 fn project_settings_path(cwd: &Path) -> PathBuf {
     cwd.join(".claude").join("settings.json")

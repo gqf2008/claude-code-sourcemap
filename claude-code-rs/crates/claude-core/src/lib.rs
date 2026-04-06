@@ -10,3 +10,4 @@ pub mod token_estimation;
 pub mod model;
 pub mod text_util;
 pub mod message_sanitize;
+pub mod image;

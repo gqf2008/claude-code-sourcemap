@@ -807,6 +807,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_block_to_api_image() {
+        let block = ContentBlock::Image {
+            source: claude_core::message::ImageSource {
+                media_type: "image/png".into(),
+                data: "iVBORw0KGgo=".into(),
+            },
+        };
+        let api = block_to_api(&block);
+        match api {
+            ApiContentBlock::Image { source } => {
+                assert_eq!(source.source_type, "base64");
+                assert_eq!(source.media_type, "image/png");
+                assert_eq!(source.data, "iVBORw0KGgo=");
+            }
+            _ => panic!("expected Image for image block"),
+        }
+    }
+
     // ── QueryConfig ──────────────────────────────────────────────────────
 
     #[test]

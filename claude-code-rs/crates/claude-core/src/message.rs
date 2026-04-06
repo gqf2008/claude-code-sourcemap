@@ -25,12 +25,14 @@ pub struct ImageSource {
     pub data: String,
 }
 
-/// A content block in a conversation message: text, tool call, tool result, or thinking.
+/// A content block in a conversation message: text, image, tool call, tool result, or thinking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -162,6 +164,27 @@ mod tests {
         assert_eq!(json["type"], "thinking");
         let back: ContentBlock = serde_json::from_value(json).unwrap();
         assert!(matches!(back, ContentBlock::Thinking { thinking } if thinking.contains("think")));
+    }
+
+    #[test]
+    fn content_block_image_serde() {
+        let block = ContentBlock::Image {
+            source: ImageSource {
+                media_type: "image/png".into(),
+                data: "iVBORw0KGgo=".into(),
+            },
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "image");
+        assert_eq!(json["source"]["media_type"], "image/png");
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        match back {
+            ContentBlock::Image { source } => {
+                assert_eq!(source.media_type, "image/png");
+                assert_eq!(source.data, "iVBORw0KGgo=");
+            }
+            _ => panic!("Expected Image variant"),
+        }
     }
 
     #[test]

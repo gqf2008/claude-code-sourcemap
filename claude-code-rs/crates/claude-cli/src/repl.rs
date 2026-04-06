@@ -7,6 +7,32 @@ use crate::commands::{CommandResult, SlashCommand};
 use crate::output::print_stream;
 use crate::repl_commands::*;
 
+/// Snapshot of config file modification times for auto-reload detection.
+struct ConfigMtimes {
+    claude_md: Option<std::time::SystemTime>,
+    settings: Option<std::time::SystemTime>,
+}
+
+impl ConfigMtimes {
+    fn capture(cwd: &std::path::Path) -> Self {
+        Self {
+            claude_md: Self::mtime(&cwd.join("CLAUDE.md")),
+            settings: claude_core::config::settings_path()
+                .and_then(|p| Self::mtime(&p)),
+        }
+    }
+
+    fn mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+        std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+    }
+
+    /// Returns true if any watched file has changed since the last snapshot.
+    fn changed_since(&self, cwd: &std::path::Path) -> bool {
+        let current = Self::capture(cwd);
+        self.claude_md != current.claude_md || self.settings != current.settings
+    }
+}
+
 pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::PathBuf) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
     let display = claude_core::model::display_name(&current_model);
@@ -29,6 +55,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
     if let Some(ref path) = history_path {
         let _ = rl.load_history(path);
     }
+
+    // Track config file modification times for auto-reload
+    let mut config_mtimes = ConfigMtimes::capture(&cwd);
 
     loop {
         let readline = rl.readline("\x1b[1;32m> \x1b[0m");
@@ -173,8 +202,33 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     }
                 }
 
+                // Auto-reload config if files changed on disk
+                if config_mtimes.changed_since(&cwd) {
+                    println!("\x1b[2m[Config changed on disk — reloading…]\x1b[0m");
+                    handle_reload_context(&engine, &cwd).await;
+                    config_mtimes = ConfigMtimes::capture(&cwd);
+                }
+
                 let model = { engine.state().read().await.model.clone() };
-                let stream = engine.submit(input).await;
+
+                // Extract @image.png references from input
+                let (text, images) = claude_core::image::extract_image_refs(input);
+                let stream = if images.is_empty() {
+                    engine.submit(&text).await
+                } else {
+                    let img_count = images.len();
+                    println!(
+                        "\x1b[2m📎 {} image{} attached\x1b[0m",
+                        img_count,
+                        if img_count == 1 { "" } else { "s" }
+                    );
+                    let mut content = Vec::new();
+                    if !text.is_empty() {
+                        content.push(claude_core::message::ContentBlock::Text { text });
+                    }
+                    content.extend(images);
+                    engine.submit_with_content(content).await
+                };
 
                 // The background Ctrl+C handler (main.rs) will call engine.abort()
                 // when the user presses Ctrl+C. print_stream checks abort internally.
