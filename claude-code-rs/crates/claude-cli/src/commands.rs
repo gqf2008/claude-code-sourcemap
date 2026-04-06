@@ -20,6 +20,7 @@ pub enum SlashCommand {
     Commit { message: String },
     Pr { prompt: String },
     Bug { prompt: String },
+    Search { query: String },
     Version,
     Login,
     Logout,
@@ -58,6 +59,7 @@ impl SlashCommand {
             "commit" => Self::Commit { message: args },
             "pr" => Self::Pr { prompt: args },
             "bug" | "debug" => Self::Bug { prompt: args },
+            "search" | "find" | "grep" => Self::Search { query: args },
             "version" => Self::Version,
             "login" => Self::Login,
             "logout" => Self::Logout,
@@ -124,6 +126,7 @@ impl SlashCommand {
             Self::Commit { message } => CommandResult::Commit { message: message.clone() },
             Self::Pr { prompt } => CommandResult::Pr { prompt: prompt.clone() },
             Self::Bug { prompt } => CommandResult::Bug { prompt: prompt.clone() },
+            Self::Search { query } => CommandResult::Search { query: query.clone() },
             Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
             Self::Login => CommandResult::Login,
             Self::Logout => CommandResult::Logout,
@@ -161,6 +164,7 @@ pub enum CommandResult {
     Commit { message: String },
     Pr { prompt: String },
     Bug { prompt: String },
+    Search { query: String },
     Login,
     Logout,
     Context,
@@ -187,6 +191,7 @@ const HELP_TEXT_BASE: &str = "\
   /clear             Clear conversation history
   /compact [instr]   Compact conversation to free tokens
   /undo              Undo last assistant turn
+  /search <query>    Search conversation history
   /cost              Show token usage and costs
   /exit              Exit the CLI
 
@@ -527,5 +532,27 @@ mod tests {
         let text = build_help_text(&no_skills());
         assert!(text.contains("/pr"));
         assert!(text.contains("/bug"));
+        assert!(text.contains("/search"));
+    }
+
+    #[test]
+    fn test_parse_search() {
+        let s = no_skills();
+        match SlashCommand::parse("/search hello world", &s) {
+            Some(SlashCommand::Search { query }) => assert_eq!(query, "hello world"),
+            _ => panic!("expected Search"),
+        }
+        // aliases
+        assert!(matches!(SlashCommand::parse("/find foo", &s), Some(SlashCommand::Search { .. })));
+        assert!(matches!(SlashCommand::parse("/grep bar", &s), Some(SlashCommand::Search { .. })));
+    }
+
+    #[test]
+    fn test_execute_search() {
+        let cmd = SlashCommand::Search { query: "token".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Search { query } => assert_eq!(query, "token"),
+            _ => panic!("expected Search"),
+        }
     }
 }

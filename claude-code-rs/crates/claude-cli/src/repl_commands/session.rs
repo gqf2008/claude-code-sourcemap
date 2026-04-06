@@ -238,3 +238,69 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
         }
     }
 }
+
+/// Search conversation history for a query string (case-insensitive).
+pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
+    if query.is_empty() {
+        println!("Usage: /search <query>");
+        return;
+    }
+    let state = engine.state().read().await;
+    if state.messages.is_empty() {
+        println!("No conversation to search.");
+        return;
+    }
+    let query_lower = query.to_lowercase();
+    let mut hits: Vec<(usize, &str, String)> = Vec::new();
+
+    for (idx, msg) in state.messages.iter().enumerate() {
+        let (role, texts): (&str, Vec<&str>) = match msg {
+            claude_core::message::Message::User(u) => (
+                "user",
+                u.content.iter().filter_map(|b| match b {
+                    claude_core::message::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect(),
+            ),
+            claude_core::message::Message::Assistant(a) => (
+                "assistant",
+                a.content.iter().filter_map(|b| match b {
+                    claude_core::message::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect(),
+            ),
+            claude_core::message::Message::System(s) => ("system", vec![s.message.as_str()]),
+        };
+
+        for text in texts {
+            if text.to_lowercase().contains(&query_lower) {
+                let lower = text.to_lowercase();
+                if let Some(pos) = lower.find(&query_lower) {
+                    let start = pos.saturating_sub(40);
+                    let end = (pos + query.len() + 40).min(text.len());
+                    // Truncate to valid char boundaries
+                    let snippet = &text[text.floor_char_boundary(start)..text.ceil_char_boundary(end)];
+                    let snippet = snippet.replace('\n', " ");
+                    let prefix = if start > 0 { "…" } else { "" };
+                    let suffix = if end < text.len() { "…" } else { "" };
+                    hits.push((idx, role, format!("{}{}{}", prefix, snippet, suffix)));
+                }
+                break;
+            }
+        }
+    }
+
+    if hits.is_empty() {
+        println!("No matches for \"{}\".", query);
+    } else {
+        println!("\x1b[1m{} match(es) for \"{}\":\x1b[0m\n", hits.len(), query);
+        for (idx, role, snippet) in &hits {
+            let role_color = match *role {
+                "user" => "\x1b[36m",
+                "assistant" => "\x1b[33m",
+                _ => "\x1b[2m",
+            };
+            println!("  #{:<3} {}[{}]\x1b[0m {}", idx + 1, role_color, role, snippet);
+        }
+    }
+}

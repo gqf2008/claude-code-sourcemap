@@ -155,6 +155,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::Bug { prompt } => {
                                 handle_bug(&engine, &prompt, &cwd).await;
                             }
+                            CommandResult::Search { query } => {
+                                handle_search(&engine, &query).await;
+                            }
                             CommandResult::Login => {
                                 handle_login();
                             }
@@ -178,14 +181,31 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     continue;
                 }
 
-                // Non-slash input: support multiline with trailing `\`
+                // Non-slash input: support multiline
+                // 1. Trailing `\` continues on next line
+                // 2. Triple-backtick ``` starts a code block (read until closing ```)
                 let mut input_buf = line;
-                while input_buf.ends_with('\\') {
-                    input_buf.pop(); // remove trailing backslash
+
+                // Check if input starts with ``` (code block mode)
+                if input_buf.trim_start().starts_with("```") {
+                    // Read until we find a line that is just ```
                     input_buf.push('\n');
-                    match rl.readline("\x1b[2m. \x1b[0m") {
-                        Ok(cont) => input_buf.push_str(&cont),
-                        _ => break,
+                    while let Ok(cont) = rl.readline("\x1b[2m` \x1b[0m") {
+                        if cont.trim() == "```" {
+                            break;
+                        }
+                        input_buf.push_str(&cont);
+                        input_buf.push('\n');
+                    }
+                } else {
+                    // Standard trailing-backslash continuation
+                    while input_buf.ends_with('\\') {
+                        input_buf.pop(); // remove trailing backslash
+                        input_buf.push('\n');
+                        match rl.readline("\x1b[2m. \x1b[0m") {
+                            Ok(cont) => input_buf.push_str(&cont),
+                            _ => break,
+                        }
                     }
                 }
                 let input = input_buf.trim();
@@ -245,8 +265,17 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     engine.abort_signal().reset();
                 }
 
-                // Show turn stats
+                // Show turn stats + context usage warning
                 print_turn_stats(&engine).await;
+
+                // Context usage warning (80% threshold)
+                if let Some(pct) = engine.context_usage_percent().await {
+                    if pct >= 90 {
+                        eprintln!("\x1b[31m⚠ Context {pct}% full — consider /compact or /clear\x1b[0m");
+                    } else if pct >= 80 {
+                        eprintln!("\x1b[33m⚠ Context {pct}% full\x1b[0m");
+                    }
+                }
 
                 // In coordinator mode: drain background agent notifications and
                 // re-submit them so the coordinator can react to completed tasks.

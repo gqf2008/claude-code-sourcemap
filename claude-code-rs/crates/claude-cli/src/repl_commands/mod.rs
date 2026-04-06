@@ -17,7 +17,7 @@ mod skill;
 
 // Re-export all handlers so callers can `use crate::repl_commands::*`
 pub(crate) use memory::handle_memory_command;
-pub(crate) use session::{handle_session_command, handle_undo, handle_export};
+pub(crate) use session::{handle_session_command, handle_undo, handle_export, handle_search};
 pub(crate) use config::{handle_config_command, handle_context, handle_login, handle_logout, handle_reload_context};
 pub(crate) use doctor::handle_doctor;
 pub(crate) use prompt::{handle_review, handle_init, handle_commit, handle_pr, handle_bug};
@@ -111,6 +111,13 @@ pub(crate) async fn handle_status_command(engine: &QueryEngine, cwd: &std::path:
         } else {
             println!("Git:      {} changed file(s)", count);
         }
+    }
+
+    // Context usage
+    if let Some(pct) = engine.context_usage_percent().await {
+        let color = if pct >= 90 { "\x1b[31m" } else if pct >= 80 { "\x1b[33m" } else { "" };
+        let reset = if !color.is_empty() { "\x1b[0m" } else { "" };
+        println!("Context:  {}{pct}%{} of window used", color, reset);
     }
 }
 

@@ -430,6 +430,19 @@ impl QueryEngine {
         self.auto_compact.lock().await.record_failure();
     }
 
+    /// Get the current context window usage as a percentage (0–100).
+    /// Returns None if context window is unknown (0).
+    pub async fn context_usage_percent(&self) -> Option<u8> {
+        if self.context_window == 0 {
+            return None;
+        }
+        let s = self.state.read().await;
+        let current = claude_core::token_estimation::token_count_with_estimation(&s.messages)
+            + claude_core::token_estimation::estimate_system_tokens(&self.config.system_prompt);
+        let pct = (current as f64 / self.context_window as f64 * 100.0).min(100.0) as u8;
+        Some(pct)
+    }
+
     /// Clear conversation history and reset token counters.
     pub async fn clear_history(&self) {
         let mut s = self.state.write().await;
@@ -861,5 +874,46 @@ mod tests {
 
         // The hooks registry should have at least 1 rule
         assert!(engine.hooks.has_hooks(crate::hooks::HookEvent::PreToolUse));
+    }
+
+    // ── context_usage_percent ────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_context_usage_zero_window_returns_none() {
+        let mut engine = build_test_engine();
+        engine.context_window = 0;
+        assert!(engine.context_usage_percent().await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_context_usage_empty_conversation() {
+        let engine = build_test_engine();
+        // Empty conversation → very low usage
+        if let Some(pct) = engine.context_usage_percent().await {
+            assert!(pct < 5, "expected < 5%, got {}%", pct);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_context_usage_with_messages() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .build();
+
+        // Add a large user message
+        {
+            let mut state = engine.state().write().await;
+            let big_text = "word ".repeat(10_000);
+            state.messages.push(claude_core::message::Message::User(
+                claude_core::message::UserMessage {
+                    uuid: "test-big".into(),
+                    content: vec![claude_core::message::ContentBlock::Text { text: big_text }],
+                }
+            ));
+        }
+
+        let pct = engine.context_usage_percent().await.unwrap();
+        assert!(pct > 0, "should have non-zero usage with a large message");
     }
 }
