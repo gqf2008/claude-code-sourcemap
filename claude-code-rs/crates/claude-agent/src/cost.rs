@@ -1,83 +1,26 @@
 //! Cost tracking for Claude API usage.
 //!
-//! Pricing table aligned with the TypeScript `modelCost.ts` source.
+//! Pricing is sourced from [`claude_core::model::model_pricing`] — the single
+//! source of truth for per-model pricing tiers.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use claude_core::message::Usage;
-
-// ---------------------------------------------------------------------------
-// Pricing tiers (USD per 1 million tokens)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy)]
-pub struct ModelPricing {
-    pub input: f64,
-    pub output: f64,
-    pub cache_write: f64,
-    pub cache_read: f64,
-}
-
-/// Sonnet tier: claude-sonnet-4, 3.5v2, 3.7, 4.5, 4.6
-const TIER_SONNET: ModelPricing = ModelPricing {
-    input: 3.0,
-    output: 15.0,
-    cache_write: 3.75,
-    cache_read: 0.3,
-};
-
-/// Opus 4 / 4.1 tier
-const TIER_OPUS: ModelPricing = ModelPricing {
-    input: 15.0,
-    output: 75.0,
-    cache_write: 18.75,
-    cache_read: 1.5,
-};
-
-/// Opus 4.5 / 4.6 tier
-const TIER_OPUS_45: ModelPricing = ModelPricing {
-    input: 5.0,
-    output: 25.0,
-    cache_write: 6.25,
-    cache_read: 0.5,
-};
-
-/// Haiku 3.5 tier
-const TIER_HAIKU_35: ModelPricing = ModelPricing {
-    input: 0.8,
-    output: 4.0,
-    cache_write: 1.0,
-    cache_read: 0.08,
-};
-
-/// Haiku 4.5 tier
-const TIER_HAIKU_45: ModelPricing = ModelPricing {
-    input: 1.0,
-    output: 5.0,
-    cache_write: 1.25,
-    cache_read: 0.1,
-};
-
-/// Look up the pricing tier for a model name.
-pub fn pricing_for_model(model: &str) -> ModelPricing {
-    match claude_core::model::canonical_name(model) {
-        "claude-opus-4-5" | "claude-opus-4-6" => TIER_OPUS_45,
-        "claude-opus-4" | "claude-opus-4-1" => TIER_OPUS,
-        "claude-haiku-4-5" => TIER_HAIKU_45,
-        "claude-3-5-haiku" => TIER_HAIKU_35,
-        _ => TIER_SONNET, // sonnet family is the default
-    }
-}
+use claude_core::model;
 
 /// Calculate USD cost from a `Usage` struct and model name.
-pub fn calculate_cost(model: &str, usage: &Usage) -> f64 {
-    let p = pricing_for_model(model);
-    let input = usage.input_tokens as f64 / 1_000_000.0 * p.input;
-    let output = usage.output_tokens as f64 / 1_000_000.0 * p.output;
-    let cache_write = usage.cache_creation_input_tokens.unwrap_or(0) as f64 / 1_000_000.0 * p.cache_write;
-    let cache_read = usage.cache_read_input_tokens.unwrap_or(0) as f64 / 1_000_000.0 * p.cache_read;
-    input + output + cache_write + cache_read
+///
+/// Delegates to [`claude_core::model::model_pricing`] for per-model rates.
+/// Returns 0.0 for unknown models.
+pub fn calculate_cost(model_name: &str, usage: &Usage) -> f64 {
+    model::estimate_cost(
+        model_name,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_input_tokens.unwrap_or(0),
+        usage.cache_creation_input_tokens.unwrap_or(0),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -202,23 +145,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pricing_lookup() {
-        let sonnet = pricing_for_model("claude-sonnet-4-20250514");
-        assert!((sonnet.input - 3.0).abs() < 0.001);
-        assert!((sonnet.output - 15.0).abs() < 0.001);
-
-        let opus = pricing_for_model("claude-opus-4-20250514");
-        assert!((opus.input - 15.0).abs() < 0.001);
-
-        let opus45 = pricing_for_model("claude-opus-4-5-20250601");
-        assert!((opus45.input - 5.0).abs() < 0.001);
-
-        let haiku = pricing_for_model("claude-3-5-haiku-20241022");
-        assert!((haiku.input - 0.8).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_calculate_cost() {
+    fn test_calculate_cost_sonnet() {
         let usage = Usage {
             input_tokens: 1_000_000,
             output_tokens: 500_000,
@@ -229,6 +156,32 @@ mod tests {
         // = $3.00 + $7.50 + $0.375 + $0.06 = $10.935
         let cost = calculate_cost("claude-sonnet-4-20250514", &usage);
         assert!((cost - 10.935).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_opus_45() {
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        };
+        // Opus 4.5: 1M * $5 = $5.00
+        let cost = calculate_cost("claude-opus-4-5-20250601", &usage);
+        assert!((cost - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_opus_4() {
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        };
+        // Opus 4: 1M * $15 = $15.00
+        let cost = calculate_cost("claude-opus-4-20250514", &usage);
+        assert!((cost - 15.0).abs() < 0.001);
     }
 
     #[test]

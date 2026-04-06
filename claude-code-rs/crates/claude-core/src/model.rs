@@ -434,35 +434,41 @@ pub struct ModelPricing {
 pub fn model_pricing(model: &str) -> Option<ModelPricing> {
     let c = canonical_name(model);
     match c {
-        "claude-opus-4-6" | "claude-opus-4-5" | "claude-opus-4" | "claude-opus-4-1" => Some(ModelPricing {
+        // Opus 4.5 / 4.6 — reduced pricing tier
+        "claude-opus-4-5" | "claude-opus-4-6" => Some(ModelPricing {
+            input_per_mtok: 5.0,
+            output_per_mtok: 25.0,
+            cache_read_per_mtok: 0.5,
+            cache_write_per_mtok: 6.25,
+        }),
+        // Opus 4 / 4.1 / legacy 3 — original pricing tier
+        "claude-opus-4" | "claude-opus-4-1" | "claude-3-opus" => Some(ModelPricing {
             input_per_mtok: 15.0,
             output_per_mtok: 75.0,
             cache_read_per_mtok: 1.5,
             cache_write_per_mtok: 18.75,
         }),
-        "claude-sonnet-4-6" | "claude-sonnet-4-5" | "claude-sonnet-4" | "claude-3-7-sonnet" => Some(ModelPricing {
+        // Sonnet family
+        "claude-sonnet-4-6" | "claude-sonnet-4-5" | "claude-sonnet-4" | "claude-3-7-sonnet"
+        | "claude-3-5-sonnet" => Some(ModelPricing {
             input_per_mtok: 3.0,
             output_per_mtok: 15.0,
             cache_read_per_mtok: 0.3,
             cache_write_per_mtok: 3.75,
         }),
-        "claude-haiku-4-5" | "claude-3-5-haiku" => Some(ModelPricing {
+        // Haiku 4.5
+        "claude-haiku-4-5" => Some(ModelPricing {
+            input_per_mtok: 1.0,
+            output_per_mtok: 5.0,
+            cache_read_per_mtok: 0.1,
+            cache_write_per_mtok: 1.25,
+        }),
+        // Haiku 3.5
+        "claude-3-5-haiku" => Some(ModelPricing {
             input_per_mtok: 0.8,
             output_per_mtok: 4.0,
             cache_read_per_mtok: 0.08,
             cache_write_per_mtok: 1.0,
-        }),
-        "claude-3-5-sonnet" => Some(ModelPricing {
-            input_per_mtok: 3.0,
-            output_per_mtok: 15.0,
-            cache_read_per_mtok: 0.3,
-            cache_write_per_mtok: 3.75,
-        }),
-        "claude-3-opus" => Some(ModelPricing {
-            input_per_mtok: 15.0,
-            output_per_mtok: 75.0,
-            cache_read_per_mtok: 1.5,
-            cache_write_per_mtok: 18.75,
         }),
         _ => None,
     }
@@ -634,15 +640,25 @@ mod tests {
 
     #[test]
     fn test_model_pricing_known_models() {
-        let opus = model_pricing("claude-opus-4-6").unwrap();
-        assert!((opus.input_per_mtok - 15.0).abs() < f64::EPSILON);
-        assert!((opus.output_per_mtok - 75.0).abs() < f64::EPSILON);
+        // Opus 4.5/4.6 uses the reduced pricing tier
+        let opus46 = model_pricing("claude-opus-4-6").unwrap();
+        assert!((opus46.input_per_mtok - 5.0).abs() < f64::EPSILON);
+        assert!((opus46.output_per_mtok - 25.0).abs() < f64::EPSILON);
+
+        // Opus 4/4.1 uses the original pricing tier
+        let opus4 = model_pricing("claude-opus-4-20250514").unwrap();
+        assert!((opus4.input_per_mtok - 15.0).abs() < f64::EPSILON);
 
         let sonnet = model_pricing("claude-sonnet-4-20250514").unwrap();
         assert!((sonnet.input_per_mtok - 3.0).abs() < f64::EPSILON);
 
-        let haiku = model_pricing("claude-haiku-4-5").unwrap();
-        assert!((haiku.input_per_mtok - 0.8).abs() < f64::EPSILON);
+        // Haiku 4.5 pricing
+        let haiku45 = model_pricing("claude-haiku-4-5").unwrap();
+        assert!((haiku45.input_per_mtok - 1.0).abs() < f64::EPSILON);
+
+        // Haiku 3.5 pricing
+        let haiku35 = model_pricing("claude-3-5-haiku-20241022").unwrap();
+        assert!((haiku35.input_per_mtok - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]

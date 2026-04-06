@@ -199,8 +199,9 @@ mod tests {
         state.record_usage_auto_cost("claude-sonnet-4", 10_000, 2_000, 0, 0);
         state.record_usage_auto_cost("claude-haiku-4-5", 10_000, 2_000, 0, 0);
         let cost = state.total_cost();
-        // Sonnet: ~$0.06, Haiku: ~$0.016 → total ~$0.076
-        assert!(cost > 0.07 && cost < 0.08, "expected ~0.076, got {cost}");
+        // Sonnet: 10K*$3/M + 2K*$15/M = $0.06
+        // Haiku 4.5: 10K*$1/M + 2K*$5/M = $0.02 → total ~$0.08
+        assert!(cost > 0.07 && cost < 0.09, "expected ~0.08, got {cost}");
     }
 
     #[test]
