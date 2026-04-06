@@ -379,7 +379,7 @@ pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
 #[cfg(any(test, feature = "test-support"))]
 pub struct MockBackend {
     responses: std::sync::Mutex<Vec<Result<MessagesResponse>>>,
-    stream_events: std::sync::Mutex<Vec<Vec<Result<StreamEvent>>>>,
+    stream_events: std::sync::Mutex<Vec<Result<Vec<Result<StreamEvent>>>>>,
     call_count: std::sync::atomic::AtomicUsize,
     stream_call_count: std::sync::atomic::AtomicUsize,
 }
@@ -416,7 +416,13 @@ impl MockBackend {
 
     /// Queue stream events for one `send_messages_stream` call.
     pub fn with_stream_events(self, events: Vec<Result<StreamEvent>>) -> Self {
-        self.stream_events.lock().unwrap().push(events);
+        self.stream_events.lock().unwrap().push(Ok(events));
+        self
+    }
+
+    /// Queue a connection-level error for `send_messages_stream`.
+    pub fn with_stream_error(self, msg: &str) -> Self {
+        self.stream_events.lock().unwrap().push(Err(anyhow::anyhow!("{}", msg)));
         self
     }
 
@@ -466,8 +472,11 @@ impl ApiBackend for MockBackend {
         if queues.is_empty() {
             anyhow::bail!("MockBackend: no stream events queued");
         }
-        let events = queues.remove(0);
-        Ok(Box::pin(futures::stream::iter(events)))
+        let entry = queues.remove(0);
+        match entry {
+            Ok(events) => Ok(Box::pin(futures::stream::iter(events))),
+            Err(e) => Err(e),
+        }
     }
 }
 

@@ -1272,4 +1272,104 @@ mod tests {
         assert!(has_complete, "expected complete text delta");
         assert!(has_turn_complete, "expected TurnComplete at end");
     }
+
+    #[tokio::test]
+    async fn e2e_retry_on_overloaded_error() {
+        // First call: overloaded error → retry
+        // Second call: success
+        let response = mock_text_response("Recovered!");
+        let mock = MockBackend::new()
+            .with_stream_error("overloaded: server is busy")
+            .with_stream_events(make_stream_events(response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            max_turns: 5,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have retry message
+        let has_retry = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Retrying")));
+        // Should have final text after retry
+        let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Recovered!"));
+        let has_complete = events.iter().any(|e| matches!(e, AgentEvent::TurnComplete { stop_reason: StopReason::EndTurn }));
+
+        assert!(has_retry, "expected retry message, got: {:?}", events);
+        assert!(has_text, "expected recovered text");
+        assert!(has_complete, "expected TurnComplete");
+    }
+
+    #[tokio::test]
+    async fn e2e_fatal_error_stops_immediately() {
+        // Queue a non-retryable error
+        let mock = MockBackend::new()
+            .with_stream_error("invalid_api_key: unauthorized");
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let registry = Arc::new(claude_tools::ToolRegistry::new());
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::Default,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::Default,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig::default();
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state, tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Should have fatal error, no retry
+        let has_error = events.iter().any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("API error")));
+        let has_retry = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Retrying")));
+        assert!(has_error, "expected API error, got: {:?}", events);
+        assert!(!has_retry, "should NOT retry on fatal error");
+    }
 }
