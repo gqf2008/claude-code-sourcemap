@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 // ── Request types ──
 
+/// A request to the Messages API.
+///
+/// Contains all parameters for a single API call: model, messages, system
+/// prompt, tool definitions, and sampling parameters.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessagesRequest {
     pub model: String,
@@ -40,6 +44,7 @@ impl Default for MessagesRequest {
     }
 }
 
+/// A `system` block in the messages request — carries text with optional caching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBlock {
     #[serde(rename = "type")]
@@ -49,6 +54,7 @@ pub struct SystemBlock {
     pub cache_control: Option<CacheControl>,
 }
 
+/// Cache control metadata for prompt/tool caching (ephemeral, TTL, scope).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CacheControl {
     #[serde(rename = "type")]
@@ -101,12 +107,14 @@ pub struct ThinkingConfig {
     pub budget_tokens: Option<u32>,
 }
 
+/// A single message in the API conversation (user or assistant role).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiMessage {
     pub role: String,
     pub content: Vec<ApiContentBlock>,
 }
 
+/// A content block inside a message: text, tool use, tool result, or image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ApiContentBlock {
@@ -135,6 +143,7 @@ pub enum ApiContentBlock {
     Image { source: ImageSource },
 }
 
+/// Content within a tool result — currently only text is supported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ToolResultContent {
@@ -142,6 +151,7 @@ pub enum ToolResultContent {
     Text { text: String },
 }
 
+/// Base64-encoded image source for inline image content blocks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSource {
     #[serde(rename = "type")]
@@ -150,6 +160,7 @@ pub struct ImageSource {
     pub data: String,
 }
 
+/// A tool definition sent to the API — name, description, and JSON Schema for input.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDefinition {
     pub name: String,
@@ -161,6 +172,7 @@ pub struct ToolDefinition {
 
 // ── Response types ──
 
+/// Full response from the Messages API (non-streaming).
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessagesResponse {
     pub id: String,
@@ -173,6 +185,7 @@ pub struct MessagesResponse {
     pub usage: ApiUsage,
 }
 
+/// A content block in the response: text, tool_use, or thinking.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum ResponseContentBlock {
@@ -188,6 +201,7 @@ pub enum ResponseContentBlock {
     Thinking { thinking: String },
 }
 
+/// Token usage counts returned by the API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiUsage {
     pub input_tokens: u64,
@@ -200,6 +214,10 @@ pub struct ApiUsage {
 
 // ── SSE Stream events ──
 
+/// Server-Sent Event types from the streaming Messages API.
+///
+/// Events arrive in order: `MessageStart` → `ContentBlockStart` →
+/// `ContentBlockDelta`* → `ContentBlockStop` → `MessageDelta` → `MessageStop`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum StreamEvent {
@@ -227,6 +245,7 @@ pub enum StreamEvent {
     Error { error: ApiError },
 }
 
+/// A delta (incremental update) within a content block: text, JSON, or thinking.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum DeltaBlock {
@@ -238,16 +257,19 @@ pub enum DeltaBlock {
     ThinkingDelta { thinking: String },
 }
 
+/// Stop reason sent in the `message_delta` event.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageDeltaData {
     pub stop_reason: Option<String>,
 }
 
+/// Output token count sent alongside `message_delta`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeltaUsage {
     pub output_tokens: u64,
 }
 
+/// Error payload from the API (type + human-readable message).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiError {
     #[serde(rename = "type")]
