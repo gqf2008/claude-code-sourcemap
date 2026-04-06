@@ -102,3 +102,135 @@ impl Message {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stop_reason_serde_roundtrip() {
+        for reason in [StopReason::EndTurn, StopReason::ToolUse, StopReason::MaxTokens, StopReason::StopSequence] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let back: StopReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{:?}", reason), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn content_block_text_serde() {
+        let block = ContentBlock::Text { text: "Hello".into() };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "Hello");
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, ContentBlock::Text { text } if text == "Hello"));
+    }
+
+    #[test]
+    fn content_block_tool_use_serde() {
+        let block = ContentBlock::ToolUse {
+            id: "tu_1".into(),
+            name: "FileRead".into(),
+            input: json!({"path": "src/main.rs"}),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_use");
+        assert_eq!(json["name"], "FileRead");
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, ContentBlock::ToolUse { name, .. } if name == "FileRead"));
+    }
+
+    #[test]
+    fn content_block_tool_result_serde() {
+        let block = ContentBlock::ToolResult {
+            tool_use_id: "tu_1".into(),
+            content: vec![ToolResultContent::Text { text: "file contents".into() }],
+            is_error: false,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_result");
+        assert_eq!(json["is_error"], false);
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, ContentBlock::ToolResult { is_error: false, .. }));
+    }
+
+    #[test]
+    fn content_block_thinking_serde() {
+        let block = ContentBlock::Thinking { thinking: "Let me think...".into() };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "thinking");
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, ContentBlock::Thinking { thinking } if thinking.contains("think")));
+    }
+
+    #[test]
+    fn tool_result_content_image() {
+        let content = ToolResultContent::Image {
+            source: ImageSource {
+                media_type: "image/png".into(),
+                data: "iVBORw0KGgo=".into(),
+            },
+        };
+        let json = serde_json::to_value(&content).unwrap();
+        assert_eq!(json["type"], "image");
+        assert_eq!(json["source"]["media_type"], "image/png");
+    }
+
+    #[test]
+    fn message_user_serde_and_uuid() {
+        let msg = Message::User(UserMessage {
+            uuid: "u-123".into(),
+            content: vec![ContentBlock::Text { text: "Hello".into() }],
+        });
+        assert_eq!(msg.uuid(), "u-123");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "user");
+        let back: Message = serde_json::from_value(json).unwrap();
+        assert_eq!(back.uuid(), "u-123");
+    }
+
+    #[test]
+    fn message_assistant_serde_and_uuid() {
+        let msg = Message::Assistant(AssistantMessage {
+            uuid: "a-456".into(),
+            content: vec![ContentBlock::Text { text: "Hi".into() }],
+            stop_reason: Some(StopReason::EndTurn),
+            usage: Some(Usage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(10),
+            }),
+        });
+        assert_eq!(msg.uuid(), "a-456");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "assistant");
+        let back: Message = serde_json::from_value(json).unwrap();
+        assert_eq!(back.uuid(), "a-456");
+    }
+
+    #[test]
+    fn message_system_serde_and_uuid() {
+        let msg = Message::System(SystemMessage {
+            uuid: "s-789".into(),
+            message: "Context compacted".into(),
+        });
+        assert_eq!(msg.uuid(), "s-789");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "system");
+    }
+
+    #[test]
+    fn tool_result_is_error_defaults_false() {
+        // When is_error is missing in JSON, it should default to false
+        let json = json!({
+            "type": "tool_result",
+            "tool_use_id": "tu_1",
+            "content": [{"type": "text", "text": "ok"}]
+        });
+        let block: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(block, ContentBlock::ToolResult { is_error: false, .. }));
+    }
+}
+
