@@ -1376,4 +1376,107 @@ mod tests {
         assert!(has_error, "expected API error, got: {:?}", events);
         assert!(!has_retry, "should NOT retry on fatal error");
     }
+
+    #[tokio::test]
+    async fn e2e_full_tool_round_trip_with_registered_tool() {
+        // Register a mock echo tool that returns the input text
+        struct EchoTool;
+        #[async_trait::async_trait]
+        impl claude_core::tool::Tool for EchoTool {
+            fn name(&self) -> &str { "echo" }
+            fn description(&self) -> &str { "Echo the input text" }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string" }
+                    },
+                    "required": ["text"]
+                })
+            }
+            async fn call(&self, input: serde_json::Value, _ctx: &claude_core::tool::ToolContext) -> anyhow::Result<claude_core::tool::ToolResult> {
+                let text = input["text"].as_str().unwrap_or("(empty)");
+                Ok(claude_core::tool::ToolResult::text(format!("Echo: {}", text)))
+            }
+            fn is_read_only(&self) -> bool { true }
+            fn category(&self) -> claude_core::tool::ToolCategory {
+                claude_core::tool::ToolCategory::Session
+            }
+        }
+
+        // Turn 1: tool_use("echo", {"text": "hello world"})
+        // Turn 2: text response using tool result
+        let tool_response = mock_tool_response("tool_1", "echo", serde_json::json!({"text": "hello world"}));
+        let text_response = mock_text_response("The echo said: hello world");
+
+        let mock = MockBackend::new()
+            .with_stream_events(make_stream_events(tool_response))
+            .with_stream_events(make_stream_events(text_response));
+
+        let client = Arc::new(
+            claude_api::client::AnthropicClient::new("test-key")
+                .with_backend(Box::new(mock)),
+        );
+        let mut registry = claude_tools::ToolRegistry::new();
+        registry.register(EchoTool);
+        let registry = Arc::new(registry);
+
+        let perm = Arc::new(crate::permissions::PermissionChecker::new(
+            claude_core::permissions::PermissionMode::BypassAll,
+            vec![],
+        ));
+        let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+        let state = crate::state::new_shared_state();
+        let tool_context = claude_core::tool::ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: claude_core::tool::AbortSignal::new(),
+            permission_mode: claude_core::permissions::PermissionMode::BypassAll,
+            messages: vec![],
+        };
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let config = QueryConfig {
+            max_turns: 5,
+            ..QueryConfig::default()
+        };
+
+        let messages = vec![Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "Echo hello world".into() }],
+        })];
+
+        let stream = query_stream(
+            client, executor, state.clone(), tool_context,
+            config, messages, vec![], hooks,
+        );
+
+        let events: Vec<AgentEvent> = tokio_stream::StreamExt::collect(stream).await;
+
+        // Verify full round-trip: tool start → ready → result → final text
+        let has_tool_start = events.iter().any(|e| matches!(e, AgentEvent::ToolUseStart { name, .. } if name == "echo"));
+        let has_tool_ready = events.iter().any(|e| matches!(e, AgentEvent::ToolUseReady { name, input, .. } if name == "echo" && input["text"] == "hello world"));
+
+        // Tool result should contain "Echo: hello world" (NOT an error)
+        let tool_result = events.iter().find_map(|e| {
+            if let AgentEvent::ToolResult { id, is_error, text } = e {
+                Some((id.clone(), *is_error, text.clone()))
+            } else {
+                None
+            }
+        });
+        assert!(tool_result.is_some(), "expected tool result");
+        let (id, is_error, text) = tool_result.unwrap();
+        assert_eq!(id, "tool_1");
+        assert!(!is_error, "tool should succeed");
+        assert_eq!(text.as_deref(), Some("Echo: hello world"));
+
+        // Final text from turn 2
+        let has_final = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("echo said")));
+        assert!(has_tool_start, "expected ToolUseStart");
+        assert!(has_tool_ready, "expected ToolUseReady");
+        assert!(has_final, "expected final text");
+
+        // 4 messages: user + assistant(tool) + user(result) + assistant(text)
+        let s = state.read().await;
+        assert_eq!(s.messages.len(), 4);
+    }
 }
