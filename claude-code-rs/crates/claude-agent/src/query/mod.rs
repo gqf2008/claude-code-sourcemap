@@ -171,6 +171,10 @@ pub fn query_stream(
                 }
             };
 
+            // Wrap the raw stream with idle watchdog
+            let watchdog_config = claude_api::stream::StreamWatchdogConfig::from_env();
+            let event_stream = claude_api::stream::with_idle_watchdog(event_stream, watchdog_config);
+
             let mut assistant_text = String::new();
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
             let mut tool_uses: Vec<(String, String, serde_json::Value)> = Vec::new();
