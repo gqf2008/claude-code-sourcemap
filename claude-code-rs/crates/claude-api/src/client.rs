@@ -275,6 +275,140 @@ impl AnthropicClient {
             thinking: None,
         }
     }
+
+    /// Send a streaming request with automatic fallback to non-streaming.
+    ///
+    /// First attempts `messages_stream()`. If the stream encounters an idle
+    /// timeout error, automatically retries the same request via `messages()`
+    /// and synthesizes a one-shot stream from the non-streaming response.
+    ///
+    /// This mirrors the TS `createNonStreamingFallback` behavior.
+    pub async fn messages_with_stream_fallback(
+        &self,
+        request: &MessagesRequest,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>>> {
+        let stream = self.messages_stream(request).await?;
+        let request = request.clone();
+        let client = self.clone_for_fallback();
+
+        let wrapper = async_stream::stream! {
+            use futures::StreamExt;
+            tokio::pin!(stream);
+            let mut had_timeout = false;
+
+            while let Some(item) = stream.next().await {
+                match &item {
+                    Err(e) if crate::stream::is_idle_timeout_error(e) => {
+                        tracing::warn!("Stream idle timeout — falling back to non-streaming API");
+                        had_timeout = true;
+                        break;
+                    }
+                    _ => yield item,
+                }
+            }
+
+            if had_timeout {
+                let mut non_stream_request = request.clone();
+                non_stream_request.stream = false;
+
+                match client.messages(&non_stream_request).await {
+                    Ok(response) => {
+                        // Synthesize stream events from the non-streaming response
+                        for event in synthesize_stream_events(response) {
+                            yield Ok(event);
+                        }
+                    }
+                    Err(e) => {
+                        yield Err(anyhow::anyhow!("Non-streaming fallback failed: {}", e));
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(wrapper))
+    }
+
+    /// Create a lightweight clone for fallback requests.
+    fn clone_for_fallback(&self) -> AnthropicClient {
+        AnthropicClient {
+            http: self.http.clone(),
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            default_model: self.default_model.clone(),
+            max_tokens: self.max_tokens,
+            retry_config: self.retry_config.clone(),
+            backend: None, // fallback always uses first-party endpoint
+        }
+    }
+}
+
+/// Convert a non-streaming `MessagesResponse` into synthetic `StreamEvent`s.
+///
+/// Produces the same event sequence a streaming response would:
+/// `MessageStart → ContentBlockStart → ContentBlockDelta → ContentBlockStop → MessageDelta`
+fn synthesize_stream_events(response: MessagesResponse) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    let stop_reason = response.stop_reason.clone();
+    let content = response.content.clone();
+
+    // MessageStart with usage (clone before consuming)
+    events.push(StreamEvent::MessageStart {
+        message: response,
+    });
+
+    // Content blocks
+    for (idx, block) in content.iter().enumerate() {
+        match block {
+            ResponseContentBlock::Text { text } => {
+                events.push(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ResponseContentBlock::Text { text: String::new() },
+                });
+                events.push(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: DeltaBlock::TextDelta { text: text.clone() },
+                });
+                events.push(StreamEvent::ContentBlockStop { index: idx });
+            }
+            ResponseContentBlock::ToolUse { id, name, input } => {
+                events.push(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ResponseContentBlock::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: serde_json::Value::Object(Default::default()),
+                    },
+                });
+                let json_str = serde_json::to_string(input).unwrap_or_default();
+                events.push(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: DeltaBlock::InputJsonDelta { partial_json: json_str },
+                });
+                events.push(StreamEvent::ContentBlockStop { index: idx });
+            }
+            ResponseContentBlock::Thinking { thinking } => {
+                events.push(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ResponseContentBlock::Thinking { thinking: String::new() },
+                });
+                events.push(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: DeltaBlock::ThinkingDelta { thinking: thinking.clone() },
+                });
+                events.push(StreamEvent::ContentBlockStop { index: idx });
+            }
+        }
+    }
+
+    // MessageDelta with stop reason
+    events.push(StreamEvent::MessageDelta {
+        delta: MessageDeltaData {
+            stop_reason: Some(stop_reason.unwrap_or_else(|| "end_turn".to_string())),
+        },
+        usage: None,
+    });
+
+    events
 }
 
 #[cfg(test)]
@@ -364,5 +498,141 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("not-a-number"));
         assert_eq!(AnthropicClient::parse_retry_after(&headers), None);
+    }
+
+    // ── synthesize_stream_events ─────────────────────────────────────────
+
+    fn make_test_response(content: Vec<ResponseContentBlock>, stop_reason: Option<String>) -> MessagesResponse {
+        MessagesResponse {
+            id: "msg_test".into(),
+            response_type: "message".into(),
+            role: "assistant".into(),
+            content,
+            model: "claude-sonnet-4-6".into(),
+            stop_reason,
+            usage: ApiUsage {
+                input_tokens: 10,
+                output_tokens: 20,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        }
+    }
+
+    #[test]
+    fn synthesize_text_response() {
+        let response = make_test_response(
+            vec![ResponseContentBlock::Text { text: "Hello world".into() }],
+            Some("end_turn".into()),
+        );
+        let events = synthesize_stream_events(response);
+        // MessageStart + ContentBlockStart + Delta + Stop + MessageDelta = 5
+        assert_eq!(events.len(), 5);
+        assert!(matches!(&events[0], StreamEvent::MessageStart { .. }));
+        assert!(matches!(&events[1], StreamEvent::ContentBlockStart { index: 0, .. }));
+        match &events[2] {
+            StreamEvent::ContentBlockDelta { delta: DeltaBlock::TextDelta { text }, .. } => {
+                assert_eq!(text, "Hello world");
+            }
+            _ => panic!("expected TextDelta"),
+        }
+        assert!(matches!(&events[3], StreamEvent::ContentBlockStop { index: 0 }));
+        match &events[4] {
+            StreamEvent::MessageDelta { delta, .. } => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
+            }
+            _ => panic!("expected MessageDelta"),
+        }
+    }
+
+    #[test]
+    fn synthesize_tool_use_response() {
+        let response = make_test_response(
+            vec![ResponseContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            }],
+            Some("tool_use".into()),
+        );
+        let events = synthesize_stream_events(response);
+        assert_eq!(events.len(), 5);
+        match &events[1] {
+            StreamEvent::ContentBlockStart { content_block: ResponseContentBlock::ToolUse { id, name, .. }, .. } => {
+                assert_eq!(id, "t1");
+                assert_eq!(name, "Bash");
+            }
+            _ => panic!("expected ToolUse start"),
+        }
+        match &events[2] {
+            StreamEvent::ContentBlockDelta { delta: DeltaBlock::InputJsonDelta { partial_json }, .. } => {
+                let parsed: serde_json::Value = serde_json::from_str(partial_json).unwrap();
+                assert_eq!(parsed["command"], "ls");
+            }
+            _ => panic!("expected InputJsonDelta"),
+        }
+    }
+
+    #[test]
+    fn synthesize_multi_block_response() {
+        let response = make_test_response(
+            vec![
+                ResponseContentBlock::Text { text: "I'll run that command.".into() },
+                ResponseContentBlock::ToolUse {
+                    id: "t2".into(),
+                    name: "FileRead".into(),
+                    input: serde_json::json!({"path": "/tmp/test.txt"}),
+                },
+            ],
+            Some("tool_use".into()),
+        );
+        let events = synthesize_stream_events(response);
+        // MessageStart + 2*(Start+Delta+Stop) + MessageDelta = 1 + 6 + 1 = 8
+        assert_eq!(events.len(), 8);
+    }
+
+    #[test]
+    fn synthesize_default_stop_reason() {
+        let response = make_test_response(
+            vec![ResponseContentBlock::Text { text: "done".into() }],
+            None, // no stop_reason
+        );
+        let events = synthesize_stream_events(response);
+        match events.last() {
+            Some(StreamEvent::MessageDelta { delta, .. }) => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
+            }
+            _ => panic!("expected MessageDelta"),
+        }
+    }
+
+    #[test]
+    fn synthesize_thinking_block() {
+        let response = make_test_response(
+            vec![ResponseContentBlock::Thinking { thinking: "let me think...".into() }],
+            Some("end_turn".into()),
+        );
+        let events = synthesize_stream_events(response);
+        assert_eq!(events.len(), 5);
+        match &events[2] {
+            StreamEvent::ContentBlockDelta { delta: DeltaBlock::ThinkingDelta { thinking }, .. } => {
+                assert_eq!(thinking, "let me think...");
+            }
+            _ => panic!("expected ThinkingDelta"),
+        }
+    }
+
+    #[test]
+    fn clone_for_fallback_copies_fields() {
+        let c = AnthropicClient::new("test-key")
+            .with_base_url("https://custom.api.com")
+            .with_model("test-model")
+            .with_max_tokens(1024);
+        let fallback = c.clone_for_fallback();
+        assert_eq!(fallback.api_key, "test-key");
+        assert_eq!(fallback.base_url, "https://custom.api.com");
+        assert_eq!(fallback.default_model, "test-model");
+        assert_eq!(fallback.max_tokens, 1024);
+        assert!(fallback.backend.is_none());
     }
 }
