@@ -330,3 +330,100 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── short_path ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_short_path_already_short() {
+        assert_eq!(short_path("src/main.rs"), "src/main.rs");
+        assert_eq!(short_path("a/b/c"), "a/b/c");
+    }
+
+    #[test]
+    fn test_short_path_truncates_deep() {
+        let p = "very/deep/nested/path/to/file.rs";
+        let result = short_path(p);
+        assert_eq!(result, "path/to/file.rs");
+    }
+
+    #[test]
+    fn test_short_path_backslash() {
+        let p = r"very\deep\nested\path\to\file.rs";
+        let result = short_path(p);
+        assert_eq!(result, r"path\to\file.rs");
+    }
+
+    // ── format_tool_start ────────────────────────────────────────────
+
+    #[test]
+    fn test_format_tool_start_read() {
+        let result = format_tool_start("Read", &json!({"file_path": "src/main.rs"}));
+        assert!(result.contains("Read"));
+        assert!(result.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_format_tool_start_bash() {
+        let result = format_tool_start("Bash", &json!({"command": "ls -la"}));
+        assert!(result.contains("Bash"));
+        assert!(result.contains("ls -la"));
+    }
+
+    #[test]
+    fn test_format_tool_start_bash_long_command() {
+        let long = "x".repeat(100);
+        let result = format_tool_start("Bash", &json!({"command": long}));
+        assert!(result.contains("…")); // truncated
+    }
+
+    #[test]
+    fn test_format_tool_start_glob() {
+        let result = format_tool_start("Glob", &json!({"pattern": "**/*.rs"}));
+        assert!(result.contains("**/*.rs"));
+    }
+
+    #[test]
+    fn test_format_tool_start_grep() {
+        let result = format_tool_start("Grep", &json!({"pattern": "fn main"}));
+        assert!(result.contains("/fn main/"));
+    }
+
+    #[test]
+    fn test_format_tool_start_web_fetch() {
+        let result = format_tool_start("WebFetch", &json!({"url": "https://example.com"}));
+        assert!(result.contains("https://example.com"));
+    }
+
+    #[test]
+    fn test_format_tool_start_unknown_tool() {
+        let result = format_tool_start("CustomTool", &json!({}));
+        assert!(result.contains("CustomTool"));
+    }
+
+    // ── format_tool_result_inline ────────────────────────────────────
+
+    #[test]
+    fn test_format_result_inline_task_tool() {
+        let result = format_tool_result_inline("TodoWrite", "Task created: fix bug");
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Task created: fix bug"));
+    }
+
+    #[test]
+    fn test_format_result_inline_non_task_tool() {
+        let result = format_tool_result_inline("Read", "file contents...");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_format_result_inline_long_text_truncated() {
+        let long = "x".repeat(200);
+        let result = format_tool_result_inline("task_create", &long);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("…"));
+    }
+}

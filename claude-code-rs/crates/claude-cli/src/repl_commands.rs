@@ -1030,3 +1030,62 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_tokens ────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_tokens_small() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(42), "42");
+        assert_eq!(format_tokens(999), "999");
+    }
+
+    #[test]
+    fn test_format_tokens_thousands() {
+        assert_eq!(format_tokens(1_000), "1.0K");
+        assert_eq!(format_tokens(1_500), "1.5K");
+        assert_eq!(format_tokens(99_999), "100.0K");
+        assert_eq!(format_tokens(999_999), "1000.0K");
+    }
+
+    #[test]
+    fn test_format_tokens_millions() {
+        assert_eq!(format_tokens(1_000_000), "1.0M");
+        assert_eq!(format_tokens(2_500_000), "2.5M");
+        assert_eq!(format_tokens(10_000_000), "10.0M");
+    }
+
+    // ── format_cost ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_cost_zero() {
+        assert_eq!(format_cost(0.0), "$0.00");
+    }
+
+    #[test]
+    fn test_format_cost_tiny() {
+        assert_eq!(format_cost(0.00001), "$0.00");
+    }
+
+    #[test]
+    fn test_format_cost_small() {
+        assert_eq!(format_cost(0.001), "$0.0010");
+        assert_eq!(format_cost(0.0123), "$0.0123");
+    }
+
+    #[test]
+    fn test_format_cost_medium() {
+        assert_eq!(format_cost(0.5), "$0.50");
+        assert_eq!(format_cost(1.23), "$1.23");
+    }
+
+    #[test]
+    fn test_format_cost_large() {
+        assert_eq!(format_cost(10.0), "$10.00");
+        assert_eq!(format_cost(99.99), "$99.99");
+    }
+}

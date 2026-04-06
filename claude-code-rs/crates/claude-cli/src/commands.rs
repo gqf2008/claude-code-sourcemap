@@ -194,3 +194,260 @@ Tips:
   • Use --init to create CLAUDE.md and project scaffolding";
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn no_skills() -> Vec<SkillEntry> { Vec::new() }
+
+    fn test_skills() -> Vec<SkillEntry> {
+        vec![SkillEntry {
+            name: "review".into(),
+            description: "Code review skill".into(),
+            system_prompt: "You are a reviewer".into(),
+            allowed_tools: vec!["Read".into()],
+            model: None,
+        }]
+    }
+
+    // ── parse ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_not_slash() {
+        assert!(SlashCommand::parse("hello", &no_skills()).is_none());
+        assert!(SlashCommand::parse("", &no_skills()).is_none());
+    }
+
+    #[test]
+    fn test_parse_basic_commands() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/help", &s), Some(SlashCommand::Help)));
+        assert!(matches!(SlashCommand::parse("/?", &s), Some(SlashCommand::Help)));
+        assert!(matches!(SlashCommand::parse("/clear", &s), Some(SlashCommand::Clear)));
+        assert!(matches!(SlashCommand::parse("/exit", &s), Some(SlashCommand::Exit)));
+        assert!(matches!(SlashCommand::parse("/quit", &s), Some(SlashCommand::Exit)));
+        assert!(matches!(SlashCommand::parse("/version", &s), Some(SlashCommand::Version)));
+        assert!(matches!(SlashCommand::parse("/diff", &s), Some(SlashCommand::Diff)));
+        assert!(matches!(SlashCommand::parse("/status", &s), Some(SlashCommand::Status)));
+        assert!(matches!(SlashCommand::parse("/undo", &s), Some(SlashCommand::Undo)));
+        assert!(matches!(SlashCommand::parse("/doctor", &s), Some(SlashCommand::Doctor)));
+        assert!(matches!(SlashCommand::parse("/init", &s), Some(SlashCommand::Init)));
+        assert!(matches!(SlashCommand::parse("/login", &s), Some(SlashCommand::Login)));
+        assert!(matches!(SlashCommand::parse("/logout", &s), Some(SlashCommand::Logout)));
+        assert!(matches!(SlashCommand::parse("/cost", &s), Some(SlashCommand::Cost)));
+        assert!(matches!(SlashCommand::parse("/skills", &s), Some(SlashCommand::Skills)));
+    }
+
+    #[test]
+    fn test_parse_case_insensitive() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/HELP", &s), Some(SlashCommand::Help)));
+        assert!(matches!(SlashCommand::parse("/Model sonnet", &s), Some(SlashCommand::Model(_))));
+    }
+
+    #[test]
+    fn test_parse_with_args() {
+        let s = no_skills();
+        match SlashCommand::parse("/model opus", &s) {
+            Some(SlashCommand::Model(name)) => assert_eq!(name, "opus"),
+            _ => panic!("expected Model"),
+        }
+        match SlashCommand::parse("/compact focus on code", &s) {
+            Some(SlashCommand::Compact { instructions }) => assert_eq!(instructions, "focus on code"),
+            _ => panic!("expected Compact"),
+        }
+        match SlashCommand::parse("/commit fix: typo", &s) {
+            Some(SlashCommand::Commit { message }) => assert_eq!(message, "fix: typo"),
+            _ => panic!("expected Commit"),
+        }
+        match SlashCommand::parse("/review check security", &s) {
+            Some(SlashCommand::Review { prompt }) => assert_eq!(prompt, "check security"),
+            _ => panic!("expected Review"),
+        }
+    }
+
+    #[test]
+    fn test_parse_aliases() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/perms", &s), Some(SlashCommand::Permissions)));
+        assert!(matches!(SlashCommand::parse("/permissions", &s), Some(SlashCommand::Permissions)));
+        assert!(matches!(SlashCommand::parse("/ctx", &s), Some(SlashCommand::Context)));
+        assert!(matches!(SlashCommand::parse("/context", &s), Some(SlashCommand::Context)));
+        assert!(matches!(SlashCommand::parse("/resume", &s), Some(SlashCommand::Session { .. })));
+    }
+
+    #[test]
+    fn test_parse_memory_session_subcommands() {
+        let s = no_skills();
+        match SlashCommand::parse("/memory list", &s) {
+            Some(SlashCommand::Memory { sub }) => assert_eq!(sub, "list"),
+            _ => panic!("expected Memory"),
+        }
+        match SlashCommand::parse("/session save", &s) {
+            Some(SlashCommand::Session { sub }) => assert_eq!(sub, "save"),
+            _ => panic!("expected Session"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_default_format() {
+        let s = no_skills();
+        match SlashCommand::parse("/export", &s) {
+            Some(SlashCommand::Export { format }) => assert_eq!(format, "markdown"),
+            _ => panic!("expected Export"),
+        }
+        match SlashCommand::parse("/export json", &s) {
+            Some(SlashCommand::Export { format }) => assert_eq!(format, "json"),
+            _ => panic!("expected Export json"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unknown_command() {
+        let s = no_skills();
+        match SlashCommand::parse("/foobar", &s) {
+            Some(SlashCommand::Unknown(name)) => assert_eq!(name, "foobar"),
+            _ => panic!("expected Unknown"),
+        }
+    }
+
+    #[test]
+    fn test_parse_skill_match() {
+        let skills = test_skills();
+        match SlashCommand::parse("/review do a review", &skills) {
+            Some(SlashCommand::Review { .. }) => {} // /review is a built-in, takes precedence
+            _ => panic!("expected Review"),
+        }
+
+        // A custom skill name that doesn't conflict with built-ins
+        let skills = vec![SkillEntry {
+            name: "myskill".into(),
+            description: "My custom skill".into(),
+            system_prompt: "".into(),
+            allowed_tools: vec![],
+            model: None,
+        }];
+        match SlashCommand::parse("/myskill do stuff", &skills) {
+            Some(SlashCommand::RunSkill { name, prompt }) => {
+                assert_eq!(name, "myskill");
+                assert_eq!(prompt, "do stuff");
+            }
+            _ => panic!("expected RunSkill"),
+        }
+    }
+
+    // ── execute ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_execute_help() {
+        let cmd = SlashCommand::Help;
+        match cmd.execute(&no_skills()) {
+            CommandResult::Print(text) => assert!(text.contains("/help")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_help_with_skills() {
+        let cmd = SlashCommand::Help;
+        let skills = test_skills();
+        match cmd.execute(&skills) {
+            CommandResult::Print(text) => {
+                assert!(text.contains("/help"));
+                assert!(text.contains("review"));
+                assert!(text.contains("Code review skill"));
+            }
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_clear() {
+        let cmd = SlashCommand::Clear;
+        assert!(matches!(cmd.execute(&no_skills()), CommandResult::ClearHistory));
+    }
+
+    #[test]
+    fn test_execute_model_empty() {
+        let cmd = SlashCommand::Model(String::new());
+        match cmd.execute(&no_skills()) {
+            CommandResult::Print(text) => assert!(text.contains("Usage")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_model_set() {
+        let cmd = SlashCommand::Model("opus".into());
+        match cmd.execute(&no_skills()) {
+            CommandResult::SetModel(name) => assert_eq!(name, "opus"),
+            _ => panic!("expected SetModel"),
+        }
+    }
+
+    #[test]
+    fn test_execute_version() {
+        let cmd = SlashCommand::Version;
+        match cmd.execute(&no_skills()) {
+            CommandResult::Print(text) => assert!(text.contains("claude-code-rs")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_skills_empty() {
+        let cmd = SlashCommand::Skills;
+        match cmd.execute(&no_skills()) {
+            CommandResult::Print(text) => assert!(text.contains("No skills")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_skills_list() {
+        let cmd = SlashCommand::Skills;
+        let skills = test_skills();
+        match cmd.execute(&skills) {
+            CommandResult::Print(text) => {
+                assert!(text.contains("/review"));
+                assert!(text.contains("Code review skill"));
+            }
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_compact_with_instructions() {
+        let cmd = SlashCommand::Compact { instructions: "focus on code".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Compact { instructions } => {
+                assert_eq!(instructions.as_deref(), Some("focus on code"));
+            }
+            _ => panic!("expected Compact"),
+        }
+    }
+
+    #[test]
+    fn test_execute_compact_empty() {
+        let cmd = SlashCommand::Compact { instructions: String::new() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Compact { instructions } => assert!(instructions.is_none()),
+            _ => panic!("expected Compact"),
+        }
+    }
+
+    #[test]
+    fn test_execute_unknown() {
+        let cmd = SlashCommand::Unknown("xyz".into());
+        match cmd.execute(&no_skills()) {
+            CommandResult::Print(text) => assert!(text.contains("Unknown")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn test_execute_exit() {
+        let cmd = SlashCommand::Exit;
+        assert!(matches!(cmd.execute(&no_skills()), CommandResult::Exit));
+    }
+}
