@@ -229,3 +229,131 @@ impl Tool for WebFetchTool {
         }
     }
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── html_to_markdown ────────────────────────────────────────
+
+    #[test]
+    fn plain_text_unchanged() {
+        assert_eq!(html_to_markdown("hello world"), "hello world");
+    }
+
+    #[test]
+    fn strips_html_tags() {
+        let html = "<p>Hello</p>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("Hello"));
+        assert!(!md.contains("<p>"));
+    }
+
+    #[test]
+    fn converts_headings() {
+        assert!(html_to_markdown("<h1>Title</h1>").contains("# Title"));
+        assert!(html_to_markdown("<h2>Sub</h2>").contains("## Sub"));
+        assert!(html_to_markdown("<h3>Sub3</h3>").contains("### Sub3"));
+    }
+
+    #[test]
+    fn converts_bold_and_italic() {
+        assert!(html_to_markdown("<strong>bold</strong>").contains("**bold**"));
+        assert!(html_to_markdown("<b>bold</b>").contains("**bold**"));
+        assert!(html_to_markdown("<em>italic</em>").contains("*italic*"));
+    }
+
+    #[test]
+    fn converts_code_blocks() {
+        assert!(html_to_markdown("<code>x</code>").contains("`x`"));
+        let pre = html_to_markdown("<pre>code block</pre>");
+        assert!(pre.contains("```"));
+        assert!(pre.contains("code block"));
+    }
+
+    #[test]
+    fn converts_list_items() {
+        let md = html_to_markdown("<ul><li>a</li><li>b</li></ul>");
+        assert!(md.contains("- a"));
+        assert!(md.contains("- b"));
+    }
+
+    #[test]
+    fn converts_hr() {
+        assert!(html_to_markdown("<hr>").contains("---"));
+        assert!(html_to_markdown("<hr/>").contains("---"));
+    }
+
+    #[test]
+    fn converts_br_to_newline() {
+        let md = html_to_markdown("a<br>b");
+        assert!(md.contains("a\nb"));
+    }
+
+    #[test]
+    fn strips_script_and_style() {
+        let html = "<script>alert(1)</script>visible<style>.x{}</style>also visible";
+        let md = html_to_markdown(html);
+        assert!(!md.contains("alert"));
+        assert!(!md.contains(".x{}"));
+        assert!(md.contains("visible"));
+        assert!(md.contains("also visible"));
+    }
+
+    #[test]
+    fn decodes_html_entities() {
+        assert_eq!(html_to_markdown("&amp;"), "&");
+        assert_eq!(html_to_markdown("&lt;"), "<");
+        assert_eq!(html_to_markdown("&gt;"), ">");
+        assert_eq!(html_to_markdown("&quot;"), "\"");
+        assert_eq!(html_to_markdown("&apos;"), "'");
+        // &nbsp; decodes to space (may be trimmed by collapse_blank_lines when isolated)
+        assert!(html_to_markdown("a&nbsp;b").contains("a b"));
+        assert_eq!(html_to_markdown("&mdash;"), "—");
+        assert_eq!(html_to_markdown("&ndash;"), "–");
+    }
+
+    #[test]
+    fn preserves_unknown_entities() {
+        let md = html_to_markdown("&foobar;");
+        assert!(md.contains("&foobar;"));
+    }
+
+    #[test]
+    fn converts_blockquote() {
+        assert!(html_to_markdown("<blockquote>Quote</blockquote>").contains("> Quote"));
+    }
+
+    // ── extract_main_content ────────────────────────────────────
+
+    #[test]
+    fn extract_article_tag() {
+        let html = r#"<html><body><nav>nav</nav><article><p>Main text</p></article></body></html>"#;
+        let content = extract_main_content(html);
+        assert!(content.contains("Main text"));
+        assert!(!content.contains("nav"));
+    }
+
+    #[test]
+    fn extract_main_tag() {
+        let html = r#"<html><body><header>H</header><main><p>Content</p></main></body></html>"#;
+        let content = extract_main_content(html);
+        assert!(content.contains("Content"));
+    }
+
+    #[test]
+    fn fallback_to_body() {
+        let html = r#"<html><body><p>Body text</p></body></html>"#;
+        let content = extract_main_content(html);
+        assert!(content.contains("Body text"));
+    }
+
+    #[test]
+    fn fallback_entire_html() {
+        let html = "Just plain text without tags";
+        let content = extract_main_content(html);
+        assert_eq!(content, "Just plain text without tags");
+    }
+}
