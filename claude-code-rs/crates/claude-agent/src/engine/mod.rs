@@ -89,6 +89,14 @@ impl QueryEngine {
     ) -> std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>> {
         let mut prompt_text: String = user_prompt.into();
 
+        // ── Empty prompt validation ──────────────────────────────────────────
+        if prompt_text.trim().is_empty() {
+            let err_stream = async_stream::stream! {
+                yield AgentEvent::Error("Prompt cannot be empty".to_string());
+            };
+            return Box::pin(err_stream);
+        }
+
         // ── UserPromptSubmit hook ────────────────────────────────────────────
         if self.hooks.has_hooks(HookEvent::UserPromptSubmit) {
             let ctx = self.hooks.prompt_ctx(HookEvent::UserPromptSubmit, Some(prompt_text.clone()));
@@ -630,5 +638,37 @@ mod tests {
         // No hooks configured → returns None
         let result = engine.run_session_start().await;
         assert!(result.is_none());
+    }
+
+    // ── submit empty prompt ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_submit_empty_prompt_returns_error() {
+        use tokio_stream::StreamExt as _;
+
+        let engine = build_test_engine();
+        let mut stream = engine.submit("").await;
+        let first = stream.next().await;
+        match first {
+            Some(AgentEvent::Error(msg)) => {
+                assert!(msg.contains("empty"), "expected empty-prompt error, got: {msg}");
+            }
+            other => panic!("expected Error event, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_submit_whitespace_prompt_returns_error() {
+        use tokio_stream::StreamExt as _;
+
+        let engine = build_test_engine();
+        let mut stream = engine.submit("   \n\t  ").await;
+        let first = stream.next().await;
+        match first {
+            Some(AgentEvent::Error(msg)) => {
+                assert!(msg.contains("empty"), "expected empty-prompt error, got: {msg}");
+            }
+            other => panic!("expected Error event, got: {other:?}"),
+        }
     }
 }
