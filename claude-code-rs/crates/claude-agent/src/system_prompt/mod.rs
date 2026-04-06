@@ -101,16 +101,15 @@ pub fn build_system_prompt_ext(
     memory_content: &str,
     dynamic: &DynamicSections<'_>,
 ) -> SystemPrompt {
-    let mut parts: Vec<String> = Vec::new();
-
-    // ── Static prefix (globally cacheable) ───────────────────────────────
-    parts.push(DEFAULT_PREFIX.to_string());
-    parts.push(section_system_guidelines().to_string());
-    parts.push(section_doing_tasks().to_string());
-    parts.push(section_actions().to_string());
-    parts.push(section_using_tools().to_string());
-    parts.push(section_tone_style().to_string());
-    parts.push(section_output_efficiency().to_string());
+    let parts: Vec<String> = vec![
+        DEFAULT_PREFIX.to_string(),
+        section_system_guidelines().to_string(),
+        section_doing_tasks().to_string(),
+        section_actions().to_string(),
+        section_using_tools().to_string(),
+        section_tone_style().to_string(),
+        section_output_efficiency().to_string(),
+    ];
 
     let static_text = parts.join("\n");
     let dynamic_boundary_offset = static_text.len() + 1 + SYSTEM_PROMPT_DYNAMIC_BOUNDARY.len() + 1;
@@ -214,6 +213,7 @@ pub fn build_system_prompt_ext(
 /// 5. Default — built from sections
 ///
 /// `append_prompt` is always added at the end (unless override is set).
+#[allow(clippy::too_many_arguments)]
 pub fn build_effective_system_prompt(
     cwd: &Path,
     model: &str,

@@ -16,6 +16,12 @@ use crate::query::{query_stream, AgentEvent, QueryConfig};
 use crate::state::new_shared_state;
 use claude_tools::ToolRegistry;
 
+/// Shared map of cancellation tokens, keyed by agent ID.
+pub type CancelTokenMap = Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>>;
+
+/// Shared map of agent message channels, keyed by agent ID.
+pub type AgentChannelMap = Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>;
+
 /// Configuration passed into the sub-agent.
 pub struct SubAgentConfig {
     pub model: String,
@@ -124,9 +130,9 @@ pub struct DispatchAgentTool {
     /// Optional tracker for background agent execution (coordinator mode).
     pub agent_tracker: Option<AgentTracker>,
     /// Shared cancel tokens — used by TaskStop to abort background agents.
-    pub cancel_tokens: Option<Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>>>,
+    pub cancel_tokens: Option<CancelTokenMap>,
     /// Shared agent message channels — used by SendMessage to deliver follow-ups.
-    pub agent_channels: Option<Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>>,
+    pub agent_channels: Option<AgentChannelMap>,
 }
 
 #[async_trait]

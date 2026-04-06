@@ -174,7 +174,7 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
             let filename = format!("claude_export_{}.md", timestamp);
             let path = cwd.join(&filename);
             let mut md = String::new();
-            md.push_str(&format!("# Claude Conversation Export\n\n"));
+            md.push_str("# Claude Conversation Export\n\n");
             md.push_str(&format!("Model: {}\n\n", state.model));
 
             for msg in &state.messages {

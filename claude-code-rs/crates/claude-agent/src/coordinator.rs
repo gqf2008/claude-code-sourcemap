@@ -16,6 +16,8 @@ use uuid::Uuid;
 use claude_core::message::{ContentBlock, Message, UserMessage};
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 
+use crate::dispatch_agent::{AgentChannelMap, CancelTokenMap};
+
 // ── Background agent tracking ────────────────────────────────────────────────
 
 /// Status of a background worker agent.
@@ -264,7 +266,7 @@ pub struct SendMessageTool {
     pub tracker: AgentTracker,
     /// Channel to deliver follow-up messages to the background agent task.
     /// Key: agent_id → sender that can push text into that agent's input queue.
-    pub agent_channels: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<String>>>>,
+    pub agent_channels: AgentChannelMap,
 }
 
 #[async_trait::async_trait]
@@ -343,7 +345,7 @@ impl Tool for SendMessageTool {
 /// Tool for stopping a running background agent.
 pub struct TaskStopTool {
     pub tracker: AgentTracker,
-    pub cancel_tokens: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    pub cancel_tokens: CancelTokenMap,
 }
 
 #[async_trait::async_trait]

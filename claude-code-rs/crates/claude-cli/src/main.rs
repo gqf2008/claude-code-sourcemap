@@ -392,7 +392,6 @@ fn generate_claude_md_template(cwd: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use clap::Parser;
-    use std::path::Path;
 
     // ── CLI arg parsing ──────────────────────────────────────────────
 

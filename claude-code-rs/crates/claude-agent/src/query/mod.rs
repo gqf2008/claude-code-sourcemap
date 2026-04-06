@@ -66,6 +66,7 @@ impl Default for QueryConfig {
 }
 
 /// Core agent loop: send messages → process stream → execute tools → repeat
+#[allow(clippy::too_many_arguments)]
 pub fn query_stream(
     client: Arc<AnthropicClient>,
     executor: Arc<ToolExecutor>,

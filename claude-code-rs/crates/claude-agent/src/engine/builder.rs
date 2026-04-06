@@ -16,7 +16,7 @@ use crate::compact::AutoCompactState;
 use crate::compact::AUTO_COMPACT_THRESHOLD;
 use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool};
 use crate::cost::CostTracker;
-use crate::dispatch_agent::{DispatchAgentTool, SubAgentConfig};
+use crate::dispatch_agent::{AgentChannelMap, CancelTokenMap, DispatchAgentTool, SubAgentConfig};
 use crate::executor::ToolExecutor;
 use crate::hooks::HookRegistry;
 use crate::permissions::PermissionChecker;
@@ -242,10 +242,8 @@ impl QueryEngineBuilder {
         // ── Coordinator mode setup ───────────────────────────────────────────
         let (agent_tracker, notification_rx, coord_cancel_tokens, coord_agent_channels) = if self.coordinator_mode {
             let (tracker, rx) = AgentTracker::new();
-            let agent_channels: Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>> =
-                Arc::new(RwLock::new(HashMap::new()));
-            let cancel_tokens: Arc<RwLock<HashMap<String, tokio_util::sync::CancellationToken>>> =
-                Arc::new(RwLock::new(HashMap::new()));
+            let agent_channels: AgentChannelMap = Arc::new(RwLock::new(HashMap::new()));
+            let cancel_tokens: CancelTokenMap = Arc::new(RwLock::new(HashMap::new()));
 
             registry.register(SendMessageTool {
                 tracker: tracker.clone(),

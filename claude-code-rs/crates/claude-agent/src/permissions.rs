@@ -177,7 +177,7 @@ impl PermissionChecker {
                         if selected > 0 { selected -= 1; }
                     }
                     KeyCode::Down => {
-                        if selected < options.len() - 1 { selected += 1; }
+                        if selected < options.len().saturating_sub(1) { selected += 1; }
                     }
                     KeyCode::Enter => {
                         break options[selected].1.clone();
