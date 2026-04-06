@@ -117,31 +117,52 @@ impl std::fmt::Display for SettingsSource {
 
 // ── Main settings struct ────────────────────────────────────────────────────
 
+/// Merged configuration produced from up to 4 layers (user → project → local → CLI).
+///
+/// Settings are loaded from JSON files at well-known paths and merged with
+/// later layers taking priority.  See [`load_settings`] for the merge order
+/// and [`SettingsSource`] for the layer definitions.
+///
+/// # Layer paths
+/// | Layer   | Path                                     |
+/// |---------|------------------------------------------|
+/// | User    | `~/.claude/settings.json`                |
+/// | Project | `$CWD/.claude/settings.json`             |
+/// | Local   | `$CWD/.claude/settings.local.json`       |
+/// | CLI     | command-line flags / env vars (runtime)   |
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
+    /// Anthropic API key (usually set via `ANTHROPIC_API_KEY` env var).
     #[serde(default)]
     pub api_key: Option<String>,
+    /// Model identifier (e.g. `"claude-sonnet-4-20250514"`).
     #[serde(default)]
     pub model: Option<String>,
+    /// Permission mode: `"default"`, `"allowlist"`, or `"deny"`.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// Tools the model is allowed to call (empty = all).
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    /// Tools explicitly denied to the model.
     #[serde(default)]
     pub denied_tools: Vec<String>,
+    /// Completely replace the built-in system prompt with this text.
     #[serde(default)]
     pub custom_system_prompt: Option<String>,
+    /// Text appended to the system prompt after all built-in sections.
     #[serde(default)]
     pub append_system_prompt: Option<String>,
+    /// Path-based permission rules (allow/deny) for file and command tools.
     #[serde(default)]
     pub permission_rules: Vec<PermissionRule>,
     /// Lifecycle hook configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
-    /// Language preference (e.g. "中文", "English").
+    /// Language preference (e.g. `"中文"`, `"English"`).
     #[serde(default)]
     pub language: Option<String>,
-    /// Output style name (e.g. "concise", "verbose").
+    /// Output style name (e.g. `"concise"`, `"verbose"`).
     #[serde(default)]
     pub output_style: Option<String>,
 }

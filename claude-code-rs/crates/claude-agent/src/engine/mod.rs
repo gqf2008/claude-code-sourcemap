@@ -671,4 +671,103 @@ mod tests {
             other => panic!("expected Error event, got: {other:?}"),
         }
     }
+
+    // ── builder: system prompt assembly ──────────────────────────────
+
+    #[test]
+    fn test_builder_append_system_prompt() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .system_prompt("Base prompt.")
+            .append_system_prompt(Some("Extra instructions.".into()))
+            .build();
+
+        assert!(
+            engine.config.system_prompt.contains("Base prompt."),
+            "should contain base prompt"
+        );
+        assert!(
+            engine.config.system_prompt.contains("Extra instructions."),
+            "should contain appended prompt"
+        );
+    }
+
+    #[test]
+    fn test_builder_append_empty_no_change() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .system_prompt("Base prompt.")
+            .append_system_prompt(Some(String::new()))
+            .build();
+
+        // Empty append should not add trailing newlines
+        assert!(!engine.config.system_prompt.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn test_builder_thinking_config_propagated() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .thinking(Some(claude_api::types::ThinkingConfig {
+                thinking_type: "enabled".into(),
+                budget_tokens: Some(20_000),
+            }))
+            .build();
+
+        let tc = engine.config.thinking.as_ref().expect("thinking should be set");
+        assert_eq!(tc.thinking_type, "enabled");
+        assert_eq!(tc.budget_tokens, Some(20_000));
+    }
+
+    #[test]
+    fn test_builder_cost_tracker_starts_at_zero() {
+        let engine = build_test_engine();
+        assert!((engine.cost_tracker().total_usd() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_builder_tool_count_includes_dispatch() {
+        let engine = build_test_engine();
+        // Should have all default tools + DispatchAgent
+        assert!(engine.tool_count() > 10, "expected many tools, got {}", engine.tool_count());
+    }
+
+    #[test]
+    fn test_builder_context_window_default_model() {
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .build();
+
+        // Default model is sonnet → 200K context window
+        assert!(engine.context_window >= 200_000,
+            "expected ≥200K context, got {}", engine.context_window);
+    }
+
+    #[test]
+    fn test_builder_hooks_config_applied() {
+        use claude_core::config::{HooksConfig, HookCommandDef, HookRule};
+
+        let mut hooks = HooksConfig::default();
+        hooks.pre_tool_use = vec![HookRule {
+            matcher: Some("Bash".into()),
+            hooks: vec![HookCommandDef {
+                hook_type: "command".into(),
+                command: "echo hello".into(),
+                timeout_ms: None,
+            }],
+        }];
+
+        let engine = QueryEngineBuilder::new("fake-key", "/tmp")
+            .load_claude_md(false)
+            .load_memory(false)
+            .hooks_config(hooks)
+            .build();
+
+        // The hooks registry should have at least 1 rule
+        assert!(engine.hooks.has_hooks(crate::hooks::HookEvent::PreToolUse));
+    }
 }
