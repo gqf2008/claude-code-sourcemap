@@ -223,3 +223,147 @@ pub(crate) async fn handle_commit(engine: &QueryEngine, cwd: &std::path::Path, u
         eprintln!("\x1b[31mCommit error: {}\x1b[0m", e);
     }
 }
+
+/// Create or review a pull request.
+pub(crate) async fn handle_pr(engine: &QueryEngine, custom_prompt: &str, cwd: &std::path::Path) {
+    // Get current branch and default branch
+    let current_branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let default_branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            s.strip_prefix("origin/").unwrap_or(&s).to_string()
+        })
+        .unwrap_or_else(|| "main".into());
+
+    let diff = std::process::Command::new("git")
+        .args(["diff", &format!("origin/{}...HEAD", default_branch)])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline", &format!("origin/{}..HEAD", default_branch)])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    if diff.is_empty() && log.is_empty() {
+        println!("No commits ahead of {}. Push some changes first.", default_branch);
+        return;
+    }
+
+    let user_note = if custom_prompt.is_empty() {
+        String::new()
+    } else {
+        format!("\nUser's instructions: {}\n", custom_prompt)
+    };
+
+    let prompt = format!(
+        "Help me create a pull request for the branch `{branch}` targeting `{base}`.\n\n\
+         Rules:\n\
+         - Analyze the commits and diff below\n\
+         - Generate a clear PR title and description\n\
+         - PR title should be concise and descriptive\n\
+         - PR description should include: summary of changes, motivation, testing notes\n\
+         - Use markdown formatting in the description\n\
+         {user_note}\n\
+         Commits:\n```\n{log}\n```\n\n\
+         Diff:\n```diff\n{diff}\n```",
+        branch = current_branch,
+        base = default_branch,
+        user_note = user_note,
+        log = log.trim(),
+        diff = if diff.len() > 12000 {
+            format!("{}…\n[truncated, {} total bytes]", &diff[..12000], diff.len())
+        } else {
+            diff
+        },
+    );
+
+    println!("\x1b[35m[PR]\x1b[0m Analyzing {} → {}…", current_branch, default_branch);
+    let model = { engine.state().read().await.model.clone() };
+    let stream = engine.submit(&prompt).await;
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+        eprintln!("\x1b[31mPR error: {}\x1b[0m", e);
+    }
+}
+
+/// Debug a problem with AI assistance.
+pub(crate) async fn handle_bug(engine: &QueryEngine, custom_prompt: &str, cwd: &std::path::Path) {
+    let mut context_parts: Vec<String> = Vec::new();
+
+    // Collect recent git log for context
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["log", "--oneline", "-5"])
+        .current_dir(cwd)
+        .output()
+    {
+        let log = String::from_utf8_lossy(&out.stdout).to_string();
+        if !log.is_empty() {
+            context_parts.push(format!("Recent commits:\n```\n{}\n```", log.trim()));
+        }
+    }
+
+    // Collect recent diff
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["diff", "HEAD~1"])
+        .current_dir(cwd)
+        .output()
+    {
+        let diff = String::from_utf8_lossy(&out.stdout).to_string();
+        if !diff.is_empty() {
+            let truncated = if diff.len() > 6000 {
+                format!("{}…\n[truncated]", &diff[..6000])
+            } else {
+                diff
+            };
+            context_parts.push(format!("Recent changes:\n```diff\n{}\n```", truncated));
+        }
+    }
+
+    let context = if context_parts.is_empty() {
+        "No git context available.".to_string()
+    } else {
+        context_parts.join("\n\n")
+    };
+
+    let user_note = if custom_prompt.is_empty() {
+        "Help me identify and fix bugs in the recent changes.".to_string()
+    } else {
+        custom_prompt.to_string()
+    };
+
+    let prompt = format!(
+        "Debug the following problem:\n\n{user_note}\n\n\
+         Instructions:\n\
+         - Read the relevant source files to understand the code\n\
+         - Identify the root cause of the problem\n\
+         - Suggest a specific fix with code changes\n\
+         - If the problem description is vague, ask clarifying questions\n\n\
+         {context}",
+        user_note = user_note,
+        context = context,
+    );
+
+    println!("\x1b[35m[Debug]\x1b[0m Investigating…");
+    let model = { engine.state().read().await.model.clone() };
+    let stream = engine.submit(&prompt).await;
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+        eprintln!("\x1b[31mDebug error: {}\x1b[0m", e);
+    }
+}

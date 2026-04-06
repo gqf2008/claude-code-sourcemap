@@ -18,6 +18,8 @@ pub enum SlashCommand {
     Doctor,
     Init,
     Commit { message: String },
+    Pr { prompt: String },
+    Bug { prompt: String },
     Version,
     Login,
     Logout,
@@ -54,6 +56,8 @@ impl SlashCommand {
             "doctor" => Self::Doctor,
             "init" => Self::Init,
             "commit" => Self::Commit { message: args },
+            "pr" => Self::Pr { prompt: args },
+            "bug" | "debug" => Self::Bug { prompt: args },
             "version" => Self::Version,
             "login" => Self::Login,
             "logout" => Self::Logout,
@@ -118,6 +122,8 @@ impl SlashCommand {
             Self::Doctor => CommandResult::Doctor,
             Self::Init => CommandResult::Init,
             Self::Commit { message } => CommandResult::Commit { message: message.clone() },
+            Self::Pr { prompt } => CommandResult::Pr { prompt: prompt.clone() },
+            Self::Bug { prompt } => CommandResult::Bug { prompt: prompt.clone() },
             Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
             Self::Login => CommandResult::Login,
             Self::Logout => CommandResult::Logout,
@@ -153,6 +159,8 @@ pub enum CommandResult {
     Doctor,
     Init,
     Commit { message: String },
+    Pr { prompt: String },
+    Bug { prompt: String },
     Login,
     Logout,
     Context,
@@ -187,6 +195,8 @@ Available commands:
   /doctor            Check environment health
   /init              Initialize CLAUDE.md for the current project
   /commit [msg]      Stage and commit changes (AI-generated message)
+  /pr [prompt]       Create or review a pull request
+  /bug [prompt]      Debug a problem with AI assistance
   /version           Show version info
   /login             Set API key interactively
   /logout            Clear saved API key
@@ -465,5 +475,48 @@ mod tests {
     fn test_execute_exit() {
         let cmd = SlashCommand::Exit;
         assert!(matches!(cmd.execute(&no_skills()), CommandResult::Exit));
+    }
+
+    // ── new P27 commands ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_pr() {
+        let s = no_skills();
+        match SlashCommand::parse("/pr fix auth", &s) {
+            Some(SlashCommand::Pr { prompt }) => assert_eq!(prompt, "fix auth"),
+            _ => panic!("expected Pr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_bug() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/bug login broken", &s), Some(SlashCommand::Bug { .. })));
+        assert!(matches!(SlashCommand::parse("/debug crash", &s), Some(SlashCommand::Bug { .. })));
+    }
+
+    #[test]
+    fn test_execute_pr() {
+        let cmd = SlashCommand::Pr { prompt: "review security".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Pr { prompt } => assert_eq!(prompt, "review security"),
+            _ => panic!("expected Pr"),
+        }
+    }
+
+    #[test]
+    fn test_execute_bug() {
+        let cmd = SlashCommand::Bug { prompt: "OOM crash".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Bug { prompt } => assert_eq!(prompt, "OOM crash"),
+            _ => panic!("expected Bug"),
+        }
+    }
+
+    #[test]
+    fn test_help_text_includes_new_commands() {
+        let text = build_help_text(&no_skills());
+        assert!(text.contains("/pr"));
+        assert!(text.contains("/bug"));
     }
 }

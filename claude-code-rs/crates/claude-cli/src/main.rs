@@ -4,7 +4,7 @@ mod repl_commands;
 mod commands;
 mod output;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 use claude_core::skills::load_skills;
 
@@ -93,11 +93,22 @@ struct Cli {
     /// Additional system prompt text appended to the default prompt
     #[arg(long)]
     append_system_prompt: Option<String>,
+
+    /// Generate shell completions and exit (bash, zsh, fish, powershell)
+    #[arg(long, value_name = "SHELL")]
+    completions: Option<clap_complete::Shell>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // ── Handle --completions: generate shell completions and exit ────────
+    if let Some(shell) = cli.completions {
+        let mut cmd = Cli::command();
+        clap_complete::generate(shell, &mut cmd, "claude", &mut std::io::stdout());
+        return Ok(());
+    }
 
     let filter = if cli.verbose { EnvFilter::new("debug") } else { EnvFilter::new("warn") };
     tracing_subscriber::fmt().with_env_filter(filter).init();
