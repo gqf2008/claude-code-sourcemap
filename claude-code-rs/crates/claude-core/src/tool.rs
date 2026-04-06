@@ -139,3 +139,89 @@ pub trait Tool: Send + Sync {
 }
 
 pub type DynTool = Arc<dyn Tool>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abort_signal_default_not_aborted() {
+        let signal = AbortSignal::new();
+        assert!(!signal.is_aborted());
+    }
+
+    #[test]
+    fn abort_signal_abort_and_check() {
+        let signal = AbortSignal::new();
+        signal.abort();
+        assert!(signal.is_aborted());
+    }
+
+    #[test]
+    fn abort_signal_reset() {
+        let signal = AbortSignal::new();
+        signal.abort();
+        assert!(signal.is_aborted());
+        signal.reset();
+        assert!(!signal.is_aborted());
+    }
+
+    #[test]
+    fn abort_signal_clone_shares_state() {
+        let s1 = AbortSignal::new();
+        let s2 = s1.clone();
+        s1.abort();
+        assert!(s2.is_aborted());
+        s2.reset();
+        assert!(!s1.is_aborted());
+    }
+
+    #[test]
+    fn abort_signal_default_impl() {
+        let signal = AbortSignal::default();
+        assert!(!signal.is_aborted());
+    }
+
+    #[test]
+    fn tool_result_text() {
+        let r = ToolResult::text("hello");
+        assert!(!r.is_error);
+        assert_eq!(r.content.len(), 1);
+        match &r.content[0] {
+            ToolResultContent::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn tool_result_error() {
+        let r = ToolResult::error("fail");
+        assert!(r.is_error);
+        match &r.content[0] {
+            ToolResultContent::Text { text } => assert_eq!(text, "fail"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn tool_context_clone() {
+        let ctx = ToolContext {
+            cwd: PathBuf::from("/tmp"),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        };
+        let ctx2 = ctx.clone();
+        assert_eq!(ctx2.cwd, PathBuf::from("/tmp"));
+        assert!(!ctx2.abort_signal.is_aborted());
+    }
+
+    #[test]
+    fn tool_category_display() {
+        assert_eq!(ToolCategory::FileSystem.to_string(), "filesystem");
+        assert_eq!(ToolCategory::Shell.to_string(), "shell");
+        assert_eq!(ToolCategory::Web.to_string(), "web");
+        assert_eq!(ToolCategory::Mcp.to_string(), "mcp");
+        assert_eq!(ToolCategory::Git.to_string(), "git");
+    }
+}

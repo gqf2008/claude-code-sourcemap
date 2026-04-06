@@ -244,3 +244,93 @@ impl AnthropicClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_default_constructor() {
+        let c = AnthropicClient::new("sk-test-key");
+        assert_eq!(c.api_key, "sk-test-key");
+        assert_eq!(c.base_url, DEFAULT_BASE_URL);
+        assert_eq!(c.default_model, DEFAULT_MODEL);
+        assert_eq!(c.max_tokens, 16384);
+    }
+
+    #[test]
+    fn client_builder_chain() {
+        let c = AnthropicClient::new("key123")
+            .with_base_url("https://custom.api.com")
+            .with_model("claude-haiku-4-5")
+            .with_max_tokens(4096)
+            .with_retry_config(RetryConfig {
+                max_retries: 5,
+                ..RetryConfig::default()
+            });
+        assert_eq!(c.base_url, "https://custom.api.com");
+        assert_eq!(c.default_model, "claude-haiku-4-5");
+        assert_eq!(c.max_tokens, 4096);
+        assert_eq!(c.retry_config.max_retries, 5);
+    }
+
+    #[test]
+    fn client_headers() {
+        let c = AnthropicClient::new("sk-ant-test");
+        let headers = c.headers().unwrap();
+        assert_eq!(headers.get("x-api-key").unwrap(), "sk-ant-test");
+        assert_eq!(headers.get("anthropic-version").unwrap(), API_VERSION);
+        assert_eq!(headers.get("content-type").unwrap(), "application/json");
+        assert!(headers.get("anthropic-beta").is_some());
+    }
+
+    #[test]
+    fn client_build_request() {
+        let c = AnthropicClient::new("key")
+            .with_model("test-model")
+            .with_max_tokens(8192);
+
+        let req = c.build_request(vec![], None, None);
+        assert_eq!(req.model, "test-model");
+        assert_eq!(req.max_tokens, 8192);
+        assert!(!req.stream);
+        assert!(req.system.is_none());
+        assert!(req.tools.is_none());
+        assert!(req.messages.is_empty());
+    }
+
+    #[test]
+    fn client_build_request_with_system() {
+        let c = AnthropicClient::new("key");
+        let system = vec![SystemBlock {
+            block_type: "text".into(),
+            text: "You are helpful.".into(),
+            cache_control: None,
+        }];
+        let req = c.build_request(vec![], Some(system), None);
+        assert!(req.system.is_some());
+        let sys = req.system.unwrap();
+        assert_eq!(sys.len(), 1);
+        assert_eq!(sys[0].text, "You are helpful.");
+    }
+
+    #[test]
+    fn parse_retry_after_valid() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("30"));
+        assert_eq!(AnthropicClient::parse_retry_after(&headers), Some(30));
+    }
+
+    #[test]
+    fn parse_retry_after_missing() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert_eq!(AnthropicClient::parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn parse_retry_after_invalid() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("not-a-number"));
+        assert_eq!(AnthropicClient::parse_retry_after(&headers), None);
+    }
+}

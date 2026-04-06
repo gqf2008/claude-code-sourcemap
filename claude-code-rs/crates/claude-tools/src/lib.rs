@@ -94,14 +94,14 @@ impl ToolCategory {
 /// Map a tool name to its category.
 pub fn tool_category(name: &str) -> ToolCategory {
     match name {
-        "FileRead" | "FileEdit" | "FileWrite" | "MultiEdit"
-        | "Glob" | "Grep" | "ListDir" => ToolCategory::File,
+        "Read" | "FileRead" | "Edit" | "FileEdit" | "Write" | "FileWrite"
+        | "MultiEdit" | "Glob" | "Grep" | "LS" | "ListDir" => ToolCategory::File,
 
         "Bash" | "PowerShell" | "REPL" => ToolCategory::Shell,
 
         "WebFetch" | "WebSearch" => ToolCategory::Web,
 
-        "LSP" | "NotebookEdit" | "DiffUI" => ToolCategory::Code,
+        "LSP" | "NotebookEdit" | "DiffUI" | "ToolSearch" => ToolCategory::Code,
 
         "Git" | "GitStatus" | "EnterWorktree" | "ExitWorktree" => ToolCategory::Git,
 
@@ -109,10 +109,12 @@ pub fn tool_category(name: &str) -> ToolCategory {
 
         "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList"
         | "TaskOutput" | "TaskStop" | "Skill"
+        | "task_create" | "task_update" | "task_get" | "task_list"
+        | "task_output" | "task_stop"
         | "EnterPlanMode" | "ExitPlanMode" => ToolCategory::Agent,
 
         "TodoWrite" | "TodoRead" | "Config" | "ContextInspect"
-        | "Verify" | "Sleep" | "ToolSearch" => ToolCategory::Management,
+        | "Verify" | "Sleep" => ToolCategory::Management,
 
         _ => ToolCategory::Mcp, // MCP proxy tools and unknown
     }
@@ -267,5 +269,135 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::{Tool, ToolContext, ToolResult, ToolCategory as CoreCategory};
+    use async_trait::async_trait;
+
+    struct DummyTool { nm: &'static str }
+    #[async_trait]
+    impl Tool for DummyTool {
+        fn name(&self) -> &str { self.nm }
+        fn description(&self) -> &str { "dummy" }
+        fn input_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::text("ok"))
+        }
+        fn category(&self) -> CoreCategory { CoreCategory::Session }
+    }
+
+    #[test]
+    fn registry_new_is_empty() {
+        let r = ToolRegistry::new();
+        assert!(r.is_empty());
+        assert_eq!(r.len(), 0);
+    }
+
+    #[test]
+    fn registry_register_and_get() {
+        let mut r = ToolRegistry::new();
+        r.register(DummyTool { nm: "Foo" });
+        assert_eq!(r.len(), 1);
+        assert!(!r.is_empty());
+        assert!(r.get("Foo").is_some());
+        assert!(r.get("Bar").is_none());
+    }
+
+    #[test]
+    fn registry_names() {
+        let mut r = ToolRegistry::new();
+        r.register(DummyTool { nm: "Alpha" });
+        r.register(DummyTool { nm: "Beta" });
+        let mut names = r.names();
+        names.sort();
+        assert_eq!(names, vec!["Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn registry_all() {
+        let mut r = ToolRegistry::new();
+        r.register(DummyTool { nm: "X" });
+        r.register(DummyTool { nm: "Y" });
+        assert_eq!(r.all().len(), 2);
+    }
+
+    #[test]
+    fn registry_overwrite_same_name() {
+        let mut r = ToolRegistry::new();
+        r.register(DummyTool { nm: "Dup" });
+        r.register(DummyTool { nm: "Dup" });
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn registry_with_defaults_has_tools() {
+        let r = ToolRegistry::with_defaults();
+        assert!(r.len() >= 20, "Expected 20+ default tools, got {}", r.len());
+        // Verify some core tools (actual registered names)
+        assert!(r.get("Read").is_some());
+        assert!(r.get("Edit").is_some());
+        assert!(r.get("Glob").is_some());
+        assert!(r.get("Grep").is_some());
+        assert!(r.get("AskUser").is_some());
+        assert!(r.get("Sleep").is_some());
+    }
+
+    #[test]
+    fn registry_default_trait() {
+        let r = ToolRegistry::default();
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn tool_category_label() {
+        assert_eq!(ToolCategory::File.label(), "File I/O");
+        assert_eq!(ToolCategory::Shell.label(), "Shell");
+        assert_eq!(ToolCategory::Mcp.label(), "MCP");
+    }
+
+    #[test]
+    fn tool_category_mapping() {
+        // Actual registered names
+        assert_eq!(tool_category("Read"), ToolCategory::File);
+        assert_eq!(tool_category("Edit"), ToolCategory::File);
+        assert_eq!(tool_category("Write"), ToolCategory::File);
+        assert_eq!(tool_category("Glob"), ToolCategory::File);
+        assert_eq!(tool_category("Grep"), ToolCategory::File);
+        assert_eq!(tool_category("LS"), ToolCategory::File);
+        // Legacy aliases
+        assert_eq!(tool_category("FileRead"), ToolCategory::File);
+        assert_eq!(tool_category("Bash"), ToolCategory::Shell);
+        assert_eq!(tool_category("WebFetch"), ToolCategory::Web);
+        assert_eq!(tool_category("LSP"), ToolCategory::Code);
+        assert_eq!(tool_category("ToolSearch"), ToolCategory::Code);
+        assert_eq!(tool_category("Git"), ToolCategory::Git);
+        assert_eq!(tool_category("AskUser"), ToolCategory::Interaction);
+        assert_eq!(tool_category("TaskCreate"), ToolCategory::Agent);
+        assert_eq!(tool_category("task_create"), ToolCategory::Agent);
+        assert_eq!(tool_category("Sleep"), ToolCategory::Management);
+        assert_eq!(tool_category("unknown_mcp_thing"), ToolCategory::Mcp);
+    }
+
+    #[test]
+    fn by_category_filters() {
+        let r = ToolRegistry::with_defaults();
+        // Shell tools: Bash, PowerShell, REPL (feature-gated but default-enabled)
+        let shell_tools = r.by_category(ToolCategory::Shell);
+        assert!(shell_tools.len() >= 2, "Expected 2+ shell tools, got {}", shell_tools.len());
+        for (name, _) in &shell_tools {
+            assert_eq!(tool_category(name), ToolCategory::Shell);
+        }
+    }
+
+    #[test]
+    fn category_summary_covers_all() {
+        let r = ToolRegistry::with_defaults();
+        let summary = r.category_summary();
+        let total: usize = summary.iter().map(|(_, c)| c).sum();
+        assert_eq!(total, r.len());
     }
 }
