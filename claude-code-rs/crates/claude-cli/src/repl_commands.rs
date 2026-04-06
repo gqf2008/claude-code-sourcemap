@@ -273,49 +273,10 @@ pub(crate) fn format_cost(cost: f64) -> String {
 
 /// Show current configuration.
 pub(crate) fn handle_config_command(cwd: &std::path::Path) {
-    let settings = crate::config::load_settings();
-    match settings {
-        Ok(s) => {
-            println!("Configuration:");
-            if let Some(ref model) = s.model {
-                println!("  model: {}", model);
-            }
-            if let Some(ref mode) = s.permission_mode {
-                println!("  permission_mode: {}", mode);
-            }
-            if !s.allowed_tools.is_empty() {
-                println!("  allowed_tools: {:?}", s.allowed_tools);
-            }
-            if !s.denied_tools.is_empty() {
-                println!("  denied_tools: {:?}", s.denied_tools);
-            }
-            if !s.permission_rules.is_empty() {
-                println!("  permission_rules: {} rule(s)", s.permission_rules.len());
-            }
-            let hooks_count = s.hooks.pre_tool_use.len()
-                + s.hooks.post_tool_use.len()
-                + s.hooks.stop.len()
-                + s.hooks.session_start.len()
-                + s.hooks.session_end.len();
-            if hooks_count > 0 {
-                println!("  hooks: {} rule(s)", hooks_count);
-            }
-            if let Some(ref p) = s.custom_system_prompt {
-                println!("  custom_system_prompt: {}...", &p[..p.len().min(60)]);
-            }
-            if let Some(ref p) = s.append_system_prompt {
-                println!("  append_system_prompt: {}...", &p[..p.len().min(60)]);
-            }
+    let loaded = claude_core::config::Settings::load_merged(cwd);
 
-            // Show config file path
-            let config_path = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("claude")
-                .join("settings.json");
-            println!("\n  Config file: {}", config_path.display());
-        }
-        Err(e) => eprintln!("Failed to load config: {}", e),
-    }
+    println!("\x1b[1mConfiguration\x1b[0m");
+    println!("{}", loaded.display_sources());
 
     // CLAUDE.md status
     let claude_md = cwd.join("CLAUDE.md");
@@ -323,6 +284,19 @@ pub(crate) fn handle_config_command(cwd: &std::path::Path) {
         let size = std::fs::metadata(&claude_md).map(|m| m.len()).unwrap_or(0);
         println!("  CLAUDE.md: {} ({} bytes)", claude_md.display(), size);
     }
+
+    // Settings file paths
+    println!("\n\x1b[1mSettings files:\x1b[0m");
+    if let Some(user_path) = dirs::home_dir().map(|h| h.join(".claude").join("settings.json")) {
+        let exists = if user_path.exists() { "✓" } else { "✗" };
+        println!("  {} User:    {}", exists, user_path.display());
+    }
+    let proj_path = cwd.join(".claude").join("settings.json");
+    let proj_exists = if proj_path.exists() { "✓" } else { "✗" };
+    println!("  {} Project: {}", proj_exists, proj_path.display());
+    let local_path = cwd.join(".claude").join("settings.local.json");
+    let local_exists = if local_path.exists() { "✓" } else { "✗" };
+    println!("  {} Local:   {}", local_exists, local_path.display());
 }
 
 /// Run a skill as a single-shot sub-agent conversation.

@@ -47,7 +47,7 @@ impl SlashCommand {
             "diff" => Self::Diff,
             "status" => Self::Status,
             "permissions" | "perms" => Self::Permissions,
-            "config" => Self::Config,
+            "config" | "settings" => Self::Config,
             "undo" => Self::Undo,
             "review" => Self::Review { prompt: args },
             "doctor" => Self::Doctor,
