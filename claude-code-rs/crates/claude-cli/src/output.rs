@@ -116,6 +116,28 @@ fn short_path(path: &str) -> &str {
     &path[idx..]
 }
 
+/// Categorize an error message and return (icon, optional hint).
+fn categorize_error(msg: &str) -> (&'static str, Option<&'static str>) {
+    let lower = msg.to_lowercase();
+    if lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid.*key") {
+        ("🔑", Some("Check your API key with `/login` or set ANTHROPIC_API_KEY"))
+    } else if lower.contains("403") || lower.contains("forbidden") || lower.contains("permission") {
+        ("🚫", Some("Your API key may lack the required permissions"))
+    } else if lower.contains("429") || lower.contains("rate limit") {
+        ("⏳", Some("Rate limited — the request will be retried automatically"))
+    } else if lower.contains("529") || lower.contains("overloaded") {
+        ("🔥", Some("API is overloaded — try again in a moment"))
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        ("⏱", Some("Connection timed out — check your network"))
+    } else if lower.contains("connection") || lower.contains("dns") || lower.contains("network") {
+        ("🌐", Some("Network error — check your internet connection"))
+    } else if lower.contains("500") || lower.contains("502") || lower.contains("503") {
+        ("💥", Some("Server error — this is usually temporary"))
+    } else {
+        ("❌", None)
+    }
+}
+
 pub async fn print_stream(
     mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>>,
     model: &str,
@@ -196,7 +218,11 @@ pub async fn print_stream(
                 tracing::debug!("Tokens: in={}, out={}", u.input_tokens, u.output_tokens);
             }
             AgentEvent::Error(msg) => {
-                eprintln!("\x1b[31mError: {}\x1b[0m", msg);
+                let (icon, hint) = categorize_error(&msg);
+                eprintln!("\x1b[31m{} {}\x1b[0m", icon, msg);
+                if let Some(h) = hint {
+                    eprintln!("\x1b[2m  💡 {}\x1b[0m", h);
+                }
             }
             AgentEvent::MaxTurns { limit } => {
                 eprintln!("\x1b[33mMax turns ({}) reached\x1b[0m", limit);
@@ -425,5 +451,54 @@ mod tests {
         let result = format_tool_result_inline("task_create", &long);
         assert!(result.is_some());
         assert!(result.unwrap().contains("…"));
+    }
+
+    // ── categorize_error ─────────────────────────────────────────────
+
+    #[test]
+    fn test_categorize_error_auth() {
+        let (icon, hint) = categorize_error("401 Unauthorized");
+        assert_eq!(icon, "🔑");
+        assert!(hint.is_some());
+    }
+
+    #[test]
+    fn test_categorize_error_rate_limit() {
+        let (icon, hint) = categorize_error("429 rate limit exceeded");
+        assert_eq!(icon, "⏳");
+        assert!(hint.unwrap().contains("retried"));
+    }
+
+    #[test]
+    fn test_categorize_error_overloaded() {
+        let (icon, _) = categorize_error("529 API overloaded");
+        assert_eq!(icon, "🔥");
+    }
+
+    #[test]
+    fn test_categorize_error_timeout() {
+        let (icon, hint) = categorize_error("connection timed out");
+        assert_eq!(icon, "⏱");
+        assert!(hint.unwrap().contains("network"));
+    }
+
+    #[test]
+    fn test_categorize_error_network() {
+        let (icon, _) = categorize_error("dns resolution failed");
+        assert_eq!(icon, "🌐");
+    }
+
+    #[test]
+    fn test_categorize_error_server() {
+        let (icon, hint) = categorize_error("500 Internal Server Error");
+        assert_eq!(icon, "💥");
+        assert!(hint.unwrap().contains("temporary"));
+    }
+
+    #[test]
+    fn test_categorize_error_unknown() {
+        let (icon, hint) = categorize_error("something unexpected happened");
+        assert_eq!(icon, "❌");
+        assert!(hint.is_none());
     }
 }

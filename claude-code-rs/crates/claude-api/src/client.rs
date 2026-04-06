@@ -101,6 +101,27 @@ impl AnthropicClient {
             .and_then(|s| s.parse::<u64>().ok())
     }
 
+    /// Quick connectivity check: send a minimal request to verify the API key
+    /// and network. Returns Ok(model_name) on success, or an error describing
+    /// the problem (auth, network, etc.).
+    pub async fn test_connection(&self) -> Result<String> {
+        let req = MessagesRequest {
+            model: self.default_model.clone(),
+            max_tokens: 1,
+            messages: vec![ApiMessage {
+                role: "user".into(),
+                content: vec![ApiContentBlock::Text {
+                    text: "hi".into(),
+                    cache_control: None,
+                }],
+            }],
+            stream: false,
+            ..Default::default()
+        };
+        let resp = self.messages(&req).await?;
+        Ok(resp.model)
+    }
+
     /// Send a non-streaming messages request (with retry).
     pub async fn messages(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
         // Delegate to pluggable backend if configured

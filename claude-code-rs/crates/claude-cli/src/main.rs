@@ -118,6 +118,10 @@ async fn main() -> anyhow::Result<()> {
         anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key.")
     })?;
 
+    // Resolve model aliases and validate
+    let model = claude_core::model::validate_model(&cli.model)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     // Build system prompt: if user specified --system-prompt, use that.
     // Otherwise the engine will build the full modular prompt via system_prompt.rs.
     let system_prompt = cli.system_prompt
@@ -128,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
     let skills = load_skills(&cwd);
 
     let engine = claude_agent::engine::QueryEngine::builder(api_key, &cwd)
-        .model(&cli.model)
+        .model(&model)
         .system_prompt(system_prompt)
         .max_turns(cli.max_turns)
         .permission_checker(claude_agent::permissions::PermissionChecker::new(

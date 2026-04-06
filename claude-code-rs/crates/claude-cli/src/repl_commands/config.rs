@@ -150,12 +150,13 @@ pub(crate) fn handle_login() {
     print!("Enter your Anthropic API key: ");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-    let mut key = String::new();
-    if std::io::stdin().read_line(&mut key).is_err() {
-        eprintln!("\x1b[31mFailed to read input\x1b[0m");
-        return;
-    }
-    let key = key.trim().to_string();
+    let key = match rpassword::read_password() {
+        Ok(k) => k.trim().to_string(),
+        Err(_) => {
+            eprintln!("\x1b[31mFailed to read input\x1b[0m");
+            return;
+        }
+    };
 
     if key.is_empty() {
         println!("No key provided. Cancelled.");
@@ -166,14 +167,19 @@ pub(crate) fn handle_login() {
         println!("\x1b[33mWarning: API key doesn't start with 'sk-ant-' — this may not be a valid Anthropic key.\x1b[0m");
     }
 
-    settings["api_key"] = serde_json::Value::String(key);
+    settings["api_key"] = serde_json::Value::String(key.clone());
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
         eprintln!("\x1b[31mFailed to create config dir: {}\x1b[0m", e);
         return;
     }
+    let masked = if key.len() > 8 {
+        format!("{}...{}", &key[..7], &key[key.len() - 4..])
+    } else {
+        "****".to_string()
+    };
     match serde_json::to_string_pretty(&settings) {
         Ok(json) => match std::fs::write(&settings_path, json) {
-            Ok(_) => println!("\x1b[32m✓ API key saved to {}\x1b[0m", settings_path.display()),
+            Ok(_) => println!("\x1b[32m✓ API key ({}) saved to {}\x1b[0m", masked, settings_path.display()),
             Err(e) => eprintln!("\x1b[31mFailed to save settings: {}\x1b[0m", e),
         },
         Err(e) => eprintln!("\x1b[31mFailed to serialize settings: {}\x1b[0m", e),

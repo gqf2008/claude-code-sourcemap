@@ -8,10 +8,13 @@ use crate::output::print_stream;
 use crate::repl_commands::*;
 
 pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::PathBuf) -> anyhow::Result<()> {
+    let current_model = engine.state().read().await.model.clone();
+    let display = claude_core::model::display_name(&current_model);
     println!("\x1b[1;34m╭─────────────────────────────────╮\x1b[0m");
     println!("\x1b[1;34m│      Claude Code (Rust)         │\x1b[0m");
+    println!("\x1b[1;34m│  Model: {:<23} │\x1b[0m", display);
+    println!("\x1b[1;34m│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
     println!("\x1b[1;34m│  Type /help for commands        │\x1b[0m");
-    println!("\x1b[1;34m│  Type /exit to quit             │\x1b[0m");
     println!("\x1b[1;34m╰─────────────────────────────────╯\x1b[0m\n");
 
     if !skills.is_empty() {
@@ -280,6 +283,17 @@ fn format_compact_tokens(n: u64) -> String {
     }
 }
 
+/// Truncate a path for display (keep last components within `max_len` chars).
+fn truncate_path(path: &std::path::Path, max_len: usize) -> String {
+    let s = path.display().to_string();
+    if s.chars().count() <= max_len {
+        return s;
+    }
+    let skip = s.chars().count() - max_len + 1;
+    let tail: String = s.chars().skip(skip).collect();
+    format!("…{}", tail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +325,20 @@ mod tests {
         assert_eq!(format_compact_tokens(1_000_000), "1.0M");
         assert_eq!(format_compact_tokens(1_500_000), "1.5M");
         assert_eq!(format_compact_tokens(12_345_678), "12.3M");
+    }
+
+    #[test]
+    fn truncate_path_short() {
+        let p = std::path::Path::new("src");
+        assert_eq!(truncate_path(p, 25), "src");
+    }
+
+    #[test]
+    fn truncate_path_long() {
+        let p = std::path::Path::new("/very/long/path/that/exceeds/limit");
+        let result = truncate_path(p, 15);
+        assert!(result.starts_with('…'));
+        // Display length matters, not byte length
+        assert!(result.chars().count() <= 16);
     }
 }

@@ -279,6 +279,35 @@ pub fn resolve_model_string(input: &str) -> String {
     base.to_string()
 }
 
+/// Validate and resolve a model string. Returns `Ok(resolved_model)` if valid,
+/// or `Err` with a helpful message listing available aliases and known models.
+pub fn validate_model(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err("Model name cannot be empty".into());
+    }
+
+    let resolved = resolve_model_string(input);
+
+    // If canonical_name maps to a known model, it's valid
+    let canonical = canonical_name(&resolved);
+    if canonical != "unknown" || resolved.starts_with("claude-") {
+        return Ok(resolved);
+    }
+
+    // Unknown model — build helpful error
+    let aliases = list_aliases();
+    let alias_list: Vec<String> = aliases
+        .iter()
+        .map(|(name, model)| format!("  {} → {}", name, model))
+        .collect();
+
+    Err(format!(
+        "Unknown model: '{}'\n\nAvailable aliases:\n{}\n\nOr use a full model ID like 'claude-sonnet-4-20250514'",
+        input,
+        alias_list.join("\n"),
+    ))
+}
+
 // ── Small/fast model for cheap tasks ────────────────────────────────────────
 
 /// Return the small/fast model for cheap operations (compaction, token counting).
@@ -777,5 +806,41 @@ mod tests {
         assert!(names.contains(&"opus"));
         assert!(names.contains(&"haiku"));
         assert!(names.contains(&"best"));
+    }
+
+    #[test]
+    fn test_validate_model_alias() {
+        let result = validate_model("sonnet");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), defaults::SONNET);
+    }
+
+    #[test]
+    fn test_validate_model_full_id() {
+        let result = validate_model("claude-sonnet-4-20250514");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_validate_model_unknown_but_claude_prefix() {
+        // Future models with claude- prefix should be accepted
+        let result = validate_model("claude-future-5-0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_model_invalid() {
+        let result = validate_model("gpt-4o");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Unknown model"));
+        assert!(err.contains("sonnet"));
+    }
+
+    #[test]
+    fn test_validate_model_empty() {
+        let result = validate_model("");
+        assert!(result.is_err());
     }
 }
