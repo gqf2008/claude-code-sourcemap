@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use tracing::info;
+use crate::provider::ApiBackend;
 use crate::retry::{ApiHttpError, RetryConfig, with_retry};
 use crate::types::*;
 
@@ -17,6 +18,9 @@ pub struct AnthropicClient {
     default_model: String,
     max_tokens: u32,
     retry_config: RetryConfig,
+    /// Optional pluggable backend. When set, `messages()` / `messages_stream()`
+    /// delegate to this backend instead of the inline first-party implementation.
+    backend: Option<Box<dyn ApiBackend>>,
 }
 
 impl AnthropicClient {
@@ -28,6 +32,7 @@ impl AnthropicClient {
             default_model: DEFAULT_MODEL.to_string(),
             max_tokens: 16384,
             retry_config: RetryConfig::default(),
+            backend: None,
         }
     }
 
@@ -49,6 +54,23 @@ impl AnthropicClient {
     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
+    }
+
+    /// Plug in a custom API backend (Bedrock, Vertex, etc.).
+    ///
+    /// When set, `messages()` and `messages_stream()` delegate to this backend
+    /// with retry wrapping. The backend handles auth, URL, and model ID mapping.
+    pub fn with_backend(mut self, backend: Box<dyn ApiBackend>) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    /// Returns the active provider name ("firstParty", "bedrock", "vertex").
+    pub fn provider_name(&self) -> &str {
+        match &self.backend {
+            Some(b) => b.provider_name(),
+            None => "firstParty",
+        }
     }
 
     fn headers(&self) -> anyhow::Result<HeaderMap> {
@@ -81,6 +103,11 @@ impl AnthropicClient {
 
     /// Send a non-streaming messages request (with retry).
     pub async fn messages(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
+        // Delegate to pluggable backend if configured
+        if let Some(ref backend) = self.backend {
+            return backend.send_messages(&self.http, request).await;
+        }
+
         let url = format!("{}/v1/messages", self.base_url);
         let request = request.clone();
         let headers = self.headers()?;
@@ -134,6 +161,11 @@ impl AnthropicClient {
         &self,
         request: &MessagesRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        // Delegate to pluggable backend if configured
+        if let Some(ref backend) = self.backend {
+            return backend.send_messages_stream(&self.http, request).await;
+        }
+
         let url = format!("{}/v1/messages", self.base_url);
         let mut req = request.clone();
         req.stream = true;

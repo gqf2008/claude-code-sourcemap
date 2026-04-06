@@ -1,4 +1,5 @@
 pub mod client;
+pub mod provider;
 pub mod types;
 pub mod stream;
 pub mod retry;

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use claude_api::client::AnthropicClient;
-use claude_api::types::CacheControl;
 use claude_core::claude_md::load_claude_md;
 use claude_core::config::HooksConfig;
 use claude_core::memory::load_memories_for_prompt;
