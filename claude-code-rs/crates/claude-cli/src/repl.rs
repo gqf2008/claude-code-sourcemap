@@ -21,6 +21,12 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
 
     let mut rl = DefaultEditor::new()?;
 
+    // Load persistent history
+    let history_path = history_file_path();
+    if let Some(ref path) = history_path {
+        let _ = rl.load_history(path);
+    }
+
     loop {
         let readline = rl.readline("\x1b[1;32m> \x1b[0m");
         match readline {
@@ -152,6 +158,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                 }
 
+                // Show turn stats
+                print_turn_stats(&engine).await;
+
                 // In coordinator mode: drain background agent notifications and
                 // re-submit them so the coordinator can react to completed tasks.
                 if engine.is_coordinator() {
@@ -190,6 +199,11 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
         }
     }
 
+    // Save persistent history
+    if let Some(ref path) = history_path {
+        let _ = rl.save_history(path);
+    }
+
     // Auto-save session on exit (if there's history)
     let has_messages = { engine.state().read().await.messages.len() > 1 };
     if has_messages {
@@ -203,3 +217,41 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
     Ok(())
 }
 
+/// Get the path to the persistent history file (~/.claude/history).
+fn history_file_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|home| {
+        let dir = home.join(".claude");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("history")
+    })
+}
+
+/// Display token usage and cost after each turn.
+async fn print_turn_stats(engine: &QueryEngine) {
+    let state = engine.state().read().await;
+    let cost = engine.cost_tracker();
+    let total_cost = cost.total_usd();
+
+    let input_k = format_compact_tokens(state.total_input_tokens);
+    let output_k = format_compact_tokens(state.total_output_tokens);
+
+    if total_cost > 0.0 {
+        eprintln!(
+            "\x1b[2m  tokens: {}↓ {}↑ · cost: ${:.4} · turns: {}\x1b[0m",
+            input_k, output_k, total_cost, state.turn_count
+        );
+    }
+}
+
+/// Format tokens compactly: 1234 → "1.2K", 12345 → "12K", 1234567 → "1.2M"
+fn format_compact_tokens(n: u64) -> String {
+    if n < 1_000 {
+        format!("{}", n)
+    } else if n < 100_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}K", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
