@@ -137,9 +137,32 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
         "json" => {
             let filename = format!("claude_export_{}.json", timestamp);
             let path = cwd.join(&filename);
+
+            // Build per-model usage stats
+            let model_stats: serde_json::Value = state.model_usage.iter()
+                .map(|(model, usage)| {
+                    (model.clone(), serde_json::json!({
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                        "cache_read_tokens": usage.cache_read_tokens,
+                        "cache_creation_tokens": usage.cache_creation_tokens,
+                        "api_calls": usage.api_calls,
+                        "cost_usd": usage.cost_usd,
+                    }))
+                })
+                .collect::<serde_json::Map<_, _>>()
+                .into();
+
             let export = serde_json::json!({
                 "model": state.model,
                 "turn_count": state.turn_count,
+                "total_input_tokens": state.total_input_tokens,
+                "total_output_tokens": state.total_output_tokens,
+                "total_cost_usd": state.total_cost(),
+                "total_errors": state.total_errors,
+                "lines_added": state.total_lines_added,
+                "lines_removed": state.total_lines_removed,
+                "model_usage": model_stats,
                 "messages": state.messages.iter().map(|m| match m {
                     claude_core::message::Message::User(u) => serde_json::json!({
                         "role": "user",
