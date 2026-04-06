@@ -212,3 +212,49 @@ pub(crate) fn handle_logout() {
         Err(e) => eprintln!("\x1b[31mFailed to serialize settings: {}\x1b[0m", e),
     }
 }
+
+/// Reload CLAUDE.md, memory, and settings without restarting the session.
+pub(crate) async fn handle_reload_context(engine: &QueryEngine, cwd: &std::path::Path) {
+    println!("\x1b[33mReloading context…\x1b[0m");
+
+    // 1. Reload settings
+    let loaded = claude_core::config::Settings::load_merged(cwd);
+    println!("  ✓ Settings reloaded ({} source(s))", loaded.layers.len());
+
+    // 2. Reload CLAUDE.md
+    let claude_md = claude_core::claude_md::load_claude_md(cwd);
+    let md_lines = claude_md.lines().count();
+    if md_lines > 0 {
+        println!("  ✓ CLAUDE.md reloaded ({} lines)", md_lines);
+    } else {
+        println!("  \x1b[2m(no CLAUDE.md found)\x1b[0m");
+    }
+
+    // 3. Reload memory
+    let mem_files = claude_core::memory::list_memory_files(cwd);
+    println!("  ✓ Memory: {} file(s)", mem_files.len());
+
+    // 4. Reload skills
+    let skills = claude_core::skills::load_skills(cwd);
+    println!("  ✓ Skills: {} loaded", skills.len());
+
+    // 5. Reload hooks from settings
+    let hooks = &loaded.settings.hooks;
+    let total_hooks = hooks.pre_tool_use.len()
+        + hooks.post_tool_use.len()
+        + hooks.stop.len()
+        + hooks.session_start.len()
+        + hooks.session_end.len()
+        + hooks.user_prompt_submit.len();
+    println!("  ✓ Hooks: {} rule(s)", total_hooks);
+
+    // 6. Update engine system prompt with fresh CLAUDE.md
+    engine.update_system_prompt_context(&claude_md).await;
+
+    // 7. Summary
+    let state = engine.state().read().await;
+    let system_tokens = claude_core::token_estimation::estimate_text_tokens(&claude_md);
+    let msg_tokens = claude_core::token_estimation::estimate_messages_tokens(&state.messages);
+    println!("\n\x1b[32m✓ Context reloaded ({} system + {} conversation tokens)\x1b[0m",
+        system_tokens, msg_tokens);
+}

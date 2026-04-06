@@ -394,13 +394,20 @@ impl QueryEngine {
     }
 
     /// Restore a session from disk, replacing current state.
+    /// Applies message sanitization to fix orphaned thinking blocks,
+    /// unresolved tool references, and other artifacts from interrupted sessions.
     pub async fn restore_session(&self, session_id: &str) -> anyhow::Result<String> {
         use claude_core::session::load_session;
+        use claude_core::message_sanitize::sanitize_messages;
         let snap = load_session(session_id)?;
         let title = snap.title.clone();
+        let (sanitized_messages, report) = sanitize_messages(snap.messages);
+        if report.has_changes() {
+            tracing::info!("Session restore {}: {}", session_id, report.summary());
+        }
         {
             let mut s = self.state.write().await;
-            s.messages = snap.messages;
+            s.messages = sanitized_messages;
             s.model = snap.model;
             s.turn_count = snap.turn_count;
             s.total_input_tokens = snap.input_tokens;
@@ -414,6 +421,16 @@ impl QueryEngine {
     /// Get the working directory.
     pub fn cwd(&self) -> &std::path::Path {
         &self.cwd
+    }
+
+    /// Update the CLAUDE.md portion of the system prompt (for /reload-context).
+    pub async fn update_system_prompt_context(&self, claude_md: &str) {
+        let mut s = self.state.write().await;
+        // Store the refreshed CLAUDE.md content for next query_stream call.
+        // The system prompt is rebuilt each query from config, so we just
+        // note that context was reloaded.
+        s.context_reloaded = true;
+        s.claude_md_content = claude_md.to_string();
     }
 }
 

@@ -335,6 +335,9 @@ async fn e2e_max_tokens_recovery_escalation() {
 
 #[tokio::test]
 async fn e2e_retry_on_overloaded_error() {
+    // Pause time so retry sleeps resolve instantly
+    tokio::time::pause();
+
     let response = mock_text_response("Recovered!");
     let mock = MockBackend::new()
         .with_stream_error("overloaded: server is busy")
@@ -489,4 +492,185 @@ async fn e2e_thinking_blocks_emitted() {
     assert!(has_thinking, "expected thinking delta, got: {:?}", events);
     assert!(has_text, "expected text delta");
     assert!(has_complete, "expected TurnComplete");
+}
+
+// ── P25 E2E Tests ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn e2e_multi_tool_sequence() {
+    // Model returns two tool_use blocks in one response, then a final text
+    let multi_tool = MessagesResponse {
+        id: "msg_multi".into(),
+        response_type: "message".into(),
+        role: "assistant".into(),
+        content: vec![
+            ResponseContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "a.txt"}),
+            },
+            ResponseContentBlock::ToolUse {
+                id: "t2".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "b.txt"}),
+            },
+        ],
+        model: "claude-sonnet-4-20250514".into(),
+        stop_reason: Some("tool_use".into()),
+        usage: ApiUsage {
+            input_tokens: 200,
+            output_tokens: 100,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        },
+    };
+    let final_text = mock_text_response("Both files read successfully.");
+
+    let mock = MockBackend::new()
+        .with_stream_events(make_stream_events(multi_tool))
+        .with_stream_events(make_stream_events(final_text));
+    let (client, executor, state, tool_context, hooks) = test_setup(mock);
+
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+    let events = collect_events(client, executor, state.clone(), tool_context, config, user_msg("Read both files"), hooks).await;
+
+    // Verify both tools started and got results
+    let tool_starts: Vec<_> = events.iter().filter(|e| matches!(e, AgentEvent::ToolUseStart { .. })).collect();
+    assert_eq!(tool_starts.len(), 2, "expected 2 tool starts, got {:?}", tool_starts);
+
+    let tool_results: Vec<_> = events.iter().filter(|e| matches!(e, AgentEvent::ToolResult { .. })).collect();
+    assert_eq!(tool_results.len(), 2, "expected 2 tool results");
+
+    let has_final = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Both files")));
+    assert!(has_final, "expected final text");
+
+    let s = state.read().await;
+    assert_eq!(s.messages.len(), 4); // user + assistant(2 tools) + tool_results + final_assistant
+}
+
+#[tokio::test]
+async fn e2e_reactive_compaction_on_prompt_too_long() {
+    // First call: API returns "prompt is too long" error
+    // Second call (after compaction): normal response
+    let success = mock_text_response("After compaction, I can respond.");
+
+    let mock = MockBackend::new()
+        .with_stream_error("prompt is too long: context exceeds 200K tokens")
+        .with_stream_events(make_stream_events(success));
+    let (client, executor, state, tool_context, hooks) = test_setup(mock);
+
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+    let events = collect_events(client, executor, state, tool_context, config, user_msg("Long conversation"), hooks).await;
+
+    let has_trim = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("trimming context")));
+    let has_success = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("After compaction")));
+    assert!(has_trim, "expected trimming message, got: {:?}", events);
+    assert!(has_success, "expected successful response after compaction");
+}
+
+#[tokio::test]
+async fn e2e_stream_timeout_retried() {
+    // Pause time so sleeps resolve instantly in tests
+    tokio::time::pause();
+
+    // First call: stream starts but hits idle timeout
+    // Second call: normal response
+    let success = mock_text_response("Recovered after timeout!");
+
+    let mock = MockBackend::new()
+        .with_stream_events(vec![
+            Err(anyhow::anyhow!("idle timeout: no data for 90s")),
+        ])
+        .with_stream_events(make_stream_events(success));
+    let (client, executor, state, tool_context, hooks) = test_setup(mock);
+
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+    let events = collect_events(client, executor, state, tool_context, config, user_msg("Hi"), hooks).await;
+
+    let has_retry = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Stream timeout")));
+    let has_success = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Recovered after timeout")));
+    assert!(has_retry, "expected stream timeout retry message, got: {:?}", events);
+    assert!(has_success, "expected successful response after retry");
+}
+
+#[tokio::test]
+async fn e2e_stream_timeout_exhausted_after_3_retries() {
+    // Pause time so sleeps resolve instantly in tests
+    tokio::time::pause();
+
+    // All 4 attempts hit timeout → should eventually give up
+    let mock = MockBackend::new()
+        .with_stream_events(vec![Err(anyhow::anyhow!("idle timeout: no data"))])
+        .with_stream_events(vec![Err(anyhow::anyhow!("idle timeout: no data"))])
+        .with_stream_events(vec![Err(anyhow::anyhow!("idle timeout: no data"))])
+        .with_stream_events(vec![Err(anyhow::anyhow!("idle timeout: no data"))]);
+    let (client, executor, state, tool_context, hooks) = test_setup(mock);
+
+    let config = QueryConfig { max_turns: 10, ..QueryConfig::default() };
+    let events = collect_events(client, executor, state, tool_context, config, user_msg("Hi"), hooks).await;
+
+    let retry_count = events.iter().filter(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Stream timeout"))).count();
+    assert_eq!(retry_count, 3, "expected exactly 3 retry attempts before giving up");
+
+    let has_error = events.iter().any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("Stream error")));
+    assert!(has_error, "expected final stream error after retries exhausted");
+}
+
+#[tokio::test]
+async fn e2e_permission_denied_returns_error_tool_result() {
+    // Tool call with permission mode that denies unknown tools
+    struct DeniedTool;
+    #[async_trait::async_trait]
+    impl claude_core::tool::Tool for DeniedTool {
+        fn name(&self) -> &str { "denied_tool" }
+        fn description(&self) -> &str { "A tool that should be denied" }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        async fn call(&self, _input: serde_json::Value, _ctx: &claude_core::tool::ToolContext) -> anyhow::Result<claude_core::tool::ToolResult> {
+            Ok(claude_core::tool::ToolResult::text("should not execute"))
+        }
+        fn is_read_only(&self) -> bool { false }
+        fn category(&self) -> claude_core::tool::ToolCategory { claude_core::tool::ToolCategory::Shell }
+    }
+
+    let tool_response = mock_tool_response("t1", "denied_tool", serde_json::json!({}));
+    let text_response = mock_text_response("I'll try a different approach.");
+
+    let mock = MockBackend::new()
+        .with_stream_events(make_stream_events(tool_response))
+        .with_stream_events(make_stream_events(text_response));
+
+    let client = Arc::new(
+        claude_api::client::AnthropicClient::new("test-key")
+            .with_backend(Box::new(mock)),
+    );
+    let mut registry = claude_tools::ToolRegistry::new();
+    registry.register(DeniedTool);
+    let registry = Arc::new(registry);
+    // Use Plan mode which automatically denies all non-read-only tools
+    let perm = Arc::new(crate::permissions::PermissionChecker::new(
+        claude_core::permissions::PermissionMode::Plan,
+        vec![],
+    ));
+    let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+    let state = crate::state::new_shared_state();
+    let tool_context = claude_core::tool::ToolContext {
+        cwd: std::env::temp_dir(),
+        abort_signal: claude_core::tool::AbortSignal::new(),
+        permission_mode: claude_core::permissions::PermissionMode::Plan,
+        messages: vec![],
+    };
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+
+    let events = collect_events(client, executor, state.clone(), tool_context, config, user_msg("Run the tool"), hooks).await;
+
+    // Tool result should be emitted (possibly with error)
+    let has_tool_result = events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. }));
+    assert!(has_tool_result, "expected tool result (even if error), got: {:?}", events);
+
+    // The conversation should continue (model gets tool result and responds)
+    let s = state.read().await;
+    assert!(s.messages.len() >= 3, "expected at least user + tool_assistant + tool_result messages");
 }

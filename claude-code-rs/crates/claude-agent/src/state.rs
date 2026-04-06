@@ -39,6 +39,10 @@ pub struct AppState {
     /// Cumulative timing metrics (milliseconds).
     pub total_api_duration_ms: u64,
     pub total_tool_duration_ms: u64,
+    /// Whether context was reloaded via /reload-context.
+    pub context_reloaded: bool,
+    /// Cached CLAUDE.md content (refreshed by /reload-context).
+    pub claude_md_content: String,
 }
 
 impl AppState {
@@ -123,6 +127,8 @@ impl Default for AppState {
             total_lines_removed: 0,
             total_api_duration_ms: 0,
             total_tool_duration_ms: 0,
+            context_reloaded: false,
+            claude_md_content: String::new(),
         }
     }
 }

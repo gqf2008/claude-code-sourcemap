@@ -69,6 +69,82 @@ pub struct ApiHttpError {
     pub status: u16,
     pub body: String,
     pub retry_after: Option<u64>,
+    /// Rate limit metadata extracted from response headers.
+    pub rate_limit_info: Option<RateLimitInfo>,
+}
+
+/// Rate limit metadata from API response headers.
+///
+/// Anthropic responses include:
+/// - `x-ratelimit-limit-requests`: max requests per window
+/// - `x-ratelimit-remaining-requests`: remaining requests
+/// - `x-ratelimit-limit-tokens`: max tokens per window
+/// - `x-ratelimit-remaining-tokens`: remaining tokens
+/// - `x-ratelimit-reset-requests`: when request limit resets (ISO 8601)
+/// - `x-ratelimit-reset-tokens`: when token limit resets (ISO 8601)
+#[derive(Debug, Clone, Default)]
+pub struct RateLimitInfo {
+    pub limit_requests: Option<u64>,
+    pub remaining_requests: Option<u64>,
+    pub limit_tokens: Option<u64>,
+    pub remaining_tokens: Option<u64>,
+    pub reset_requests: Option<String>,
+    pub reset_tokens: Option<String>,
+}
+
+impl RateLimitInfo {
+    /// Parse rate limit headers from a header map.
+    pub fn from_headers(headers: &[(String, String)]) -> Option<Self> {
+        let mut info = RateLimitInfo::default();
+        let mut found = false;
+        for (key, value) in headers {
+            let k = key.to_lowercase();
+            match k.as_str() {
+                "x-ratelimit-limit-requests" => {
+                    info.limit_requests = value.parse().ok();
+                    found = true;
+                }
+                "x-ratelimit-remaining-requests" => {
+                    info.remaining_requests = value.parse().ok();
+                    found = true;
+                }
+                "x-ratelimit-limit-tokens" => {
+                    info.limit_tokens = value.parse().ok();
+                    found = true;
+                }
+                "x-ratelimit-remaining-tokens" => {
+                    info.remaining_tokens = value.parse().ok();
+                    found = true;
+                }
+                "x-ratelimit-reset-requests" => {
+                    info.reset_requests = Some(value.clone());
+                    found = true;
+                }
+                "x-ratelimit-reset-tokens" => {
+                    info.reset_tokens = Some(value.clone());
+                    found = true;
+                }
+                _ => {}
+            }
+        }
+        if found { Some(info) } else { None }
+    }
+
+    /// Summary string for display.
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if let (Some(rem), Some(lim)) = (self.remaining_requests, self.limit_requests) {
+            parts.push(format!("requests: {}/{}", rem, lim));
+        }
+        if let (Some(rem), Some(lim)) = (self.remaining_tokens, self.limit_tokens) {
+            parts.push(format!("tokens: {}/{}", rem, lim));
+        }
+        if parts.is_empty() {
+            "no rate limit data".into()
+        } else {
+            parts.join(", ")
+        }
+    }
 }
 
 impl std::fmt::Display for ApiHttpError {
@@ -245,5 +321,62 @@ mod tests {
         // Both should stay within max + 25%
         let upper = Duration::from_millis(1000 + 250);
         assert!(d2 <= upper, "d2 {:?} exceeds cap {:?}", d2, upper);
+    }
+
+    // ── RateLimitInfo ──
+
+    #[test]
+    fn test_rate_limit_from_headers() {
+        let headers = vec![
+            ("x-ratelimit-limit-requests".into(), "100".into()),
+            ("x-ratelimit-remaining-requests".into(), "95".into()),
+            ("x-ratelimit-limit-tokens".into(), "1000000".into()),
+            ("x-ratelimit-remaining-tokens".into(), "950000".into()),
+            ("x-ratelimit-reset-requests".into(), "2026-01-01T00:01:00Z".into()),
+            ("x-ratelimit-reset-tokens".into(), "2026-01-01T00:00:30Z".into()),
+        ];
+        let info = RateLimitInfo::from_headers(&headers).unwrap();
+        assert_eq!(info.limit_requests, Some(100));
+        assert_eq!(info.remaining_requests, Some(95));
+        assert_eq!(info.limit_tokens, Some(1_000_000));
+        assert_eq!(info.remaining_tokens, Some(950_000));
+        assert_eq!(info.reset_requests.as_deref(), Some("2026-01-01T00:01:00Z"));
+    }
+
+    #[test]
+    fn test_rate_limit_from_empty_headers() {
+        let headers: Vec<(String, String)> = vec![
+            ("content-type".into(), "application/json".into()),
+        ];
+        assert!(RateLimitInfo::from_headers(&headers).is_none());
+    }
+
+    #[test]
+    fn test_rate_limit_summary() {
+        let info = RateLimitInfo {
+            limit_requests: Some(100),
+            remaining_requests: Some(42),
+            limit_tokens: Some(500_000),
+            remaining_tokens: Some(300_000),
+            ..Default::default()
+        };
+        let s = info.summary();
+        assert!(s.contains("42/100"), "summary: {}", s);
+        assert!(s.contains("300000/500000"), "summary: {}", s);
+    }
+
+    #[test]
+    fn test_rate_limit_summary_empty() {
+        let info = RateLimitInfo::default();
+        assert_eq!(info.summary(), "no rate limit data");
+    }
+
+    #[test]
+    fn test_rate_limit_case_insensitive() {
+        let headers = vec![
+            ("X-Ratelimit-Remaining-Requests".into(), "10".into()),
+        ];
+        let info = RateLimitInfo::from_headers(&headers).unwrap();
+        assert_eq!(info.remaining_requests, Some(10));
     }
 }

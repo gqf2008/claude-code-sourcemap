@@ -130,19 +130,21 @@ impl AnthropicClient {
                             status: e.status().map(|s| s.as_u16()).unwrap_or(0),
                             body: format!("Request failed: {}", e),
                             retry_after: None,
+                            rate_limit_info: None,
                         })?;
 
                     if !response.status().is_success() {
                         let status = response.status().as_u16();
                         let retry_after = Self::parse_retry_after(response.headers());
                         let body = response.text().await.unwrap_or_default();
-                        return Err(ApiHttpError { status, body, retry_after });
+                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info: None });
                     }
 
                     response.json::<MessagesResponse>().await.map_err(|e| ApiHttpError {
                         status: 0,
                         body: format!("Failed to parse response: {}", e),
                         retry_after: None,
+                        rate_limit_info: None,
                     })
                 }
             },
@@ -191,13 +193,14 @@ impl AnthropicClient {
                             status: e.status().map(|s| s.as_u16()).unwrap_or(0),
                             body: format!("Request failed: {}", e),
                             retry_after: None,
+                            rate_limit_info: None,
                         })?;
 
                     if !response.status().is_success() {
                         let status = response.status().as_u16();
                         let retry_after = Self::parse_retry_after(response.headers());
                         let body = response.text().await.unwrap_or_default();
-                        return Err(ApiHttpError { status, body, retry_after });
+                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info: None });
                     }
 
                     Ok(response)

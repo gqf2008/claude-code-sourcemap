@@ -24,6 +24,7 @@ pub enum SlashCommand {
     Context,
     Export { format: String },
     RunSkill { name: String, prompt: String },
+    ReloadContext,
     Exit,
     Unknown(String),
 }
@@ -58,6 +59,7 @@ impl SlashCommand {
             "logout" => Self::Logout,
             "context" | "ctx" => Self::Context,
             "export" => Self::Export { format: if args.is_empty() { "markdown".into() } else { args } },
+            "reload-context" | "reload" => Self::ReloadContext,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -121,6 +123,7 @@ impl SlashCommand {
             Self::Logout => CommandResult::Logout,
             Self::Context => CommandResult::Context,
             Self::Export { format } => CommandResult::Export { format: format.clone() },
+            Self::ReloadContext => CommandResult::ReloadContext,
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -155,6 +158,7 @@ pub enum CommandResult {
     Context,
     Export { format: String },
     RunSkill { name: String, prompt: String },
+    ReloadContext,
     Exit,
 }
 
@@ -188,6 +192,7 @@ Available commands:
   /logout            Clear saved API key
   /context           Show loaded context (CLAUDE.md, memory, model)
   /export [format]   Export session (markdown or json)
+  /reload-context    Reload CLAUDE.md, memory, and settings
   /permissions       Show current permission mode and rules
   /config            Show current configuration
   /skills            List available skills

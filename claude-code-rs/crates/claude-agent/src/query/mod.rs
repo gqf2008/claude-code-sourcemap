@@ -149,8 +149,9 @@ pub fn query_stream(
                                     "\x1b[33m[Trimmed {} tool result(s), snipped {} message(s)]\x1b[0m\n",
                                     truncated, snipped,
                                 ));
-                                continue;
                             }
+                            // Always retry after reactive compact attempt
+                            continue;
                         }
                         ApiErrorAction::Retry { wait_ms } => {
                             if turn_count + 1 < config.max_turns {
@@ -183,6 +184,7 @@ pub fn query_stream(
             let mut current_tool_name = String::new();
             let mut stop_reason = None;
             let mut usage = None;
+            let mut should_retry_turn = false;
 
             use tokio_stream::StreamExt;
             let mut event_stream = event_stream;
@@ -278,11 +280,40 @@ pub fn query_stream(
                         _ => {}
                     },
                     Err(e) => {
+                        let err_str = format!("{}", e);
+                        let is_timeout = err_str.contains("idle timeout")
+                            || err_str.contains("stall timeout")
+                            || err_str.contains("timed out")
+                            || err_str.contains("connection reset");
+
+                        if is_timeout {
+                            consecutive_errors += 1;
+                            state.write().await.record_error("stream_timeout");
+                            if consecutive_errors <= 3 {
+                                let wait_ms = retry_delay_ms.min(8_000);
+                                yield AgentEvent::TextDelta(format!(
+                                    "\n\x1b[33m[Stream timeout — retrying ({}/3) in {}ms]\x1b[0m\n",
+                                    consecutive_errors, wait_ms,
+                                ));
+                                tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                                retry_delay_ms = (retry_delay_ms * 2).min(32_000);
+                                // Don't push partial assistant message; retry the entire turn
+                                should_retry_turn = true;
+                                break; // break inner while loop
+                            }
+                        }
+
                         state.write().await.messages = messages.clone();
                         yield AgentEvent::Error(format!("Stream error: {}", e));
                         break;
                     }
                 }
+            }
+
+            // If a stream timeout triggered a retry, skip message processing
+            // and go straight to the next outer-loop iteration (re-call API).
+            if should_retry_turn {
+                continue;
             }
 
             // Ensure text block is present

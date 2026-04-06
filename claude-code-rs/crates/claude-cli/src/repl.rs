@@ -129,6 +129,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::Export { format } => {
                                 handle_export(&engine, &cwd, &format).await;
                             }
+                            CommandResult::ReloadContext => {
+                                handle_reload_context(&engine, &cwd).await;
+                            }
                             CommandResult::RunSkill { name, prompt } => {
                                 run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                             }
