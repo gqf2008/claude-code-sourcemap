@@ -1,0 +1,330 @@
+//! QueryEngineBuilder — fluent builder for constructing a QueryEngine.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use claude_api::client::AnthropicClient;
+use claude_api::types::CacheControl;
+use claude_core::claude_md::load_claude_md;
+use claude_core::config::HooksConfig;
+use claude_core::memory::load_memories_for_prompt;
+use claude_core::permissions::PermissionMode;
+use claude_core::tool::AbortSignal;
+use claude_tools::ToolRegistry;
+use tokio::sync::RwLock;
+
+use crate::compact::AutoCompactState;
+use crate::compact::AUTO_COMPACT_THRESHOLD;
+use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool};
+use crate::cost::CostTracker;
+use crate::dispatch_agent::{DispatchAgentTool, SubAgentConfig};
+use crate::executor::ToolExecutor;
+use crate::hooks::HookRegistry;
+use crate::permissions::PermissionChecker;
+use crate::query::QueryConfig;
+use crate::state::new_shared_state_with_model;
+use crate::system_prompt::{build_system_prompt_ext, coordinator_system_prompt, DynamicSections};
+
+use super::QueryEngine;
+
+pub struct QueryEngineBuilder {
+    pub(crate) api_key: String,
+    pub(crate) model: Option<String>,
+    pub(crate) cwd: std::path::PathBuf,
+    pub(crate) system_prompt: String,
+    pub(crate) max_turns: u32,
+    pub(crate) max_tokens: u32,
+    pub(crate) permission_checker: PermissionChecker,
+    pub(crate) hooks_config: HooksConfig,
+    pub(crate) load_claude_md: bool,
+    pub(crate) load_memory: bool,
+    pub(crate) compact_threshold: u64,
+    pub(crate) coordinator_mode: bool,
+    pub(crate) allowed_tools: Vec<String>,
+    pub(crate) thinking: Option<claude_api::types::ThinkingConfig>,
+    pub(crate) append_system_prompt: Option<String>,
+    pub(crate) language: Option<String>,
+    pub(crate) output_style: Option<(String, String)>,
+    pub(crate) mcp_instructions: Vec<(String, String)>,
+    pub(crate) scratchpad_dir: Option<String>,
+}
+
+impl QueryEngineBuilder {
+    pub fn new(api_key: impl Into<String>, cwd: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            api_key: api_key.into(),
+            model: None,
+            cwd: cwd.into(),
+            system_prompt: String::new(),
+            max_turns: 100,
+            max_tokens: 16384,
+            permission_checker: PermissionChecker::new(PermissionMode::Default, Vec::new()),
+            hooks_config: HooksConfig::default(),
+            load_claude_md: true,
+            load_memory: true,
+            compact_threshold: AUTO_COMPACT_THRESHOLD,
+            coordinator_mode: false,
+            allowed_tools: Vec::new(),
+            thinking: None,
+            append_system_prompt: None,
+            language: None,
+            output_style: None,
+            mcp_instructions: Vec::new(),
+            scratchpad_dir: None,
+        }
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = prompt.into();
+        self
+    }
+
+    pub fn max_turns(mut self, max: u32) -> Self {
+        self.max_turns = max;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn max_tokens(mut self, max: u32) -> Self {
+        self.max_tokens = max;
+        self
+    }
+
+    pub fn permission_checker(mut self, checker: PermissionChecker) -> Self {
+        self.permission_checker = checker;
+        self
+    }
+
+    pub fn hooks_config(mut self, config: HooksConfig) -> Self {
+        self.hooks_config = config;
+        self
+    }
+
+    pub fn load_claude_md(mut self, enable: bool) -> Self {
+        self.load_claude_md = enable;
+        self
+    }
+
+    pub fn load_memory(mut self, enable: bool) -> Self {
+        self.load_memory = enable;
+        self
+    }
+
+    pub fn compact_threshold(mut self, tokens: u64) -> Self {
+        self.compact_threshold = tokens;
+        self
+    }
+
+    pub fn coordinator_mode(mut self, enable: bool) -> Self {
+        self.coordinator_mode = enable;
+        self
+    }
+
+    pub fn allowed_tools(mut self, tools: Vec<String>) -> Self {
+        self.allowed_tools = tools;
+        self
+    }
+
+    pub fn thinking(mut self, config: Option<claude_api::types::ThinkingConfig>) -> Self {
+        self.thinking = config;
+        self
+    }
+
+    pub fn append_system_prompt(mut self, text: Option<String>) -> Self {
+        self.append_system_prompt = text;
+        self
+    }
+
+    pub fn language(mut self, lang: Option<String>) -> Self {
+        self.language = lang;
+        self
+    }
+
+    pub fn output_style(mut self, name: String, prompt: String) -> Self {
+        self.output_style = Some((name, prompt));
+        self
+    }
+
+    pub fn mcp_instructions(mut self, instructions: Vec<(String, String)>) -> Self {
+        self.mcp_instructions = instructions;
+        self
+    }
+
+    pub fn scratchpad_dir(mut self, dir: Option<String>) -> Self {
+        self.scratchpad_dir = dir;
+        self
+    }
+
+    pub fn build(self) -> QueryEngine {
+        let mut client = AnthropicClient::new(self.api_key);
+        if let Some(ref model) = self.model {
+            client = client.with_model(model);
+        }
+        client = client.with_max_tokens(self.max_tokens);
+
+        let client = Arc::new(client);
+        let mut registry = ToolRegistry::with_defaults();
+        let permission_checker = Arc::new(self.permission_checker);
+
+        let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
+        let caps = claude_core::model::model_capabilities(&model_name);
+
+        // ── Assemble system prompt via modular builder ────────────────────────
+        let claude_md_content = if self.load_claude_md {
+            load_claude_md(&self.cwd)
+        } else {
+            String::new()
+        };
+
+        let memory_content = if self.load_memory {
+            load_memories_for_prompt(&self.cwd).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let enabled_tool_names: Vec<String> = registry
+            .all()
+            .iter()
+            .filter(|t| t.is_enabled())
+            .map(|t| t.name().to_string())
+            .collect();
+
+        let system_prompt = if self.coordinator_mode {
+            coordinator_system_prompt()
+        } else if self.system_prompt.is_empty() {
+            let dynamic = DynamicSections {
+                language: self.language.as_deref(),
+                output_style: self.output_style.as_ref().map(|(n, p)| (n.as_str(), p.as_str())),
+                mcp_instructions: self.mcp_instructions.clone(),
+                scratchpad_dir: self.scratchpad_dir.as_deref(),
+                ..Default::default()
+            };
+            build_system_prompt_ext(
+                &self.cwd,
+                &model_name,
+                &enabled_tool_names,
+                &claude_md_content,
+                &memory_content,
+                &dynamic,
+            )
+            .text
+        } else {
+            let mut parts = Vec::new();
+            parts.push(self.system_prompt.clone());
+            if !claude_md_content.is_empty() {
+                parts.push(format!(
+                    "\n## Project Instructions (CLAUDE.md)\n\n<project-instructions>\n{}\n</project-instructions>",
+                    claude_md_content
+                ));
+            }
+            if !memory_content.is_empty() {
+                parts.push(format!(
+                    "\n## Agent Memory\n\n<memory>\n{}\n</memory>",
+                    memory_content
+                ));
+            }
+            parts.join("\n")
+        };
+
+        let system_prompt = match self.append_system_prompt {
+            Some(ref append) if !append.is_empty() => {
+                format!("{}\n\n{}", system_prompt, append)
+            }
+            _ => system_prompt,
+        };
+
+        let sub_registry = Arc::new(ToolRegistry::with_defaults());
+
+        // ── Coordinator mode setup ───────────────────────────────────────────
+        let (agent_tracker, notification_rx, coord_cancel_tokens, coord_agent_channels) = if self.coordinator_mode {
+            let (tracker, rx) = AgentTracker::new();
+            let agent_channels: Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>> =
+                Arc::new(RwLock::new(HashMap::new()));
+            let cancel_tokens: Arc<RwLock<HashMap<String, tokio_util::sync::CancellationToken>>> =
+                Arc::new(RwLock::new(HashMap::new()));
+
+            registry.register(SendMessageTool {
+                tracker: tracker.clone(),
+                agent_channels: agent_channels.clone(),
+            });
+            registry.register(TaskStopTool {
+                tracker: tracker.clone(),
+                cancel_tokens: cancel_tokens.clone(),
+            });
+
+            (
+                Some(tracker),
+                Some(tokio::sync::Mutex::new(rx)),
+                Some(cancel_tokens),
+                Some(agent_channels),
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        let dispatch_tool = DispatchAgentTool {
+            client: client.clone(),
+            registry: sub_registry,
+            permission_checker: permission_checker.clone(),
+            config: SubAgentConfig {
+                model: model_name.clone(),
+                max_tokens: self.max_tokens,
+                cwd: self.cwd.clone(),
+                system_prompt: system_prompt.clone(),
+                max_turns: self.max_turns,
+            },
+            agent_tracker,
+            cancel_tokens: coord_cancel_tokens,
+            agent_channels: coord_agent_channels,
+        };
+        registry.register(dispatch_tool);
+
+        let registry = Arc::new(registry);
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let hooks = Arc::new(HookRegistry::from_config(
+            self.hooks_config,
+            self.cwd.clone(),
+            session_id.clone(),
+        ));
+        let executor = Arc::new(ToolExecutor::with_hooks(
+            registry.clone(),
+            permission_checker,
+            hooks.clone(),
+        ));
+
+        let state = new_shared_state_with_model(model_name.clone());
+        let abort_signal = AbortSignal::new();
+
+        QueryEngine {
+            client,
+            executor,
+            registry,
+            state,
+            config: QueryConfig {
+                system_prompt,
+                max_turns: self.max_turns,
+                max_tokens: self.max_tokens,
+                temperature: None,
+                thinking: self.thinking.clone(),
+                token_budget: 0,
+            },
+            hooks,
+            cwd: self.cwd,
+            session_id,
+            compact_threshold: self.compact_threshold,
+            abort_signal,
+            notification_rx,
+            coordinator_mode: self.coordinator_mode,
+            allowed_tools: self.allowed_tools,
+            cost_tracker: CostTracker::new(),
+            auto_compact: tokio::sync::Mutex::new(AutoCompactState::new()),
+            context_window: caps.context_window,
+        }
+    }
+}

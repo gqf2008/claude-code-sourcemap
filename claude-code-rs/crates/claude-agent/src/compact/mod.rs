@@ -594,4 +594,66 @@ mod tests {
         let state = AutoCompactState::new();
         assert!(!state.should_auto_compact(100_000, 0));
     }
+
+    // ── format_compact_summary ──────────────────────────────────────────────
+
+    #[test]
+    fn format_summary_strips_analysis_and_unwraps_summary() {
+        let raw = "<analysis>thinking...</analysis>\n<summary>Hello world</summary>";
+        let result = format_compact_summary(raw);
+        assert!(!result.contains("<analysis>"));
+        assert!(!result.contains("<summary>"));
+        assert!(result.contains("Hello world"));
+        assert!(result.starts_with("Summary:"));
+    }
+
+    #[test]
+    fn format_summary_no_tags() {
+        let raw = "Just plain text, no XML tags.";
+        let result = format_compact_summary(raw);
+        assert_eq!(result, "Just plain text, no XML tags.");
+    }
+
+    #[test]
+    fn format_summary_analysis_only() {
+        let raw = "<analysis>thinking stuff</analysis>\nLeftover text";
+        let result = format_compact_summary(raw);
+        assert!(!result.contains("thinking stuff"));
+        assert!(result.contains("Leftover text"));
+    }
+
+    #[test]
+    fn format_summary_summary_only() {
+        let raw = "<summary>Only summary here</summary>";
+        let result = format_compact_summary(raw);
+        assert!(result.contains("Only summary here"));
+        assert!(result.starts_with("Summary:"));
+    }
+
+    // ── compact_context_message ─────────────────────────────────────────────
+
+    #[test]
+    fn compact_context_message_basic() {
+        let msg = compact_context_message("Task was X.", None);
+        assert!(msg.contains("Task was X."));
+        assert!(msg.contains("continued from a previous conversation"));
+        assert!(msg.contains("Resume directly"));
+    }
+
+    #[test]
+    fn compact_context_message_with_note() {
+        let msg = compact_context_message("Summary here.", Some("Note: check config."));
+        assert!(msg.contains("Summary here."));
+        assert!(msg.contains("Note: check config."));
+    }
+
+    // ── AutoCompactState default ────────────────────────────────────────────
+
+    #[test]
+    fn auto_compact_state_default() {
+        let state = AutoCompactState::default();
+        assert!(!state.disabled);
+        assert!(!state.is_circuit_broken());
+        assert!(state.last_summary_id.is_none());
+    }
 }

@@ -451,4 +451,102 @@ mod tests {
         let worker = worker_tool_names(&all);
         assert_eq!(worker, vec!["Bash", "Read", "Edit"]);
     }
+
+    #[test]
+    fn agent_status_display() {
+        assert_eq!(AgentStatus::Running.to_string(), "running");
+        assert_eq!(AgentStatus::Completed.to_string(), "completed");
+        assert_eq!(AgentStatus::Failed.to_string(), "failed");
+        assert_eq!(AgentStatus::Killed.to_string(), "killed");
+    }
+
+    #[test]
+    fn notification_to_message_is_user() {
+        let n = TaskNotification {
+            agent_id: "a1".into(),
+            status: AgentStatus::Completed,
+            summary: "done".into(),
+            result: "ok".into(),
+            total_tokens: 100,
+            tool_uses: 2,
+            duration_ms: 500,
+        };
+        let msg = n.to_message();
+        match msg {
+            Message::User(u) => {
+                assert!(!u.uuid.is_empty());
+                assert_eq!(u.content.len(), 1);
+                if let ContentBlock::Text { text } = &u.content[0] {
+                    assert!(text.contains("<task-notification>"));
+                } else {
+                    panic!("Expected text block");
+                }
+            }
+            _ => panic!("Expected user message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tracker_register_and_complete() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.register("test-1", "Do something").await;
+        tracker.complete("test-1", "Done!".into(), 500, 3).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert_eq!(notif.agent_id, "test-1");
+        assert_eq!(notif.result, "Done!");
+        assert_eq!(notif.total_tokens, 500);
+        assert_eq!(notif.tool_uses, 3);
+        assert!(matches!(notif.status, AgentStatus::Completed));
+    }
+
+    #[tokio::test]
+    async fn tracker_register_and_fail() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.register("fail-1", "Will fail").await;
+        tracker.fail("fail-1", "Connection error".into()).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert_eq!(notif.agent_id, "fail-1");
+        assert!(matches!(notif.status, AgentStatus::Failed));
+        assert_eq!(notif.result, "Connection error");
+    }
+
+    #[tokio::test]
+    async fn tracker_kill() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.register("kill-1", "Long task").await;
+        tracker.kill("kill-1").await;
+
+        let notif = rx.try_recv().unwrap();
+        assert!(matches!(notif.status, AgentStatus::Killed));
+    }
+
+    #[test]
+    fn worker_tool_names_empty() {
+        let worker = worker_tool_names(&Vec::<&str>::new());
+        assert!(worker.is_empty());
+    }
+
+    #[test]
+    fn worker_tool_names_no_exclusions() {
+        let all = vec!["Bash", "Read", "Glob"];
+        let worker = worker_tool_names(&all);
+        assert_eq!(worker, vec!["Bash", "Read", "Glob"]);
+    }
+
+    #[test]
+    fn notification_xml_escapes_special_chars() {
+        let n = TaskNotification {
+            agent_id: "a&b<c>d".into(),
+            status: AgentStatus::Completed,
+            summary: "sum".into(),
+            result: "res".into(),
+            total_tokens: 0,
+            tool_uses: 0,
+            duration_ms: 0,
+        };
+        let xml = n.to_xml();
+        assert!(xml.contains("a&amp;b&lt;c&gt;d"));
+    }
 }
