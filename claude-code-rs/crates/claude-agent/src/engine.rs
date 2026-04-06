@@ -472,6 +472,11 @@ impl QueryEngine {
         &self.cost_tracker
     }
 
+    /// Number of tools registered in the tool registry.
+    pub fn tool_count(&self) -> usize {
+        self.registry.len()
+    }
+
     /// Whether this engine is in coordinator (multi-agent) mode.
     pub fn is_coordinator(&self) -> bool {
         self.coordinator_mode

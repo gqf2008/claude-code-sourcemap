@@ -134,6 +134,14 @@ impl ToolRegistry {
         self.tools.keys().map(|s| s.as_str()).collect()
     }
 
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+
     /// Create a registry pre-loaded with all built-in tools
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();

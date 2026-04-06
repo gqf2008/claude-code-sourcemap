@@ -491,13 +491,37 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
         println!("  \x1b[32m✓\x1b[0m {} saved session(s), latest: {}", sessions.len(), latest_age);
     }
 
-    // 9. Settings file
-    let settings = crate::config::load_settings();
-    match settings {
-        Ok(_) => println!("  \x1b[32m✓\x1b[0m Settings loaded OK"),
-        Err(e) => {
-            println!("  \x1b[31m✗\x1b[0m Settings error: {}", e);
-            errors += 1;
+    // 9. Settings file (multi-layer)
+    let loaded = claude_core::config::Settings::load_merged(cwd);
+    if loaded.layers.is_empty() {
+        println!("  \x1b[2m·\x1b[0m Using default settings (no config files found)");
+    } else {
+        let sources: Vec<String> = loaded.sources.iter().map(|s| s.to_string()).collect();
+        println!("  \x1b[32m✓\x1b[0m Settings loaded from: {}", sources.join(", "));
+    }
+
+    // 10. Ripgrep (used by GrepTool/LSP fallback)
+    let rg_version = std::process::Command::new("rg").arg("--version").output();
+    match rg_version {
+        Ok(out) if out.status.success() => {
+            let ver = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").to_string();
+            println!("  \x1b[32m✓\x1b[0m {}", ver);
+        }
+        _ => {
+            println!("  \x1b[33m⚠\x1b[0m ripgrep (rg) not found — GrepTool may not work");
+            warnings += 1;
+        }
+    }
+
+    // 11. Node.js (optional, for MCP servers)
+    let node_version = std::process::Command::new("node").arg("--version").output();
+    match node_version {
+        Ok(out) if out.status.success() => {
+            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            println!("  \x1b[32m✓\x1b[0m Node.js {}", ver);
+        }
+        _ => {
+            println!("  \x1b[2m·\x1b[0m Node.js not found (optional, for MCP servers)");
         }
     }
 
@@ -860,7 +884,24 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
     println!("\x1b[1mMessages:\x1b[0m {}", state.messages.len());
     drop(state);
 
-    // 2. CLAUDE.md files
+    // 2. Settings sources
+    println!("\n\x1b[1;33m── Settings ──\x1b[0m");
+    let loaded = claude_core::config::Settings::load_merged(cwd);
+    if loaded.layers.is_empty() {
+        println!("  \x1b[2m(defaults only)\x1b[0m");
+    } else {
+        for (source, _) in &loaded.layers {
+            println!("  ✓ {}", source);
+        }
+    }
+    println!("{}", loaded.settings.summary());
+
+    // 3. Tools
+    println!("\n\x1b[1;33m── Tools ──\x1b[0m");
+    let tool_count = engine.tool_count();
+    println!("  {} tool(s) registered", tool_count);
+
+    // 4. CLAUDE.md files
     println!("\n\x1b[1;33m── CLAUDE.md ──\x1b[0m");
     let claude_md = claude_core::claude_md::load_claude_md(cwd);
     if claude_md.is_empty() {
@@ -874,7 +915,7 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
         }
     }
 
-    // 3. Memory files
+    // 5. Memory files
     println!("\n\x1b[1;33m── Memory ──\x1b[0m");
     let mem_files = claude_core::memory::list_memory_files(cwd);
     if mem_files.is_empty() {
@@ -888,7 +929,7 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
         }
     }
 
-    // 4. Skills
+    // 6. Skills
     println!("\n\x1b[1;33m── Skills ──\x1b[0m");
     let skills = claude_core::skills::load_skills(cwd);
     if skills.is_empty() {
@@ -899,7 +940,29 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
         }
     }
 
-    // 5. Token estimate
+    // 7. Active hooks
+    println!("\n\x1b[1;33m── Hooks ──\x1b[0m");
+    let hooks = &loaded.settings.hooks;
+    let hook_counts = [
+        ("PreToolUse", hooks.pre_tool_use.len()),
+        ("PostToolUse", hooks.post_tool_use.len()),
+        ("Stop", hooks.stop.len()),
+        ("SessionStart", hooks.session_start.len()),
+        ("SessionEnd", hooks.session_end.len()),
+        ("UserPromptSubmit", hooks.user_prompt_submit.len()),
+    ];
+    let total_hooks: usize = hook_counts.iter().map(|(_, c)| c).sum();
+    if total_hooks == 0 {
+        println!("  \x1b[2m(no hooks configured)\x1b[0m");
+    } else {
+        for (name, count) in &hook_counts {
+            if *count > 0 {
+                println!("  {}: {} rule(s)", name, count);
+            }
+        }
+    }
+
+    // 8. Token estimate
     let state = engine.state().read().await;
     let system_tokens = claude_core::token_estimation::estimate_text_tokens(&claude_md);
     let msg_tokens = claude_core::token_estimation::estimate_messages_tokens(&state.messages);
