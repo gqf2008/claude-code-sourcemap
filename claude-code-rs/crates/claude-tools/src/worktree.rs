@@ -266,3 +266,77 @@ fn generate_worktree_slug() -> String {
         .as_secs();
     format!("agent-{}", ts % 100000)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_worktree_name ───────────────────────────────────────────
+
+    #[test]
+    fn validate_name_valid() {
+        assert!(validate_worktree_name("my-feature").is_ok());
+        assert!(validate_worktree_name("fix123").is_ok());
+        assert!(validate_worktree_name("a").is_ok());
+    }
+
+    #[test]
+    fn validate_name_empty() {
+        let err = validate_worktree_name("").unwrap_err();
+        assert!(err.contains("empty"), "expected 'empty' in: {err}");
+    }
+
+    #[test]
+    fn validate_name_too_long() {
+        let long = "a".repeat(65);
+        let err = validate_worktree_name(&long).unwrap_err();
+        assert!(err.contains("64"), "expected '64' in: {err}");
+
+        // Exactly 64 should be fine
+        let exact = "b".repeat(64);
+        assert!(validate_worktree_name(&exact).is_ok());
+    }
+
+    #[test]
+    fn validate_name_with_dots_underscores() {
+        assert!(validate_worktree_name("my.feature").is_ok());
+        assert!(validate_worktree_name("my_feature").is_ok());
+        assert!(validate_worktree_name("v1.2.3_rc1").is_ok());
+    }
+
+    #[test]
+    fn validate_name_with_slashes() {
+        assert!(validate_worktree_name("feature/login").is_ok());
+        assert!(validate_worktree_name("a/b/c").is_ok());
+    }
+
+    #[test]
+    fn validate_name_special_chars_rejected() {
+        for ch in [' ', '@', '#', '!', '$', '%', '^', '&', '*'] {
+            let name = format!("bad{}name", ch);
+            let result = validate_worktree_name(&name);
+            assert!(result.is_err(), "should reject '{ch}'");
+            assert!(
+                result.unwrap_err().contains(&ch.to_string()),
+                "error should mention the invalid char '{ch}'"
+            );
+        }
+    }
+
+    // ── generate_worktree_slug ───────────────────────────────────────────
+
+    #[test]
+    fn generate_slug_format() {
+        let slug = generate_worktree_slug();
+        assert!(slug.starts_with("agent-"), "slug should start with 'agent-': {slug}");
+        let num_part = &slug["agent-".len()..];
+        assert!(num_part.parse::<u64>().is_ok(), "suffix should be numeric: {num_part}");
+    }
+
+    #[test]
+    fn generate_slug_length() {
+        let slug = generate_worktree_slug();
+        // "agent-" (6) + 1..5 digits → 7..11 chars
+        assert!(slug.len() >= 7 && slug.len() <= 11, "unexpected slug length: {}", slug.len());
+    }
+}

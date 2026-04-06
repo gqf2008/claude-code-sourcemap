@@ -330,3 +330,263 @@ pub fn ensure_user_memory_dir() -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // ── MemoryType::from_str ─────────────────────────────────────────────
+
+    #[test]
+    fn memory_type_from_str_valid() {
+        assert_eq!(MemoryType::from_str("user"), Some(MemoryType::User));
+        assert_eq!(MemoryType::from_str("feedback"), Some(MemoryType::Feedback));
+        assert_eq!(MemoryType::from_str("project"), Some(MemoryType::Project));
+        assert_eq!(MemoryType::from_str("reference"), Some(MemoryType::Reference));
+    }
+
+    #[test]
+    fn memory_type_from_str_invalid() {
+        assert_eq!(MemoryType::from_str("unknown"), None);
+        assert_eq!(MemoryType::from_str(""), None);
+        assert_eq!(MemoryType::from_str("  "), None);
+    }
+
+    #[test]
+    fn memory_type_from_str_case_insensitive() {
+        assert_eq!(MemoryType::from_str("User"), Some(MemoryType::User));
+        assert_eq!(MemoryType::from_str("FEEDBACK"), Some(MemoryType::Feedback));
+        assert_eq!(MemoryType::from_str("Project"), Some(MemoryType::Project));
+        assert_eq!(MemoryType::from_str("REFERENCE"), Some(MemoryType::Reference));
+    }
+
+    // ── MemoryType::as_str roundtrip ─────────────────────────────────────
+
+    #[test]
+    fn memory_type_as_str_roundtrip() {
+        for variant in [
+            MemoryType::User,
+            MemoryType::Feedback,
+            MemoryType::Project,
+            MemoryType::Reference,
+        ] {
+            let s = variant.as_str();
+            let back = MemoryType::from_str(s).expect("roundtrip should succeed");
+            assert_eq!(back, variant);
+        }
+    }
+
+    // ── parse_frontmatter ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_frontmatter_with_valid_fm() {
+        let text = "---\ntype: user\ndescription: hello\n---\nBody content here";
+        let (lines, body) = parse_frontmatter(text);
+        assert_eq!(lines, vec!["type: user", "description: hello"]);
+        assert_eq!(body, "Body content here");
+    }
+
+    #[test]
+    fn parse_frontmatter_no_fm() {
+        let text = "Just some body text\nwith multiple lines";
+        let (lines, body) = parse_frontmatter(text);
+        assert!(lines.is_empty());
+        assert_eq!(body, text);
+    }
+
+    #[test]
+    fn parse_frontmatter_unclosed() {
+        let text = "---\ntype: user\nno closing marker";
+        let (lines, body) = parse_frontmatter(text);
+        assert!(lines.is_empty());
+        assert_eq!(body, text);
+    }
+
+    #[test]
+    fn parse_frontmatter_empty_body() {
+        let text = "---\ntype: project\n---\n";
+        let (lines, body) = parse_frontmatter(text);
+        assert_eq!(lines, vec!["type: project"]);
+        assert!(body.is_empty() || body.trim().is_empty());
+    }
+
+    // ── parse_yaml_kv ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_yaml_kv_valid() {
+        assert_eq!(parse_yaml_kv("type: user"), Some(("type", "user")));
+        assert_eq!(
+            parse_yaml_kv("description: some text"),
+            Some(("description", "some text"))
+        );
+        // Extra whitespace around key/value
+        assert_eq!(parse_yaml_kv("  key : value  "), Some(("key", "value")));
+    }
+
+    #[test]
+    fn parse_yaml_kv_no_colon() {
+        assert_eq!(parse_yaml_kv("no colon here"), None);
+        assert_eq!(parse_yaml_kv(""), None);
+    }
+
+    // ── parse_header_from_frontmatter ────────────────────────────────────
+
+    #[test]
+    fn parse_header_type_and_description() {
+        let lines = vec![
+            "type: feedback".to_string(),
+            "description: My memory note".to_string(),
+        ];
+        let (mt, desc) = parse_header_from_frontmatter(&lines);
+        assert_eq!(mt, Some(MemoryType::Feedback));
+        assert_eq!(desc.as_deref(), Some("My memory note"));
+    }
+
+    #[test]
+    fn parse_header_unknown_type() {
+        let lines = vec!["type: banana".to_string()];
+        let (mt, desc) = parse_header_from_frontmatter(&lines);
+        assert_eq!(mt, None);
+        assert_eq!(desc, None);
+    }
+
+    #[test]
+    fn parse_header_empty_lines() {
+        let (mt, desc) = parse_header_from_frontmatter(&[]);
+        assert_eq!(mt, None);
+        assert_eq!(desc, None);
+    }
+
+    // ── human_age ────────────────────────────────────────────────────────
+
+    #[test]
+    fn human_age_just_now() {
+        let now = SystemTime::now();
+        assert_eq!(human_age(now), "just now");
+    }
+
+    #[test]
+    fn human_age_minutes() {
+        let t = SystemTime::now() - Duration::from_secs(5 * 60);
+        assert_eq!(human_age(t), "5 min ago");
+    }
+
+    #[test]
+    fn human_age_hours() {
+        let t = SystemTime::now() - Duration::from_secs(2 * 3600);
+        assert_eq!(human_age(t), "2 hr ago");
+    }
+
+    #[test]
+    fn human_age_days() {
+        let t = SystemTime::now() - Duration::from_secs(3 * 86400);
+        assert_eq!(human_age(t), "3 days ago");
+    }
+
+    // ── scan_memory_dir ──────────────────────────────────────────────────
+
+    #[test]
+    fn scan_memory_dir_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let headers = scan_memory_dir(tmp.path());
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn scan_memory_dir_with_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("note1.md"),
+            "---\ntype: user\ndescription: First note\n---\nHello world",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("note2.md"), "No frontmatter body").unwrap();
+
+        let headers = scan_memory_dir(tmp.path());
+        assert_eq!(headers.len(), 2);
+
+        // Find the one with frontmatter
+        let with_fm = headers.iter().find(|h| h.filename == "note1.md").unwrap();
+        assert_eq!(with_fm.memory_type, Some(MemoryType::User));
+        assert_eq!(with_fm.description.as_deref(), Some("First note"));
+
+        // The one without frontmatter
+        let without_fm = headers.iter().find(|h| h.filename == "note2.md").unwrap();
+        assert_eq!(without_fm.memory_type, None);
+        assert_eq!(without_fm.description, None);
+    }
+
+    #[test]
+    fn scan_memory_dir_skips_memory_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("MEMORY.md"), "Index file").unwrap();
+        std::fs::write(tmp.path().join("real.md"), "Content").unwrap();
+
+        let headers = scan_memory_dir(tmp.path());
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].filename, "real.md");
+    }
+
+    #[test]
+    fn scan_memory_dir_skips_non_md_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("note.md"), "Markdown").unwrap();
+        std::fs::write(tmp.path().join("data.txt"), "Text").unwrap();
+        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+
+        let headers = scan_memory_dir(tmp.path());
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].filename, "note.md");
+    }
+
+    // ── load_memories_for_prompt (via a fake project dir) ────────────────
+
+    #[test]
+    fn load_memories_for_prompt_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .claude/memory/ directory ⇒ None
+        let result = load_memories_for_prompt(tmp.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_memories_for_prompt_with_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem_dir = tmp.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(
+            mem_dir.join("greeting.md"),
+            "---\ntype: project\ndescription: A greeting\n---\nHello from memory!",
+        )
+        .unwrap();
+
+        let result = load_memories_for_prompt(tmp.path());
+        let text = result.expect("should return Some for non-empty memory dir");
+
+        assert!(text.starts_with("<memory>\n"));
+        assert!(text.ends_with("</memory>\n"));
+        assert!(text.contains("greeting.md"));
+        assert!(text.contains("[project]"));
+        assert!(text.contains("A greeting"));
+        assert!(text.contains("Hello from memory!"));
+    }
+
+    // ── read_memory_body (indirectly via load_memories_for_prompt) ───────
+
+    #[test]
+    fn load_memories_truncates_large_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem_dir = tmp.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+
+        // Create a file whose body exceeds MAX_MEMORY_BYTES_PER_FILE (10_000)
+        let big_body = "x".repeat(15_000);
+        let content = format!("---\ntype: user\n---\n{}", big_body);
+        std::fs::write(mem_dir.join("big.md"), content).unwrap();
+
+        let result = load_memories_for_prompt(tmp.path()).unwrap();
+        assert!(result.contains("truncated"));
+        assert!(result.contains(">10000 bytes"));
+    }
+}

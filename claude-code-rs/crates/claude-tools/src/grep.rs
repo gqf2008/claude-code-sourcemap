@@ -255,3 +255,90 @@ impl Tool for GrepTool {
         Ok(ToolResult::text(output))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── type_to_globs ────────────────────────────────────────────────────
+
+    #[test]
+    fn type_to_globs_python() {
+        let globs = type_to_globs("py").unwrap();
+        assert!(globs.contains(&"*.py"));
+        assert!(globs.contains(&"*.pyi"));
+    }
+
+    #[test]
+    fn type_to_globs_javascript() {
+        let globs = type_to_globs("js").unwrap();
+        assert!(globs.contains(&"*.js"));
+        assert!(globs.contains(&"*.mjs"));
+        assert!(globs.contains(&"*.cjs"));
+    }
+
+    #[test]
+    fn type_to_globs_typescript() {
+        let globs = type_to_globs("ts").unwrap();
+        assert!(globs.contains(&"*.ts"));
+        assert!(globs.contains(&"*.tsx"));
+        assert!(globs.contains(&"*.mts"));
+        assert!(globs.contains(&"*.cts"));
+    }
+
+    #[test]
+    fn type_to_globs_rust() {
+        let globs = type_to_globs("rs").unwrap();
+        assert_eq!(globs, vec!["*.rs"]);
+    }
+
+    #[test]
+    fn type_to_globs_unknown() {
+        assert!(type_to_globs("brainfuck").is_none());
+    }
+
+    #[test]
+    fn type_to_globs_returns_none_for_empty() {
+        assert!(type_to_globs("").is_none());
+    }
+
+    #[test]
+    fn type_to_globs_all_aliases() {
+        // Each alias pair should yield the same result
+        assert_eq!(type_to_globs("py"), type_to_globs("python"));
+        assert_eq!(type_to_globs("js"), type_to_globs("javascript"));
+        assert_eq!(type_to_globs("ts"), type_to_globs("typescript"));
+        assert_eq!(type_to_globs("rs"), type_to_globs("rust"));
+        assert_eq!(type_to_globs("rb"), type_to_globs("ruby"));
+        assert_eq!(type_to_globs("md"), type_to_globs("markdown"));
+        assert_eq!(type_to_globs("sh"), type_to_globs("shell"));
+        assert_eq!(type_to_globs("sh"), type_to_globs("bash"));
+        assert_eq!(type_to_globs("yaml"), type_to_globs("yml"));
+        assert_eq!(type_to_globs("kt"), type_to_globs("kotlin"));
+    }
+
+    // ── matches_type_globs ───────────────────────────────────────────────
+
+    #[test]
+    fn matches_type_globs_match() {
+        let path = Path::new("src/main.rs");
+        assert!(matches_type_globs(path, &["*.rs"]));
+    }
+
+    #[test]
+    fn matches_type_globs_no_match() {
+        let path = Path::new("src/main.rs");
+        assert!(!matches_type_globs(path, &["*.py", "*.js"]));
+    }
+
+    #[test]
+    fn matches_type_globs_multiple_extensions() {
+        let globs = type_to_globs("ts").unwrap();
+        assert!(matches_type_globs(Path::new("app.ts"), &globs));
+        assert!(matches_type_globs(Path::new("App.tsx"), &globs));
+        assert!(matches_type_globs(Path::new("lib.mts"), &globs));
+        assert!(matches_type_globs(Path::new("lib.cts"), &globs));
+        assert!(!matches_type_globs(Path::new("lib.js"), &globs));
+    }
+}

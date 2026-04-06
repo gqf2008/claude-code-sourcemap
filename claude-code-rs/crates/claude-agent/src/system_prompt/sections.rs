@@ -360,3 +360,196 @@ pub fn section_debugging_guidance() -> &'static str {
 - Reproduce the issue before attempting a fix.
 - After fixing, verify the fix resolves the original issue and doesn't introduce new ones."#
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Static sections exist and contain key content ────────────────────────
+
+    #[test]
+    fn static_section_system_guidelines_contains_key_phrases() {
+        let s = section_system_guidelines();
+        assert!(s.contains("tool use"));
+        assert!(s.contains("permission mode"));
+        assert!(s.contains("prompt injection"));
+    }
+
+    #[test]
+    fn static_section_doing_tasks_mentions_software_engineering() {
+        let s = section_doing_tasks();
+        assert!(s.contains("software engineering"));
+        assert!(s.contains("Do not create files unless absolutely necessary"));
+    }
+
+    #[test]
+    fn static_section_actions_mentions_git_safety() {
+        let s = section_actions();
+        assert!(s.contains("Git Safety Protocol"));
+        assert!(s.contains("NEVER force push to main/master"));
+    }
+
+    #[test]
+    fn static_section_using_tools_mentions_search() {
+        let s = section_using_tools();
+        assert!(s.contains("glob"));
+        assert!(s.contains("grep"));
+        assert!(s.contains("Sub-agent"));
+    }
+
+    #[test]
+    fn static_section_tone_style_no_emoji_default() {
+        let s = section_tone_style();
+        assert!(s.contains("emojis"));
+        assert!(s.contains("NEVER lie"));
+    }
+
+    #[test]
+    fn static_section_output_efficiency_concise() {
+        let s = section_output_efficiency();
+        assert!(s.contains("Go straight to the point"));
+        assert!(s.contains("one sentence"));
+    }
+
+    #[test]
+    fn static_section_proactive_mode() {
+        let s = section_proactive_mode();
+        assert!(s.contains("Autonomous Work"));
+        assert!(s.contains("Bias toward action"));
+    }
+
+    #[test]
+    fn static_section_file_editing() {
+        let s = section_file_editing();
+        assert!(s.contains("Always read a file before editing"));
+    }
+
+    #[test]
+    fn static_section_git_guidance() {
+        let s = section_git_guidance();
+        assert!(s.contains("conventional commit"));
+    }
+
+    #[test]
+    fn static_section_testing_guidance() {
+        let s = section_testing_guidance();
+        assert!(s.contains("run existing tests"));
+    }
+
+    #[test]
+    fn static_section_debugging_guidance() {
+        let s = section_debugging_guidance();
+        assert!(s.contains("stack traces"));
+    }
+
+    // ── Dynamic sections ────────────────────────────────────────────────────
+
+    #[test]
+    fn section_tool_guidance_empty_tools() {
+        let g = section_tool_guidance(&[]);
+        assert!(g.contains("Tool-Specific Guidance"));
+        assert!(!g.contains("Agent tool"));
+    }
+
+    #[test]
+    fn section_tool_guidance_dispatch_agent() {
+        let tools = vec!["DispatchAgent".to_string()];
+        let g = section_tool_guidance(&tools);
+        assert!(g.contains("Agent tool"));
+    }
+
+    #[test]
+    fn section_tool_guidance_multiple_tools() {
+        let tools = vec![
+            "DispatchAgent".to_string(),
+            "AskUser".to_string(),
+            "WebSearch".to_string(),
+        ];
+        let g = section_tool_guidance(&tools);
+        assert!(g.contains("Agent tool"));
+        assert!(g.contains("AskUser"));
+        assert!(g.contains("Web search"));
+    }
+
+    #[test]
+    fn section_language_none() {
+        assert!(section_language(None).is_none());
+    }
+
+    #[test]
+    fn section_language_empty() {
+        assert!(section_language(Some("")).is_none());
+    }
+
+    #[test]
+    fn section_language_chinese() {
+        let s = section_language(Some("Chinese")).unwrap();
+        assert!(s.contains("Chinese"));
+        assert!(s.contains("Technical terms"));
+    }
+
+    #[test]
+    fn section_output_style_none() {
+        assert!(section_output_style(None, None).is_none());
+        assert!(section_output_style(Some("verbose"), None).is_none());
+    }
+
+    #[test]
+    fn section_output_style_set() {
+        let s = section_output_style(Some("verbose"), Some("Be detailed")).unwrap();
+        assert!(s.contains("verbose"));
+        assert!(s.contains("Be detailed"));
+    }
+
+    #[test]
+    fn section_mcp_instructions_empty() {
+        assert!(section_mcp_instructions(&[]).is_none());
+    }
+
+    #[test]
+    fn section_mcp_instructions_with_servers() {
+        let instrs = vec![
+            ("github".to_string(), "Use issues API".to_string()),
+            ("slack".to_string(), "Read channels".to_string()),
+        ];
+        let s = section_mcp_instructions(&instrs).unwrap();
+        assert!(s.contains("## github"));
+        assert!(s.contains("## slack"));
+        assert!(s.contains("Use issues API"));
+    }
+
+    #[test]
+    fn section_scratchpad_none() {
+        assert!(section_scratchpad(None).is_none());
+    }
+
+    #[test]
+    fn section_scratchpad_set() {
+        let s = section_scratchpad(Some("/tmp/scratch")).unwrap();
+        assert!(s.contains("/tmp/scratch"));
+        assert!(s.contains("Scratchpad Directory"));
+    }
+
+    #[test]
+    fn section_token_budget_zero() {
+        assert!(section_token_budget(0).is_none());
+    }
+
+    #[test]
+    fn section_token_budget_set() {
+        let s = section_token_budget(50000).unwrap();
+        assert!(s.contains("50000"));
+        assert!(s.contains("Token Budget"));
+    }
+
+    #[test]
+    fn default_prefix_contains_identity() {
+        assert!(DEFAULT_PREFIX.contains("Claude Code"));
+        assert!(DEFAULT_PREFIX.contains("Anthropic"));
+    }
+
+    #[test]
+    fn summarize_tool_results_instruction() {
+        assert!(SUMMARIZE_TOOL_RESULTS.contains("important information"));
+    }
+}

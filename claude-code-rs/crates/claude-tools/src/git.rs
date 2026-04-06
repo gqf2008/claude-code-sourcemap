@@ -209,3 +209,94 @@ impl Tool for GitStatusTool {
         Ok(ToolResult::text(text.trim().to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::Tool;
+    use claude_core::permissions::PermissionMode;
+    use std::path::PathBuf;
+
+    fn test_context() -> ToolContext {
+        ToolContext {
+            cwd: PathBuf::from("."),
+            abort_signal: Default::default(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn get_text(result: &ToolResult) -> String {
+        result.content.iter().filter_map(|c| {
+            if let claude_core::message::ToolResultContent::Text { text } = c { Some(text.clone()) } else { None }
+        }).collect::<Vec<_>>().join("")
+    }
+
+    // ── Tool metadata ───────────────────────────────────────────────────────
+
+    #[test]
+    fn git_tool_name() {
+        assert_eq!(GitTool.name(), "Git");
+    }
+
+    #[test]
+    fn git_tool_category() {
+        assert_eq!(GitTool.category(), ToolCategory::Git);
+    }
+
+    #[test]
+    fn git_tool_not_read_only() {
+        assert!(!GitTool.is_read_only());
+    }
+
+    #[test]
+    fn git_status_tool_is_read_only() {
+        assert!(GitStatusTool.is_read_only());
+        assert!(GitStatusTool.is_concurrency_safe());
+    }
+
+    // ── Safety validation via call() ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn git_rejects_unknown_subcommand() {
+        let input = json!({"subcommand": "hack"});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_rejects_no_verify() {
+        let input = json!({"subcommand": "commit", "args": ["--no-verify", "-m", "test"]});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("--no-verify"));
+    }
+
+    #[tokio::test]
+    async fn git_allows_status() {
+        let input = json!({"subcommand": "status"});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        let txt = get_text(&result);
+        assert!(!txt.contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_missing_subcommand() {
+        let input = json!({});
+        let result = GitTool.call(input, &test_context()).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn git_tool_schema_has_subcommand() {
+        let schema = GitTool.input_schema();
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v.as_str() == Some("subcommand")));
+    }
+
+    #[test]
+    fn git_status_tool_name() {
+        assert_eq!(GitStatusTool.name(), "GitStatus");
+    }
+}

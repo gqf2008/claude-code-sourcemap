@@ -143,7 +143,17 @@ pub fn sessions_dir() -> PathBuf {
 }
 
 /// Path for a specific session file.
+#[cfg(not(test))]
 fn session_path(id: &str) -> anyhow::Result<PathBuf> {
+    session_path_inner(id)
+}
+
+#[cfg(test)]
+pub(crate) fn session_path(id: &str) -> anyhow::Result<PathBuf> {
+    session_path_inner(id)
+}
+
+fn session_path_inner(id: &str) -> anyhow::Result<PathBuf> {
     // Validate session ID to prevent path traversal
     if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         anyhow::bail!("Invalid session ID: must be alphanumeric, dash, or underscore");
@@ -305,5 +315,250 @@ pub fn format_age(dt: &DateTime<Utc>) -> String {
     } else {
         let d = duration.num_days();
         format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{ContentBlock, UserMessage, AssistantMessage, SystemMessage, Message};
+    use chrono::Duration;
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    fn user_msg(text: &str) -> Message {
+        Message::User(UserMessage {
+            uuid: "u1".to_string(),
+            content: vec![ContentBlock::Text { text: text.to_string() }],
+        })
+    }
+
+    fn assistant_msg(text: &str) -> Message {
+        Message::Assistant(AssistantMessage {
+            uuid: "a1".to_string(),
+            content: vec![ContentBlock::Text { text: text.to_string() }],
+            stop_reason: None,
+            usage: None,
+        })
+    }
+
+    fn system_msg(text: &str) -> Message {
+        Message::System(SystemMessage {
+            uuid: "s1".to_string(),
+            message: text.to_string(),
+        })
+    }
+
+    // ── title_from_messages ─────────────────────────────────────────────
+
+    #[test]
+    fn title_from_messages_normal() {
+        let msgs = vec![user_msg("Hello world")];
+        assert_eq!(title_from_messages(&msgs), "Hello world");
+    }
+
+    #[test]
+    fn title_from_messages_long_truncated() {
+        let long = "a".repeat(80);
+        let msgs = vec![user_msg(&long)];
+        let title = title_from_messages(&msgs);
+        // 60 chars + "…"
+        assert!(title.ends_with('…'));
+        let without_ellipsis: String = title.chars().take(60).collect();
+        assert_eq!(without_ellipsis, "a".repeat(60));
+    }
+
+    #[test]
+    fn title_from_messages_exactly_60_no_truncation() {
+        let exact = "b".repeat(60);
+        let msgs = vec![user_msg(&exact)];
+        assert_eq!(title_from_messages(&msgs), exact);
+    }
+
+    #[test]
+    fn title_from_messages_empty() {
+        let msgs: Vec<Message> = vec![];
+        assert_eq!(title_from_messages(&msgs), "Untitled session");
+    }
+
+    #[test]
+    fn title_from_messages_whitespace_only() {
+        let msgs = vec![user_msg("   ")];
+        assert_eq!(title_from_messages(&msgs), "Untitled session");
+    }
+
+    #[test]
+    fn title_from_messages_skips_assistant() {
+        let msgs = vec![
+            assistant_msg("I am assistant"),
+            user_msg("Actual question"),
+        ];
+        assert_eq!(title_from_messages(&msgs), "Actual question");
+    }
+
+    #[test]
+    fn title_from_messages_skips_system() {
+        let msgs = vec![
+            system_msg("System prompt"),
+            user_msg("User query"),
+        ];
+        assert_eq!(title_from_messages(&msgs), "User query");
+    }
+
+    #[test]
+    fn title_from_messages_trims_whitespace() {
+        let msgs = vec![user_msg("  trimmed  ")];
+        assert_eq!(title_from_messages(&msgs), "trimmed");
+    }
+
+    // ── format_age ──────────────────────────────────────────────────────
+
+    #[test]
+    fn format_age_just_now() {
+        let dt = Utc::now() - Duration::seconds(30);
+        assert_eq!(format_age(&dt), "just now");
+    }
+
+    #[test]
+    fn format_age_just_now_zero() {
+        let dt = Utc::now();
+        assert_eq!(format_age(&dt), "just now");
+    }
+
+    #[test]
+    fn format_age_singular_min() {
+        let dt = Utc::now() - Duration::minutes(1);
+        assert_eq!(format_age(&dt), "1 min ago");
+    }
+
+    #[test]
+    fn format_age_plural_mins() {
+        let dt = Utc::now() - Duration::minutes(5);
+        assert_eq!(format_age(&dt), "5 mins ago");
+    }
+
+    #[test]
+    fn format_age_singular_hour() {
+        let dt = Utc::now() - Duration::hours(1);
+        assert_eq!(format_age(&dt), "1 hour ago");
+    }
+
+    #[test]
+    fn format_age_plural_hours() {
+        let dt = Utc::now() - Duration::hours(3);
+        assert_eq!(format_age(&dt), "3 hours ago");
+    }
+
+    #[test]
+    fn format_age_singular_day() {
+        let dt = Utc::now() - Duration::days(1);
+        assert_eq!(format_age(&dt), "1 day ago");
+    }
+
+    #[test]
+    fn format_age_plural_days() {
+        let dt = Utc::now() - Duration::days(7);
+        assert_eq!(format_age(&dt), "7 days ago");
+    }
+
+    // ── session_path ────────────────────────────────────────────────────
+
+    #[test]
+    fn session_path_valid() {
+        let result = session_path("abc-123_def");
+        assert!(result.is_ok());
+        let p = result.unwrap();
+        assert!(p.to_string_lossy().ends_with("abc-123_def.json"));
+    }
+
+    #[test]
+    fn session_path_invalid_traversal() {
+        assert!(session_path("../foo").is_err());
+    }
+
+    #[test]
+    fn session_path_invalid_special_chars() {
+        assert!(session_path("hello world").is_err()); // space
+        assert!(session_path("foo/bar").is_err());      // slash
+        assert!(session_path("a@b").is_err());           // at sign
+    }
+
+    // ── SessionSnapshot serde roundtrip ─────────────────────────────────
+
+    #[test]
+    fn session_snapshot_serde_roundtrip() {
+        let now = Utc::now();
+        let snap = SessionSnapshot {
+            id: "test-session".to_string(),
+            title: "Hello".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            cwd: "/home/user".to_string(),
+            created_at: now,
+            updated_at: now,
+            turn_count: 3,
+            input_tokens: 100,
+            output_tokens: 200,
+            model_usage: HashMap::new(),
+            total_cost_usd: 0.05,
+            messages: vec![user_msg("Hi")],
+        };
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let deser: SessionSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deser.id, snap.id);
+        assert_eq!(deser.title, snap.title);
+        assert_eq!(deser.turn_count, 3);
+        assert_eq!(deser.messages.len(), 1);
+    }
+
+    // ── SessionMeta serde ───────────────────────────────────────────────
+
+    #[test]
+    fn session_meta_serde() {
+        let now = Utc::now();
+        let meta = SessionMeta {
+            id: "m1".to_string(),
+            title: "Meta test".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            cwd: "/tmp".to_string(),
+            created_at: now,
+            updated_at: now,
+            turn_count: 1,
+            message_count: 5,
+            total_cost_usd: 0.0,
+        };
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let deser: SessionMeta = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deser.id, "m1");
+        assert_eq!(deser.message_count, 5);
+    }
+
+    #[test]
+    fn session_meta_missing_cost_uses_default() {
+        // total_cost_usd has #[serde(default)], so omitting it should work
+        let json = r#"{
+            "id": "x",
+            "title": "t",
+            "model": "m",
+            "cwd": "/",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "turn_count": 0,
+            "message_count": 0
+        }"#;
+        let meta: SessionMeta = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(meta.total_cost_usd, 0.0);
+    }
+
+    // ── SessionModelUsage default ───────────────────────────────────────
+
+    #[test]
+    fn session_model_usage_default() {
+        let usage = SessionModelUsage::default();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cache_read_tokens, 0);
+        assert_eq!(usage.cache_creation_tokens, 0);
+        assert_eq!(usage.api_calls, 0);
+        assert_eq!(usage.cost_usd, 0.0);
     }
 }
