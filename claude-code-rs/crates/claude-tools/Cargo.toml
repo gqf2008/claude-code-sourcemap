@@ -3,6 +3,14 @@ name = "claude-tools"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["shell", "web", "git", "mcp", "code"]
+shell = []
+web = ["reqwest"]
+git = []
+mcp = []
+code = []
+
 [dependencies]
 claude-core = { path = "../claude-core" }
 serde = { workspace = true }
@@ -14,7 +22,7 @@ walkdir = { workspace = true }
 glob = { workspace = true }
 ignore = { workspace = true }
 regex = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }
 similar = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

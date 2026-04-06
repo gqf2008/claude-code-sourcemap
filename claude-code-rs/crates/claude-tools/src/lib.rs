@@ -1,4 +1,4 @@
-// ── File I/O tools ───────────────────────────────────────────────────────────
+// ── File I/O tools (always included) ─────────────────────────────────────────
 pub mod file_read;
 pub mod file_edit;
 pub mod file_write;
@@ -8,21 +8,30 @@ pub mod grep;
 pub mod ls;
 
 // ── Shell / execution tools ─────────────────────────────────────────────────
+#[cfg(feature = "shell")]
 pub mod bash;
+#[cfg(feature = "shell")]
 pub mod powershell;
+#[cfg(feature = "shell")]
 pub mod repl;
 
 // ── Web tools ───────────────────────────────────────────────────────────────
+#[cfg(feature = "web")]
 pub mod web_fetch;
+#[cfg(feature = "web")]
 pub mod web_search;
 
 // ── Code intelligence tools ─────────────────────────────────────────────────
+#[cfg(feature = "code")]
 pub mod lsp;
+#[cfg(feature = "code")]
 pub mod notebook;
 pub mod diff_ui;
 
 // ── Git tools ───────────────────────────────────────────────────────────────
+#[cfg(feature = "git")]
 pub mod git;
+#[cfg(feature = "git")]
 pub mod worktree;
 
 // ── Interaction tools ───────────────────────────────────────────────────────
@@ -42,6 +51,7 @@ pub mod sleep;
 pub mod tool_search;
 
 // ── MCP (Model Context Protocol) ────────────────────────────────────────────
+#[cfg(feature = "mcp")]
 pub mod mcp;
 
 // ── Internal utilities (not tools) ──────────────────────────────────────────
@@ -145,42 +155,71 @@ impl ToolRegistry {
     /// Create a registry pre-loaded with all built-in tools
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
-        registry.register(bash::BashTool);
+
+        // File I/O (always included)
         registry.register(file_read::FileReadTool);
         registry.register(file_edit::FileEditTool);
         registry.register(file_write::FileWriteTool);
         registry.register(glob_tool::GlobTool);
         registry.register(grep::GrepTool);
-        registry.register(web_fetch::WebFetchTool);
-        registry.register(ask_user::AskUserTool);
         registry.register(ls::LsTool);
-        registry.register(todo::TodoWriteTool);
-        registry.register(todo::TodoReadTool);
         registry.register(multi_edit::MultiEditTool);
-        registry.register(sleep::SleepTool);
-        registry.register(config_tool::ConfigTool);
-        registry.register(powershell::PowerShellTool);
+
+        // Shell
+        #[cfg(feature = "shell")]
+        {
+            registry.register(bash::BashTool);
+            registry.register(powershell::PowerShellTool);
+            registry.register(repl::ReplTool);
+        }
+
+        // Web
+        #[cfg(feature = "web")]
+        {
+            registry.register(web_fetch::WebFetchTool);
+            registry.register(web_search::WebSearchTool);
+        }
+
+        // Git
+        #[cfg(feature = "git")]
+        {
+            registry.register(git::GitTool);
+            registry.register(git::GitStatusTool);
+            registry.register(worktree::EnterWorktreeTool);
+            registry.register(worktree::ExitWorktreeTool);
+        }
+
+        // Code intelligence
+        #[cfg(feature = "code")]
+        {
+            registry.register(lsp::LspTool);
+            registry.register(notebook::NotebookEditTool);
+        }
+
+        // Interaction (always included)
+        registry.register(ask_user::AskUserTool);
+        registry.register(send_message::SendUserMessageTool);
+
+        // Agent / orchestration (always included)
         registry.register(task::TaskCreateTool);
         registry.register(task::TaskUpdateTool);
         registry.register(task::TaskGetTool);
         registry.register(task::TaskListTool);
         registry.register(task::TaskOutputTool);
         registry.register(task::TaskStopTool);
-        registry.register(web_search::WebSearchTool);
-        registry.register(notebook::NotebookEditTool);
         registry.register(plan_mode::EnterPlanModeTool);
         registry.register(plan_mode::ExitPlanModeTool);
-        registry.register(tool_search::ToolSearchTool);
         registry.register(skill_tool::SkillTool);
-        registry.register(repl::ReplTool);
-        registry.register(send_message::SendUserMessageTool);
-        registry.register(git::GitTool);
-        registry.register(git::GitStatusTool);
+
+        // Management (always included)
+        registry.register(todo::TodoWriteTool);
+        registry.register(todo::TodoReadTool);
+        registry.register(sleep::SleepTool);
+        registry.register(config_tool::ConfigTool);
+        registry.register(tool_search::ToolSearchTool);
         registry.register(context::ContextInspectTool);
         registry.register(context::VerifyTool);
-        registry.register(worktree::EnterWorktreeTool);
-        registry.register(worktree::ExitWorktreeTool);
-        registry.register(lsp::LspTool);
+
         // MCP resource tools require a manager — use register_mcp() to add them
         registry
     }
@@ -207,6 +246,7 @@ impl ToolRegistry {
 
     /// Register MCP tools with a shared manager.
     /// Call this after connecting to MCP servers.
+    #[cfg(feature = "mcp")]
     pub fn register_mcp(&mut self, manager: std::sync::Arc<tokio::sync::RwLock<mcp::McpManager>>) {
         self.tools.remove("mcp_list_resources");
         self.tools.remove("mcp_read_resource");
@@ -215,6 +255,7 @@ impl ToolRegistry {
     }
 
     /// Register dynamically-discovered MCP tool proxies.
+    #[cfg(feature = "mcp")]
     pub fn register_mcp_proxies(&mut self, proxies: Vec<mcp::McpToolProxy>) {
         for proxy in proxies {
             let name = proxy.qualified_name.clone();
