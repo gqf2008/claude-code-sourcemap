@@ -486,16 +486,23 @@ fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock>> {
         Some(pos) => {
             let static_prefix = system_prompt[..pos].trim();
             let dynamic_suffix = system_prompt[pos..].trim();
+            // Strip boundary marker from dynamic suffix
+            let dynamic_suffix = dynamic_suffix
+                .strip_prefix(crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+                .unwrap_or(dynamic_suffix)
+                .trim();
             let mut blocks = vec![SystemBlock {
                 block_type: "text".into(),
                 text: static_prefix.to_string(),
-                cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                // Static prefix is cacheable across sessions/orgs
+                cache_control: Some(CacheControl::ephemeral()),
             }];
             if !dynamic_suffix.is_empty() {
                 blocks.push(SystemBlock {
                     block_type: "text".into(),
                     text: dynamic_suffix.to_string(),
-                    cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+                    // Dynamic suffix is NOT cached — changes per session
+                    cache_control: None,
                 });
             }
             Some(blocks)
@@ -503,7 +510,7 @@ fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock>> {
         None => Some(vec![SystemBlock {
             block_type: "text".into(),
             text: system_prompt.to_string(),
-            cache_control: Some(CacheControl { control_type: "ephemeral".into() }),
+            cache_control: Some(CacheControl::ephemeral()),
         }]),
     }
 }
@@ -628,10 +635,10 @@ fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
         if let Some(last_block) = last_msg.content.last_mut() {
             match last_block {
                 ApiContentBlock::Text { cache_control, .. } => {
-                    *cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+                    *cache_control = Some(CacheControl::ephemeral());
                 }
                 ApiContentBlock::ToolResult { cache_control, .. } => {
-                    *cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+                    *cache_control = Some(CacheControl::ephemeral());
                 }
                 _ => {}
             }
@@ -842,6 +849,21 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(blocks[0].text.contains("Static part"));
         assert!(blocks[1].text.contains("Dynamic part"));
+        // Static prefix should be cached
+        assert!(blocks[0].cache_control.is_some());
+        assert_eq!(blocks[0].cache_control.as_ref().unwrap().control_type, "ephemeral");
+        // Dynamic suffix should NOT be cached
+        assert!(blocks[1].cache_control.is_none());
+    }
+
+    #[test]
+    fn test_build_system_blocks_boundary_strips_marker() {
+        let boundary = crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
+        let prompt = format!("Static\n{}\nDynamic data", boundary);
+        let blocks = build_system_blocks(&prompt).unwrap();
+        // The dynamic suffix should not contain the boundary marker itself
+        assert!(!blocks[1].text.contains(boundary));
+        assert!(blocks[1].text.contains("Dynamic data"));
     }
 
     // ── messages_to_api ──────────────────────────────────────────────────

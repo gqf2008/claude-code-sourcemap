@@ -636,4 +636,97 @@ mod tests {
         assert!(last.label.contains("CustomTool"));
         assert!(last.label.contains("session"));
     }
+
+    // ── apply_response ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_apply_response_session_adds_to_session_allowed() {
+        let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
+        let result = PermissionResult {
+            behavior: PermissionBehavior::Ask,
+            reason: None,
+            suggestions: vec![PermissionSuggestion {
+                label: "Allow Bash (session)".into(),
+                rule: PermissionRule {
+                    tool_name: "Bash".into(),
+                    pattern: None,
+                    behavior: PermissionBehavior::Allow,
+                },
+                destination: PermissionDestination::Session,
+            }],
+            updated_input: None,
+            classification: None,
+        };
+        let response = PermissionResponse {
+            allowed: true,
+            persist: true,
+            feedback: None,
+            selected_suggestion: Some(0),
+            destination: None,
+        };
+        checker.apply_response("Bash", &response, &result, std::path::Path::new("."));
+        let allowed = checker.session_allowed.lock().unwrap();
+        assert!(allowed.contains("Bash"));
+    }
+
+    #[test]
+    fn test_apply_response_not_persisted_when_not_allowed() {
+        let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
+        let result = PermissionResult {
+            behavior: PermissionBehavior::Ask,
+            reason: None,
+            suggestions: vec![PermissionSuggestion {
+                label: "Allow Bash".into(),
+                rule: PermissionRule {
+                    tool_name: "Bash".into(),
+                    pattern: None,
+                    behavior: PermissionBehavior::Allow,
+                },
+                destination: PermissionDestination::Session,
+            }],
+            updated_input: None,
+            classification: None,
+        };
+        let response = PermissionResponse {
+            allowed: false,
+            persist: true,
+            feedback: None,
+            selected_suggestion: Some(0),
+            destination: None,
+        };
+        checker.apply_response("Bash", &response, &result, std::path::Path::new("."));
+        let allowed = checker.session_allowed.lock().unwrap();
+        assert!(!allowed.contains("Bash"));
+    }
+
+    #[test]
+    fn test_apply_response_no_suggestion_falls_back_to_session() {
+        let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
+        let result = PermissionResult {
+            behavior: PermissionBehavior::Ask,
+            reason: None,
+            suggestions: vec![PermissionSuggestion {
+                label: "Allow Bash".into(),
+                rule: PermissionRule {
+                    tool_name: "Bash".into(),
+                    pattern: None,
+                    behavior: PermissionBehavior::Allow,
+                },
+                destination: PermissionDestination::Session,
+            }],
+            updated_input: None,
+            classification: None,
+        };
+        let response = PermissionResponse {
+            allowed: true,
+            persist: true,
+            feedback: None,
+            selected_suggestion: None, // no suggestion selected → generic session allow
+            destination: None,
+        };
+        checker.apply_response("Bash", &response, &result, std::path::Path::new("."));
+        // When no suggestion is selected, falls back to session_allow(tool_name)
+        let allowed = checker.session_allowed.lock().unwrap();
+        assert!(allowed.contains("Bash"));
+    }
 }

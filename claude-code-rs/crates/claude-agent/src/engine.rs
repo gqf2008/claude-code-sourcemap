@@ -395,7 +395,7 @@ impl QueryEngine {
 
         // Enable prompt caching on the last tool definition (mirrors TS behavior)
         if let Some(last) = defs.last_mut() {
-            last.cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+            last.cache_control = Some(CacheControl::ephemeral());
         }
         defs
     }

@@ -631,4 +631,123 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["model"], "test");
     }
+
+    #[test]
+    fn merge_hooks_overlay_replaces_base_entirely() {
+        let base = Settings {
+            hooks: HooksConfig {
+                pre_tool_use: vec![HookRule {
+                    matcher: Some(".*".into()),
+                    hooks: vec![HookCommandDef {
+                        hook_type: "command".into(),
+                        command: "echo base".into(),
+                        timeout_ms: None,
+                    }],
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let overlay = Settings {
+            hooks: HooksConfig {
+                stop: vec![HookRule {
+                    matcher: Some(".*".into()),
+                    hooks: vec![HookCommandDef {
+                        hook_type: "command".into(),
+                        command: "echo overlay".into(),
+                        timeout_ms: None,
+                    }],
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let merged = merge_settings(base, &overlay);
+        // Overlay should entirely replace base hooks
+        assert!(merged.hooks.pre_tool_use.is_empty(), "base pre_tool_use should be gone");
+        assert_eq!(merged.hooks.stop.len(), 1);
+        assert_eq!(merged.hooks.stop[0].hooks[0].command, "echo overlay");
+    }
+
+    #[test]
+    fn merge_hooks_empty_overlay_keeps_base() {
+        let base = Settings {
+            hooks: HooksConfig {
+                pre_tool_use: vec![HookRule {
+                    matcher: Some(".*".into()),
+                    hooks: vec![HookCommandDef {
+                        hook_type: "command".into(),
+                        command: "echo base".into(),
+                        timeout_ms: None,
+                    }],
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let overlay = Settings::default();
+        let merged = merge_settings(base, &overlay);
+        // Empty overlay keeps base hooks intact
+        assert_eq!(merged.hooks.pre_tool_use.len(), 1);
+        assert_eq!(merged.hooks.pre_tool_use[0].hooks[0].command, "echo base");
+    }
+
+    #[test]
+    fn merge_three_layers_priority() {
+        let user = Settings {
+            model: Some("user-model".into()),
+            language: Some("English".into()),
+            allowed_tools: vec!["tool_a".into()],
+            ..Default::default()
+        };
+        let project = Settings {
+            model: Some("project-model".into()),
+            allowed_tools: vec!["tool_b".into()],
+            ..Default::default()
+        };
+        let local = Settings {
+            model: Some("local-model".into()),
+            ..Default::default()
+        };
+        // Merge order: user → project → local (later wins)
+        let step1 = merge_settings(user, &project);
+        let final_settings = merge_settings(step1, &local);
+        // local model wins
+        assert_eq!(final_settings.model.as_deref(), Some("local-model"));
+        // Language from user is preserved (project/local don't set it)
+        assert_eq!(final_settings.language.as_deref(), Some("English"));
+        // Tools are union-merged from user + project
+        assert!(final_settings.allowed_tools.contains(&"tool_a".to_string()));
+        assert!(final_settings.allowed_tools.contains(&"tool_b".to_string()));
+    }
+
+    #[test]
+    fn merge_permission_rules_are_appended_not_deduped() {
+        let base = Settings {
+            permission_rules: vec![PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: None,
+                behavior: crate::permissions::PermissionBehavior::Allow,
+            }],
+            ..Default::default()
+        };
+        let overlay = Settings {
+            permission_rules: vec![
+                PermissionRule {
+                    tool_name: "Bash".into(), // duplicate
+                    pattern: None,
+                    behavior: crate::permissions::PermissionBehavior::Allow,
+                },
+                PermissionRule {
+                    tool_name: "FileWrite".into(),
+                    pattern: Some("src/**".into()),
+                    behavior: crate::permissions::PermissionBehavior::Allow,
+                },
+            ],
+            ..Default::default()
+        };
+        let merged = merge_settings(base, &overlay);
+        // Rules are appended (not deduplicated at merge time)
+        assert_eq!(merged.permission_rules.len(), 3);
+    }
 }

@@ -32,10 +32,45 @@ pub struct SystemBlock {
     pub cache_control: Option<CacheControl>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub control_type: String,
+    /// Optional TTL hint: `"5m"` (default) or `"1h"` (for eligible users/orgs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
+    /// Optional scope: `"global"` for org-wide cache sharing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+impl CacheControl {
+    /// Standard ephemeral cache control (no TTL/scope).
+    pub fn ephemeral() -> Self {
+        Self {
+            control_type: "ephemeral".into(),
+            ttl: None,
+            scope: None,
+        }
+    }
+
+    /// Ephemeral with global scope (for org-wide cache sharing).
+    pub fn ephemeral_global() -> Self {
+        Self {
+            control_type: "ephemeral".into(),
+            ttl: None,
+            scope: Some("global".into()),
+        }
+    }
+
+    /// Ephemeral with 1-hour TTL and global scope (for eligible users).
+    pub fn ephemeral_1h_global() -> Self {
+        Self {
+            control_type: "ephemeral".into(),
+            ttl: Some("1h".into()),
+            scope: Some("global".into()),
+        }
+    }
 }
 
 /// Extended thinking configuration — enables chain-of-thought reasoning.
@@ -426,5 +461,64 @@ mod tests {
         assert_eq!(usage.output_tokens, 7);
         assert!(usage.cache_creation_input_tokens.is_none());
         assert!(usage.cache_read_input_tokens.is_none());
+    }
+
+    // ── CacheControl ────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_control_ephemeral_serialization() {
+        let cc = CacheControl::ephemeral();
+        let json = serde_json::to_value(&cc).unwrap();
+        assert_eq!(json, json!({"type": "ephemeral"}));
+        // No ttl or scope should appear
+        assert!(json.get("ttl").is_none());
+        assert!(json.get("scope").is_none());
+    }
+
+    #[test]
+    fn cache_control_ephemeral_global_serialization() {
+        let cc = CacheControl::ephemeral_global();
+        let json = serde_json::to_value(&cc).unwrap();
+        assert_eq!(json, json!({"type": "ephemeral", "scope": "global"}));
+    }
+
+    #[test]
+    fn cache_control_1h_global_serialization() {
+        let cc = CacheControl::ephemeral_1h_global();
+        let json = serde_json::to_value(&cc).unwrap();
+        assert_eq!(json, json!({"type": "ephemeral", "ttl": "1h", "scope": "global"}));
+    }
+
+    #[test]
+    fn cache_control_deserialization_with_extra_fields() {
+        let json = json!({"type": "ephemeral", "ttl": "5m", "scope": "org"});
+        let cc: CacheControl = serde_json::from_value(json).unwrap();
+        assert_eq!(cc.control_type, "ephemeral");
+        assert_eq!(cc.ttl.as_deref(), Some("5m"));
+        assert_eq!(cc.scope.as_deref(), Some("org"));
+    }
+
+    #[test]
+    fn cache_control_deserialization_minimal() {
+        let json = json!({"type": "ephemeral"});
+        let cc: CacheControl = serde_json::from_value(json).unwrap();
+        assert_eq!(cc.control_type, "ephemeral");
+        assert!(cc.ttl.is_none());
+        assert!(cc.scope.is_none());
+    }
+
+    #[test]
+    fn system_block_with_cache_control_roundtrip() {
+        let block = SystemBlock {
+            block_type: "text".into(),
+            text: "Hello".into(),
+            cache_control: Some(CacheControl::ephemeral_global()),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["cache_control"]["type"], "ephemeral");
+        assert_eq!(json["cache_control"]["scope"], "global");
+        // Roundtrip
+        let back: SystemBlock = serde_json::from_value(json).unwrap();
+        assert_eq!(back.cache_control.unwrap().scope.as_deref(), Some("global"));
     }
 }

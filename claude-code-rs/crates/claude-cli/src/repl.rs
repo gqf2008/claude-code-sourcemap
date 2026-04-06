@@ -276,3 +276,37 @@ fn format_compact_tokens(n: u64) -> String {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_compact_tokens_below_1k() {
+        assert_eq!(format_compact_tokens(0), "0");
+        assert_eq!(format_compact_tokens(1), "1");
+        assert_eq!(format_compact_tokens(999), "999");
+    }
+
+    #[test]
+    fn format_compact_tokens_kilos() {
+        assert_eq!(format_compact_tokens(1_000), "1.0K");
+        assert_eq!(format_compact_tokens(1_234), "1.2K");
+        assert_eq!(format_compact_tokens(15_500), "15.5K");
+        assert_eq!(format_compact_tokens(99_999), "100.0K");
+    }
+
+    #[test]
+    fn format_compact_tokens_large_kilos() {
+        assert_eq!(format_compact_tokens(100_000), "100K");
+        assert_eq!(format_compact_tokens(500_000), "500K");
+        assert_eq!(format_compact_tokens(999_999), "999K");
+    }
+
+    #[test]
+    fn format_compact_tokens_megas() {
+        assert_eq!(format_compact_tokens(1_000_000), "1.0M");
+        assert_eq!(format_compact_tokens(1_500_000), "1.5M");
+        assert_eq!(format_compact_tokens(12_345_678), "12.3M");
+    }
+}
