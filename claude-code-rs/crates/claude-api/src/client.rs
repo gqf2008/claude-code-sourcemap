@@ -185,10 +185,11 @@ impl AnthropicClient {
             use futures::StreamExt;
             let mut byte_stream = response.bytes_stream();
             let mut buffer = String::new();
+            let chunk_timeout = std::time::Duration::from_secs(90);
 
-            while let Some(chunk_result) = byte_stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
+            loop {
+                match tokio::time::timeout(chunk_timeout, byte_stream.next()).await {
+                    Ok(Some(Ok(chunk))) => {
                         buffer.push_str(&String::from_utf8_lossy(&chunk));
                         while let Some(pos) = buffer.find('\n') {
                             let line = buffer[..pos].to_string();
@@ -198,8 +199,16 @@ impl AnthropicClient {
                             }
                         }
                     }
-                    Err(e) => {
+                    Ok(Some(Err(e))) => {
                         yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                        return;
+                    }
+                    Ok(None) => {
+                        // Stream ended normally
+                        break;
+                    }
+                    Err(_) => {
+                        yield Err(anyhow::anyhow!("Stream stalled: no data received for {}s", chunk_timeout.as_secs()));
                         return;
                     }
                 }

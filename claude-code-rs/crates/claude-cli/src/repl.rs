@@ -163,8 +163,20 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
 
                 let model = { engine.state().read().await.model.clone() };
                 let stream = engine.submit(input).await;
+
+                // The background Ctrl+C handler (main.rs) will call engine.abort()
+                // when the user presses Ctrl+C. print_stream checks abort internally.
                 if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
-                    eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                    if engine.abort_signal().is_aborted() {
+                        eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                        engine.abort_signal().reset();
+                    } else {
+                        eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                    }
+                }
+                // Reset abort signal after each turn
+                if engine.abort_signal().is_aborted() {
+                    engine.abort_signal().reset();
                 }
 
                 // Show turn stats

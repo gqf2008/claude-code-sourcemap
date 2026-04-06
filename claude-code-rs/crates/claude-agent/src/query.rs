@@ -131,10 +131,19 @@ pub fn query_stream(
                         ApiErrorAction::ReactiveCompact => {
                             has_attempted_reactive_compact = true;
                             yield AgentEvent::TextDelta(
-                                "\n\x1b[33m[Prompt too long — triggering auto-compact…]\x1b[0m\n".to_string()
+                                "\n\x1b[33m[Prompt too long — trimming context…]\x1b[0m\n".to_string()
                             );
-                            if messages.len() > 3 {
-                                messages.drain(1..3);
+                            // First pass: truncate large tool results
+                            let truncated = crate::compact::truncate_large_tool_results(
+                                &mut messages, crate::compact::MAX_TOOL_RESULT_CHARS / 2,
+                            );
+                            // Second pass: snip oldest message pairs, keep last 5
+                            let snipped = crate::compact::snip_old_messages(&mut messages, 5);
+                            if truncated + snipped > 0 {
+                                yield AgentEvent::TextDelta(format!(
+                                    "\x1b[33m[Trimmed {} tool result(s), snipped {} message(s)]\x1b[0m\n",
+                                    truncated, snipped,
+                                ));
                                 continue;
                             }
                         }
@@ -201,8 +210,22 @@ pub fn query_stream(
                         },
                         StreamEvent::ContentBlockStop { .. } => {
                             if !current_tool_id.is_empty() {
-                                let input: serde_json::Value = serde_json::from_str(&current_tool_input)
-                                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                                let input: serde_json::Value = match serde_json::from_str(&current_tool_input) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Malformed tool input JSON for {}: {} (raw: {}…)",
+                                            current_tool_name,
+                                            e,
+                                            &current_tool_input[..current_tool_input.len().min(200)],
+                                        );
+                                        yield AgentEvent::TextDelta(format!(
+                                            "\n\x1b[33m[Warning: malformed tool input for {}, using empty object]\x1b[0m\n",
+                                            current_tool_name,
+                                        ));
+                                        serde_json::Value::Object(Default::default())
+                                    }
+                                };
                                 yield AgentEvent::ToolUseReady {
                                     id: current_tool_id.clone(),
                                     name: current_tool_name.clone(),
