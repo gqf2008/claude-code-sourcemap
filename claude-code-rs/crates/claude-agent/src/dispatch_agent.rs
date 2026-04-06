@@ -435,3 +435,158 @@ impl Tool for DispatchAgentTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── AgentType parsing ────────────────────────────────────────────────
+
+    #[test]
+    fn agent_type_from_str_general() {
+        assert_eq!(AgentType::from_str("general"), AgentType::General);
+        assert_eq!(AgentType::from_str("unknown"), AgentType::General);
+        assert_eq!(AgentType::from_str(""), AgentType::General);
+    }
+
+    #[test]
+    fn agent_type_from_str_explore() {
+        assert_eq!(AgentType::from_str("explore"), AgentType::Explore);
+    }
+
+    #[test]
+    fn agent_type_from_str_plan() {
+        assert_eq!(AgentType::from_str("plan"), AgentType::Plan);
+    }
+
+    #[test]
+    fn agent_type_from_str_code_review_variants() {
+        assert_eq!(AgentType::from_str("code-review"), AgentType::CodeReview);
+        assert_eq!(AgentType::from_str("code_review"), AgentType::CodeReview);
+        assert_eq!(AgentType::from_str("review"), AgentType::CodeReview);
+    }
+
+    // ── AgentType properties ─────────────────────────────────────────────
+
+    #[test]
+    fn agent_type_read_only() {
+        assert!(!AgentType::General.read_only());
+        assert!(AgentType::Explore.read_only());
+        assert!(!AgentType::Plan.read_only());
+        assert!(AgentType::CodeReview.read_only());
+    }
+
+    #[test]
+    fn agent_type_preferred_model() {
+        assert_eq!(AgentType::Explore.preferred_model(), Some("haiku"));
+        assert_eq!(AgentType::General.preferred_model(), None);
+        assert_eq!(AgentType::Plan.preferred_model(), None);
+        assert_eq!(AgentType::CodeReview.preferred_model(), None);
+    }
+
+    #[test]
+    fn agent_type_max_turns_capped() {
+        assert_eq!(AgentType::General.max_turns(100), 20);
+        assert_eq!(AgentType::General.max_turns(5), 5);
+        assert_eq!(AgentType::Explore.max_turns(100), 10);
+        assert_eq!(AgentType::Explore.max_turns(3), 3);
+        assert_eq!(AgentType::Plan.max_turns(100), 15);
+        assert_eq!(AgentType::CodeReview.max_turns(15), 15);
+    }
+
+    #[test]
+    fn agent_type_system_prompt_general_returns_base() {
+        let base = "You are a helpful assistant.";
+        assert_eq!(AgentType::General.system_prompt(base), base);
+    }
+
+    #[test]
+    fn agent_type_system_prompt_explore_contains_keywords() {
+        let prompt = AgentType::Explore.system_prompt("Base");
+        assert!(prompt.contains("exploration agent"));
+        assert!(prompt.contains("ONLY read"));
+        assert!(prompt.starts_with("Base"));
+    }
+
+    #[test]
+    fn agent_type_system_prompt_plan_contains_keywords() {
+        let prompt = AgentType::Plan.system_prompt("Base");
+        assert!(prompt.contains("planning agent"));
+        assert!(prompt.contains("task_create"));
+    }
+
+    #[test]
+    fn agent_type_system_prompt_code_review_contains_keywords() {
+        let prompt = AgentType::CodeReview.system_prompt("Base");
+        assert!(prompt.contains("code review agent"));
+        assert!(prompt.contains("Do not modify"));
+    }
+
+    // ── resolve_agent_model ──────────────────────────────────────────────
+
+    #[test]
+    fn resolve_model_none_uses_parent() {
+        assert_eq!(resolve_agent_model(None, "claude-sonnet-4-6"), "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn resolve_model_inherit_uses_parent() {
+        assert_eq!(resolve_agent_model(Some("inherit"), "claude-opus-4"), "claude-opus-4");
+    }
+
+    #[test]
+    fn resolve_model_alias_resolves() {
+        let model = resolve_agent_model(Some("haiku"), "claude-sonnet-4");
+        assert!(model.contains("haiku"), "Expected haiku, got: {}", model);
+    }
+
+    #[test]
+    fn resolve_model_unknown_alias_passes_through() {
+        let model = resolve_agent_model(Some("custom-model-v1"), "parent");
+        assert_eq!(model, "custom-model-v1");
+    }
+
+    // ── DispatchAgentTool metadata ───────────────────────────────────────
+
+    fn make_tool() -> DispatchAgentTool {
+        DispatchAgentTool {
+            client: Arc::new(AnthropicClient::new("test-key")),
+            registry: Arc::new(ToolRegistry::with_defaults()),
+            permission_checker: Arc::new(PermissionChecker::new(
+                claude_core::permissions::PermissionMode::BypassAll,
+                Vec::new(),
+            )),
+            config: SubAgentConfig {
+                model: "claude-sonnet-4".into(),
+                max_tokens: 1024,
+                cwd: PathBuf::from("."),
+                system_prompt: "Test".into(),
+                max_turns: 10,
+            },
+            agent_tracker: None,
+            cancel_tokens: None,
+            agent_channels: None,
+        }
+    }
+
+    #[test]
+    fn dispatch_agent_tool_metadata() {
+        let tool = make_tool();
+        assert_eq!(tool.name(), "dispatch_agent");
+        assert!(!tool.is_read_only());
+        assert!(tool.description().contains("sub-agent"));
+    }
+
+    #[test]
+    fn dispatch_agent_input_schema_has_all_properties() {
+        let tool = make_tool();
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        let props = schema["properties"].as_object().unwrap();
+        for key in &["prompt", "agent_type", "allowed_tools", "system_prompt", "model", "run_in_background"] {
+            assert!(props.contains_key(*key), "Missing property: {}", key);
+        }
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "prompt"));
+    }
+}

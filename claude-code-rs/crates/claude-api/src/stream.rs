@@ -115,6 +115,11 @@ pub fn with_idle_watchdog(
     Box::pin(stream)
 }
 
+/// Whether a stream error indicates an idle timeout (and should trigger fallback).
+pub fn is_idle_timeout_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("Stream idle timeout")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +243,19 @@ mod tests {
         let result = stream.next().await.unwrap();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("upstream error"));
+    }
+
+    // ── is_idle_timeout_error ────────────────────────────────────────────
+
+    #[test]
+    fn idle_timeout_error_detected() {
+        let err = anyhow::anyhow!("Stream idle timeout: no events for 90s");
+        assert!(is_idle_timeout_error(&err));
+    }
+
+    #[test]
+    fn non_timeout_error_not_detected() {
+        let err = anyhow::anyhow!("Connection reset by peer");
+        assert!(!is_idle_timeout_error(&err));
     }
 }

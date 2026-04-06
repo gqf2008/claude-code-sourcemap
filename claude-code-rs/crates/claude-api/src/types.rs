@@ -23,6 +23,23 @@ pub struct MessagesRequest {
     pub thinking: Option<ThinkingConfig>,
 }
 
+impl Default for MessagesRequest {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            max_tokens: 4096,
+            messages: Vec::new(),
+            system: None,
+            tools: None,
+            stream: false,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            thinking: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBlock {
     #[serde(rename = "type")]

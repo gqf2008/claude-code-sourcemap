@@ -234,3 +234,195 @@ where
 pub async fn run_task_silent(engine: &QueryEngine, task: &str) -> TaskResult {
     run_task(engine, task, |_| {}).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TaskResult ───────────────────────────────────────────────────────
+
+    #[test]
+    fn task_result_success_completed() {
+        let r = TaskResult {
+            output: "done".into(),
+            tool_uses: 0,
+            turns: 1,
+            elapsed: Duration::from_secs(1),
+            input_tokens: 100,
+            output_tokens: 50,
+            reason: CompletionReason::Completed,
+        };
+        assert!(r.success());
+    }
+
+    #[test]
+    fn task_result_success_end_turn() {
+        let r = TaskResult {
+            output: "".into(),
+            tool_uses: 0,
+            turns: 1,
+            elapsed: Duration::ZERO,
+            input_tokens: 0,
+            output_tokens: 0,
+            reason: CompletionReason::EndTurn,
+        };
+        assert!(r.success());
+    }
+
+    #[test]
+    fn task_result_failure_max_tokens() {
+        let r = TaskResult {
+            output: "partial".into(),
+            tool_uses: 3,
+            turns: 5,
+            elapsed: Duration::from_secs(30),
+            input_tokens: 5000,
+            output_tokens: 2000,
+            reason: CompletionReason::MaxTokens,
+        };
+        assert!(!r.success());
+    }
+
+    #[test]
+    fn task_result_failure_error() {
+        let r = TaskResult {
+            output: "".into(),
+            tool_uses: 0,
+            turns: 0,
+            elapsed: Duration::ZERO,
+            input_tokens: 0,
+            output_tokens: 0,
+            reason: CompletionReason::Error("API error".into()),
+        };
+        assert!(!r.success());
+    }
+
+    #[test]
+    fn task_result_failure_aborted() {
+        let r = TaskResult {
+            output: "".into(),
+            tool_uses: 0,
+            turns: 0,
+            elapsed: Duration::ZERO,
+            input_tokens: 0,
+            output_tokens: 0,
+            reason: CompletionReason::Aborted,
+        };
+        assert!(!r.success());
+    }
+
+    #[test]
+    fn task_result_failure_max_turns() {
+        let r = TaskResult {
+            output: "".into(),
+            tool_uses: 0,
+            turns: 0,
+            elapsed: Duration::ZERO,
+            input_tokens: 0,
+            output_tokens: 0,
+            reason: CompletionReason::MaxTurns,
+        };
+        assert!(!r.success());
+    }
+
+    // ── CompletionReason Display ─────────────────────────────────────────
+
+    #[test]
+    fn completion_reason_display() {
+        assert_eq!(CompletionReason::Completed.to_string(), "completed");
+        assert_eq!(CompletionReason::EndTurn.to_string(), "completed");
+        assert_eq!(CompletionReason::MaxTokens.to_string(), "max_tokens");
+        assert_eq!(CompletionReason::StopSequence.to_string(), "stop_sequence");
+        assert_eq!(CompletionReason::Aborted.to_string(), "aborted");
+        assert_eq!(CompletionReason::MaxTurns.to_string(), "max_turns");
+        assert_eq!(
+            CompletionReason::Error("oops".into()).to_string(),
+            "error: oops"
+        );
+    }
+
+    #[test]
+    fn completion_reason_equality() {
+        assert_eq!(CompletionReason::Completed, CompletionReason::Completed);
+        assert_ne!(CompletionReason::Completed, CompletionReason::EndTurn);
+        assert_eq!(
+            CompletionReason::Error("a".into()),
+            CompletionReason::Error("a".into())
+        );
+        assert_ne!(
+            CompletionReason::Error("a".into()),
+            CompletionReason::Error("b".into())
+        );
+    }
+
+    // ── TaskProgress variants ────────────────────────────────────────────
+
+    #[test]
+    fn task_progress_turn_start() {
+        let p = TaskProgress::TurnStart { turn: 3 };
+        assert!(matches!(p, TaskProgress::TurnStart { turn: 3 }));
+    }
+
+    #[test]
+    fn task_progress_text() {
+        let p = TaskProgress::Text("hello".into());
+        if let TaskProgress::Text(t) = p {
+            assert_eq!(t, "hello");
+        } else {
+            panic!("Expected Text");
+        }
+    }
+
+    #[test]
+    fn task_progress_tool_use() {
+        let p = TaskProgress::ToolUse { name: "Bash".into(), turn: 1 };
+        if let TaskProgress::ToolUse { name, turn } = p {
+            assert_eq!(name, "Bash");
+            assert_eq!(turn, 1);
+        } else {
+            panic!("Expected ToolUse");
+        }
+    }
+
+    #[test]
+    fn task_progress_tool_done() {
+        let p = TaskProgress::ToolDone {
+            name: "FileRead".into(),
+            is_error: false,
+            text: Some("contents".into()),
+        };
+        if let TaskProgress::ToolDone { name, is_error, text } = p {
+            assert_eq!(name, "FileRead");
+            assert!(!is_error);
+            assert_eq!(text.unwrap(), "contents");
+        } else {
+            panic!("Expected ToolDone");
+        }
+    }
+
+    #[test]
+    fn task_progress_tokens() {
+        let p = TaskProgress::Tokens { input: 100, output: 50 };
+        assert!(matches!(p, TaskProgress::Tokens { input: 100, output: 50 }));
+    }
+
+    #[test]
+    fn task_progress_done_carries_result() {
+        let result = TaskResult {
+            output: "ok".into(),
+            tool_uses: 2,
+            turns: 1,
+            elapsed: Duration::from_millis(500),
+            input_tokens: 200,
+            output_tokens: 100,
+            reason: CompletionReason::Completed,
+        };
+        let p = TaskProgress::Done(result);
+        if let TaskProgress::Done(r) = p {
+            assert!(r.success());
+            assert_eq!(r.tool_uses, 2);
+        } else {
+            panic!("Expected Done");
+        }
+    }
+}

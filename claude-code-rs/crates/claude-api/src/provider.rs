@@ -370,11 +370,106 @@ pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
     }
 }
 
+// ── Mock backend (test support) ──────────────────────────────────────────────
+
+/// A configurable mock backend for testing.
+///
+/// Provides canned responses, error injection, and call counting.
+/// Gated behind `#[cfg(test)]` — not available in production builds.
+#[cfg(test)]
+pub struct MockBackend {
+    responses: std::sync::Mutex<Vec<Result<MessagesResponse>>>,
+    stream_events: std::sync::Mutex<Vec<Vec<Result<StreamEvent>>>>,
+    call_count: std::sync::atomic::AtomicUsize,
+    stream_call_count: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl MockBackend {
+    pub fn new() -> Self {
+        Self {
+            responses: std::sync::Mutex::new(Vec::new()),
+            stream_events: std::sync::Mutex::new(Vec::new()),
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            stream_call_count: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Queue a successful response for `send_messages`.
+    pub fn with_response(self, response: MessagesResponse) -> Self {
+        self.responses.lock().unwrap().push(Ok(response));
+        self
+    }
+
+    /// Queue an error for `send_messages`.
+    pub fn with_error(self, msg: &str) -> Self {
+        self.responses.lock().unwrap().push(Err(anyhow::anyhow!("{}", msg)));
+        self
+    }
+
+    /// Queue stream events for one `send_messages_stream` call.
+    pub fn with_stream_events(self, events: Vec<Result<StreamEvent>>) -> Self {
+        self.stream_events.lock().unwrap().push(events);
+        self
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.call_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn stream_call_count(&self) -> usize {
+        self.stream_call_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl ApiBackend for MockBackend {
+    fn provider_name(&self) -> &str { "mock" }
+    fn base_url(&self) -> &str { "http://mock.test" }
+
+    fn headers(&self) -> Result<HeaderMap> {
+        Ok(HeaderMap::new())
+    }
+
+    fn map_model_id(&self, canonical: &str) -> String {
+        canonical.to_string()
+    }
+
+    async fn send_messages(
+        &self,
+        _http: &reqwest::Client,
+        _request: &MessagesRequest,
+    ) -> Result<MessagesResponse> {
+        self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut responses = self.responses.lock().unwrap();
+        if responses.is_empty() {
+            anyhow::bail!("MockBackend: no responses queued");
+        }
+        responses.remove(0)
+    }
+
+    async fn send_messages_stream(
+        &self,
+        _http: &reqwest::Client,
+        _request: &MessagesRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        self.stream_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut queues = self.stream_events.lock().unwrap();
+        if queues.is_empty() {
+            anyhow::bail!("MockBackend: no stream events queued");
+        }
+        let events = queues.remove(0);
+        Ok(Box::pin(futures::stream::iter(events)))
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ApiUsage;
 
     #[test]
     fn first_party_provider_name() {
@@ -468,5 +563,117 @@ mod tests {
         fn _takes_backend(_b: &dyn ApiBackend) {}
         let b = FirstPartyBackend::new("key");
         _takes_backend(&b);
+    }
+
+    // ── MockBackend tests ────────────────────────────────────────────────
+
+    #[test]
+    fn mock_backend_metadata() {
+        let m = MockBackend::new();
+        assert_eq!(m.provider_name(), "mock");
+        assert_eq!(m.base_url(), "http://mock.test");
+        assert_eq!(m.map_model_id("foo"), "foo");
+        assert!(m.headers().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_backend_send_messages_returns_queued() {
+        let mock = MockBackend::new().with_response(sample_response());
+        let http = reqwest::Client::new();
+        let req = sample_request();
+
+        let resp = mock.send_messages(&http, &req).await.unwrap();
+        assert_eq!(resp.id, "msg_test");
+        assert_eq!(mock.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mock_backend_send_messages_error() {
+        let mock = MockBackend::new().with_error("simulated failure");
+        let http = reqwest::Client::new();
+        let req = sample_request();
+
+        let err = mock.send_messages(&http, &req).await.unwrap_err();
+        assert!(err.to_string().contains("simulated failure"));
+        assert_eq!(mock.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mock_backend_stream_returns_events() {
+        use futures::StreamExt;
+
+        let events = vec![Ok(StreamEvent::Ping), Ok(StreamEvent::Ping)];
+        let mock = MockBackend::new().with_stream_events(events);
+        let http = reqwest::Client::new();
+        let req = sample_request();
+
+        let mut stream = mock.send_messages_stream(&http, &req).await.unwrap();
+        assert!(matches!(stream.next().await.unwrap().unwrap(), StreamEvent::Ping));
+        assert!(matches!(stream.next().await.unwrap().unwrap(), StreamEvent::Ping));
+        assert!(stream.next().await.is_none());
+        assert_eq!(mock.stream_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mock_backend_empty_queue_errors() {
+        let mock = MockBackend::new();
+        let http = reqwest::Client::new();
+        let req = sample_request();
+
+        assert!(mock.send_messages(&http, &req).await.is_err());
+        assert!(mock.send_messages_stream(&http, &req).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn mock_backend_multiple_responses_fifo() {
+        let r1 = MessagesResponse { id: "msg_1".into(), ..sample_response() };
+        let r2 = MessagesResponse { id: "msg_2".into(), ..sample_response() };
+
+        let mock = MockBackend::new().with_response(r1).with_response(r2);
+        let http = reqwest::Client::new();
+        let req = sample_request();
+
+        let resp1 = mock.send_messages(&http, &req).await.unwrap();
+        let resp2 = mock.send_messages(&http, &req).await.unwrap();
+        assert_eq!(resp1.id, "msg_1");
+        assert_eq!(resp2.id, "msg_2");
+        assert_eq!(mock.call_count(), 2);
+    }
+
+    #[test]
+    fn mock_backend_with_client_integration() {
+        use crate::client::AnthropicClient;
+
+        let mock = MockBackend::new().with_response(sample_response());
+        let client = AnthropicClient::new("test-key")
+            .with_backend(Box::new(mock));
+
+        assert_eq!(client.provider_name(), "mock");
+    }
+
+    fn sample_response() -> MessagesResponse {
+        MessagesResponse {
+            id: "msg_test".into(),
+            response_type: "message".into(),
+            model: "claude-sonnet-4".into(),
+            content: vec![],
+            role: "assistant".into(),
+            stop_reason: Some("end_turn".into()),
+            usage: ApiUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+        }
+    }
+
+    fn sample_request() -> MessagesRequest {
+        MessagesRequest {
+            model: "test".into(),
+            messages: vec![],
+            max_tokens: 100,
+            ..Default::default()
+        }
     }
 }
