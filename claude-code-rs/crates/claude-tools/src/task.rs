@@ -580,3 +580,143 @@ impl Tool for TaskStopTool {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::Tool;
+
+    // ── TaskStatus Display ──────────────────────────────────────────────
+
+    #[test]
+    fn task_status_display_all_variants() {
+        assert_eq!(TaskStatus::Pending.to_string(), "pending");
+        assert_eq!(TaskStatus::InProgress.to_string(), "in_progress");
+        assert_eq!(TaskStatus::Completed.to_string(), "completed");
+        assert_eq!(TaskStatus::Blocked.to_string(), "blocked");
+        assert_eq!(TaskStatus::Deleted.to_string(), "deleted");
+    }
+
+    // ── TaskStatus serde ────────────────────────────────────────────────
+
+    #[test]
+    fn task_status_serde_roundtrip() {
+        let variants = [
+            TaskStatus::Pending,
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            TaskStatus::Blocked,
+            TaskStatus::Deleted,
+        ];
+        for status in &variants {
+            let json = serde_json::to_string(status).unwrap();
+            let back: TaskStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(&back, status);
+        }
+        // rename_all = "snake_case" means InProgress serializes as "in_progress"
+        assert_eq!(serde_json::to_string(&TaskStatus::InProgress).unwrap(), "\"in_progress\"");
+    }
+
+    // ── Task serde ──────────────────────────────────────────────────────
+
+    #[test]
+    fn task_serde_roundtrip() {
+        let task = Task {
+            id: "t-abc12345".into(),
+            subject: "Fix bug".into(),
+            description: "Fix the login bug".into(),
+            status: TaskStatus::Pending,
+            owner: None,
+            blocks: vec![],
+            blocked_by: vec![],
+            metadata: serde_json::Map::new(),
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "t-abc12345");
+        assert_eq!(back.subject, "Fix bug");
+        assert_eq!(back.status, TaskStatus::Pending);
+        assert!(back.owner.is_none());
+        assert!(back.blocks.is_empty());
+        assert!(back.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn task_serde_with_optional_fields() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("priority".into(), Value::String("high".into()));
+
+        let task = Task {
+            id: "t-xyz99999".into(),
+            subject: "Deploy".into(),
+            description: "Deploy to prod".into(),
+            status: TaskStatus::Blocked,
+            owner: Some("alice".into()),
+            blocks: vec!["t-downstream".into()],
+            blocked_by: vec!["t-upstream".into()],
+            metadata: meta,
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.owner.as_deref(), Some("alice"));
+        assert_eq!(back.blocks, vec!["t-downstream"]);
+        assert_eq!(back.blocked_by, vec!["t-upstream"]);
+        assert_eq!(back.metadata["priority"], "high");
+    }
+
+    // ── gen_task_id ─────────────────────────────────────────────────────
+
+    #[test]
+    fn gen_task_id_format() {
+        let id = gen_task_id();
+        assert!(id.starts_with("t-"), "ID should start with 't-': {}", id);
+        assert_eq!(id.len(), 10, "ID should be 10 chars (t- + 8 hex): {}", id);
+    }
+
+    #[test]
+    fn gen_task_id_unique() {
+        let a = gen_task_id();
+        let b = gen_task_id();
+        assert_ne!(a, b, "Two generated IDs should differ");
+    }
+
+    // ── Tool metadata ───────────────────────────────────────────────────
+
+    #[test]
+    fn task_create_tool_name() {
+        let tool = TaskCreateTool;
+        assert_eq!(tool.name(), "task_create");
+    }
+
+    #[test]
+    fn task_create_tool_category() {
+        let tool = TaskCreateTool;
+        assert_eq!(tool.category(), ToolCategory::Agent);
+    }
+
+    #[test]
+    fn task_update_tool_name() {
+        let tool = TaskUpdateTool;
+        assert_eq!(tool.name(), "task_update");
+    }
+
+    #[test]
+    fn task_get_tool_name() {
+        let tool = TaskGetTool;
+        assert_eq!(tool.name(), "task_get");
+    }
+
+    #[test]
+    fn task_list_tool_name() {
+        let tool = TaskListTool;
+        assert_eq!(tool.name(), "task_list");
+    }
+
+    #[test]
+    fn task_list_tool_is_read_only() {
+        let tool = TaskListTool;
+        assert!(tool.is_read_only());
+        // TaskCreateTool should NOT be read-only
+        assert!(!TaskCreateTool.is_read_only());
+    }
+}

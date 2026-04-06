@@ -175,3 +175,135 @@ fn extract_list(yaml: &str, key: &str) -> Option<Vec<String>> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_fm_valid() {
+        let content = "---\ndescription: test\n---\nBody text here";
+        let (fm, body) = split_frontmatter(content);
+        assert_eq!(fm.unwrap(), "description: test");
+        assert_eq!(body, "Body text here");
+    }
+
+    #[test]
+    fn split_fm_no_frontmatter() {
+        let (fm, body) = split_frontmatter("Just plain body");
+        assert!(fm.is_none());
+        assert_eq!(body, "Just plain body");
+    }
+
+    #[test]
+    fn split_fm_unclosed() {
+        let (fm, _body) = split_frontmatter("---\nkey: val\nno end marker");
+        assert!(fm.is_none());
+    }
+
+    #[test]
+    fn extract_string_plain() {
+        assert_eq!(extract_string("description: hello world", "description"), Some("hello world".into()));
+    }
+
+    #[test]
+    fn extract_string_quoted() {
+        assert_eq!(extract_string("description: \"quoted value\"", "description"), Some("quoted value".into()));
+    }
+
+    #[test]
+    fn extract_string_missing() {
+        assert_eq!(extract_string("other: value", "description"), None);
+    }
+
+    #[test]
+    fn extract_string_empty_value() {
+        assert_eq!(extract_string("description:", "description"), None);
+    }
+
+    #[test]
+    fn extract_list_inline() {
+        let yaml = "allowed_tools: [FileRead, Grep, Bash]";
+        let list = extract_list(yaml, "allowed_tools").unwrap();
+        assert_eq!(list, vec!["FileRead", "Grep", "Bash"]);
+    }
+
+    #[test]
+    fn extract_list_block_style() {
+        let yaml = "allowed_tools:\n- FileRead\n- Grep\n- Bash";
+        let list = extract_list(yaml, "allowed_tools").unwrap();
+        assert_eq!(list, vec!["FileRead", "Grep", "Bash"]);
+    }
+
+    #[test]
+    fn extract_list_missing_key() {
+        assert!(extract_list("other: value", "allowed_tools").is_none());
+    }
+
+    #[test]
+    fn extract_list_inline_quoted() {
+        let yaml = "allowed_tools: [\"FileRead\", 'Grep']";
+        let list = extract_list(yaml, "allowed_tools").unwrap();
+        assert_eq!(list, vec!["FileRead", "Grep"]);
+    }
+
+    #[test]
+    fn parse_skill_with_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reviewer.md");
+        std::fs::write(&path, "---\ndescription: Security reviewer\nallowed_tools: [FileRead, Grep]\nmodel: claude-opus-4-20250514\n---\nYou are an expert.").unwrap();
+
+        let skill = parse_skill_file(&path, "reviewer").unwrap();
+        assert_eq!(skill.name, "reviewer");
+        assert_eq!(skill.description, "Security reviewer");
+        assert_eq!(skill.allowed_tools, vec!["FileRead", "Grep"]);
+        assert_eq!(skill.model.as_deref(), Some("claude-opus-4-20250514"));
+        assert_eq!(skill.system_prompt, "You are an expert.");
+    }
+
+    #[test]
+    fn parse_skill_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("helper.md");
+        std::fs::write(&path, "Just a prompt body.").unwrap();
+
+        let skill = parse_skill_file(&path, "helper").unwrap();
+        assert_eq!(skill.description, "helper");
+        assert!(skill.allowed_tools.is_empty());
+        assert!(skill.model.is_none());
+        assert_eq!(skill.system_prompt, "Just a prompt body.");
+    }
+
+    #[test]
+    fn load_skills_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = load_skills(dir.path());
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn load_skills_with_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("test.md"), "---\ndescription: Test skill\n---\nDo testing.").unwrap();
+        std::fs::write(skills_dir.join("review.md"), "Review code.").unwrap();
+        std::fs::write(skills_dir.join("readme.txt"), "Not a skill").unwrap();
+
+        let skills = load_skills(dir.path());
+        assert_eq!(skills.len(), 2);
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"test"));
+        assert!(names.contains(&"review"));
+    }
+
+    #[test]
+    fn load_skills_dedup_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("test.md"), "First").unwrap();
+        let skills = load_skills(dir.path());
+        assert_eq!(skills.len(), 1);
+    }
+}

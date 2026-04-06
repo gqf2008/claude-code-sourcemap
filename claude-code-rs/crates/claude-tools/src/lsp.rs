@@ -431,3 +431,305 @@ fn get_hover_info(path: &Path, line: usize, word: &str) -> anyhow::Result<ToolRe
         word, path.display(), line, context_lines.join("\n")
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ── is_identifier_char ──────────────────────────────────────────
+
+    #[test]
+    fn identifier_char_alpha() {
+        assert!(is_identifier_char('a'));
+        assert!(is_identifier_char('Z'));
+        assert!(is_identifier_char('0'));
+        assert!(is_identifier_char('9'));
+    }
+
+    #[test]
+    fn identifier_char_underscore() {
+        assert!(is_identifier_char('_'));
+    }
+
+    #[test]
+    fn identifier_char_special_false() {
+        assert!(!is_identifier_char(' '));
+        assert!(!is_identifier_char('-'));
+        assert!(!is_identifier_char('('));
+        assert!(!is_identifier_char('.'));
+        assert!(!is_identifier_char(':'));
+        assert!(!is_identifier_char('<'));
+    }
+
+    // ── resolve_path ────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_absolute() {
+        let cwd = Path::new(if cfg!(windows) { "C:\\projects" } else { "/home/user/projects" });
+        let abs = if cfg!(windows) { "C:\\tmp\\file.rs" } else { "/tmp/file.rs" };
+        let result = resolve_path(cwd, abs);
+        assert_eq!(result, PathBuf::from(abs));
+    }
+
+    #[test]
+    fn resolve_relative() {
+        let cwd = Path::new(if cfg!(windows) { "C:\\projects" } else { "/home/user/projects" });
+        let result = resolve_path(cwd, "src/main.rs");
+        assert_eq!(result, cwd.join("src/main.rs"));
+    }
+
+    #[test]
+    fn resolve_relative_with_dots() {
+        let cwd = Path::new(if cfg!(windows) { "C:\\projects" } else { "/home/user/projects" });
+        let result = resolve_path(cwd, "../other/file.rs");
+        assert_eq!(result, cwd.join("../other/file.rs"));
+    }
+
+    // ── extract_rust_symbol ─────────────────────────────────────────
+
+    #[test]
+    fn rust_pub_fn() {
+        assert_eq!(
+            extract_rust_symbol("pub fn handle_request(ctx: &Context) -> Result<()> {"),
+            Some(("fn", "handle_request".into()))
+        );
+    }
+
+    #[test]
+    fn rust_private_fn() {
+        assert_eq!(
+            extract_rust_symbol("fn helper() {"),
+            Some(("fn", "helper".into()))
+        );
+    }
+
+    #[test]
+    fn rust_pub_crate_fn() {
+        assert_eq!(
+            extract_rust_symbol("pub(crate) fn internal_fn(x: i32) {"),
+            Some(("fn", "internal_fn".into()))
+        );
+    }
+
+    #[test]
+    fn rust_struct() {
+        assert_eq!(
+            extract_rust_symbol("struct Config {"),
+            Some(("struct", "Config".into()))
+        );
+    }
+
+    #[test]
+    fn rust_pub_enum() {
+        assert_eq!(
+            extract_rust_symbol("pub enum Direction {"),
+            Some(("enum", "Direction".into()))
+        );
+    }
+
+    #[test]
+    fn rust_trait() {
+        assert_eq!(
+            extract_rust_symbol("trait MyTrait: Send + Sync {"),
+            Some(("trait", "MyTrait".into()))
+        );
+    }
+
+    #[test]
+    fn rust_impl() {
+        assert_eq!(
+            extract_rust_symbol("impl Foo {"),
+            Some(("impl", "Foo".into()))
+        );
+    }
+
+    #[test]
+    fn rust_const() {
+        assert_eq!(
+            extract_rust_symbol("pub const MAX_SIZE: usize = 1024;"),
+            Some(("const", "MAX_SIZE".into()))
+        );
+    }
+
+    #[test]
+    fn rust_type() {
+        assert_eq!(
+            extract_rust_symbol("type Alias = Vec<String>;"),
+            Some(("type", "Alias".into()))
+        );
+    }
+
+    #[test]
+    fn rust_no_match() {
+        assert_eq!(extract_rust_symbol("let x = 42;"), None);
+        assert_eq!(extract_rust_symbol("// pub fn commented()"), None);
+        assert_eq!(extract_rust_symbol("println!(\"hello\");"), None);
+    }
+
+    // ── extract_ts_symbol ───────────────────────────────────────────
+
+    #[test]
+    fn ts_function() {
+        assert_eq!(
+            extract_ts_symbol("function greet(name: string) {"),
+            Some(("function", "greet".into()))
+        );
+    }
+
+    #[test]
+    fn ts_export_async_function() {
+        assert_eq!(
+            extract_ts_symbol("export async function fetchData() {"),
+            Some(("function", "fetchData".into()))
+        );
+    }
+
+    #[test]
+    fn ts_export_class() {
+        assert_eq!(
+            extract_ts_symbol("export class MyService {"),
+            Some(("class", "MyService".into()))
+        );
+    }
+
+    #[test]
+    fn ts_interface() {
+        assert_eq!(
+            extract_ts_symbol("interface IConfig {"),
+            Some(("interface", "IConfig".into()))
+        );
+    }
+
+    #[test]
+    fn ts_declare_type() {
+        assert_eq!(
+            extract_ts_symbol("declare type Alias = string;"),
+            Some(("type", "Alias".into()))
+        );
+    }
+
+    #[test]
+    fn ts_enum() {
+        assert_eq!(
+            extract_ts_symbol("enum Direction {"),
+            Some(("enum", "Direction".into()))
+        );
+    }
+
+    #[test]
+    fn ts_const() {
+        assert_eq!(
+            extract_ts_symbol("export const API_URL = 'https://example.com';"),
+            Some(("variable", "API_URL".into()))
+        );
+    }
+
+    #[test]
+    fn ts_no_match() {
+        assert_eq!(extract_ts_symbol("console.log('hello');"), None);
+        assert_eq!(extract_ts_symbol("import { X } from 'y';"), None);
+    }
+
+    // ── extract_py_symbol ───────────────────────────────────────────
+
+    #[test]
+    fn py_def() {
+        assert_eq!(
+            extract_py_symbol("def process(data):"),
+            Some(("def", "process".into()))
+        );
+    }
+
+    #[test]
+    fn py_async_def() {
+        assert_eq!(
+            extract_py_symbol("async def fetch_data(url):"),
+            Some(("def", "fetch_data".into()))
+        );
+    }
+
+    #[test]
+    fn py_class() {
+        assert_eq!(
+            extract_py_symbol("class MyModel(BaseModel):"),
+            Some(("class", "MyModel".into()))
+        );
+    }
+
+    #[test]
+    fn py_no_match() {
+        assert_eq!(extract_py_symbol("x = 42"), None);
+        assert_eq!(extract_py_symbol("    def indented(self):"), None);
+        assert_eq!(extract_py_symbol("import os"), None);
+    }
+
+    // ── extract_go_symbol ───────────────────────────────────────────
+
+    #[test]
+    fn go_func() {
+        assert_eq!(
+            extract_go_symbol("func HandleRequest(w http.ResponseWriter, r *http.Request) {"),
+            Some(("func", "HandleRequest".into()))
+        );
+    }
+
+    #[test]
+    fn go_method() {
+        assert_eq!(
+            extract_go_symbol("func (s *Server) Start() error {"),
+            Some(("func", "Start".into()))
+        );
+    }
+
+    #[test]
+    fn go_type() {
+        assert_eq!(
+            extract_go_symbol("type Config struct {"),
+            Some(("type", "Config".into()))
+        );
+    }
+
+    #[test]
+    fn go_no_match() {
+        assert_eq!(extract_go_symbol("var x = 10"), None);
+        assert_eq!(extract_go_symbol("package main"), None);
+    }
+
+    // ── get_word_at_position ────────────────────────────────────────
+
+    #[test]
+    fn word_at_middle() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "fn hello_world() {{}}").unwrap();
+
+        // line 1, character 6 → inside "hello_world"
+        let word = get_word_at_position(&file, 1, 6).unwrap();
+        assert_eq!(word, "hello_world");
+    }
+
+    #[test]
+    fn word_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "my_var = 42").unwrap();
+
+        let word = get_word_at_position(&file, 1, 1).unwrap();
+        assert_eq!(word, "my_var");
+    }
+
+    #[test]
+    fn no_identifier_at_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "a + b").unwrap();
+
+        // character 3 → the '+' (space then +)
+        let result = get_word_at_position(&file, 1, 3);
+        assert!(result.is_err());
+    }
+}

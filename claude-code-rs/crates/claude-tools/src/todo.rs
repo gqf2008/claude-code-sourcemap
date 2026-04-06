@@ -153,3 +153,101 @@ impl Tool for TodoReadTool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::Tool;
+
+    // ── TodoItem serde ──────────────────────────────────────────────────
+
+    #[test]
+    fn todo_item_serde_roundtrip() {
+        let item = TodoItem {
+            id: "setup-db".into(),
+            content: "Set up database".into(),
+            status: "pending".into(),
+            priority: "high".into(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: TodoItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "setup-db");
+        assert_eq!(back.content, "Set up database");
+        assert_eq!(back.status, "pending");
+        assert_eq!(back.priority, "high");
+    }
+
+    // ── format_todos ────────────────────────────────────────────────────
+
+    #[test]
+    fn format_todos_empty() {
+        let result = format_todos(&[]);
+        assert_eq!(result, "No todos. Use TodoWrite to create a task plan.");
+    }
+
+    #[test]
+    fn format_todos_single_pending() {
+        let todos = vec![TodoItem {
+            id: "t1".into(),
+            content: "Do something".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+        }];
+        let result = format_todos(&todos);
+        assert!(result.contains("○"), "pending should use ○ icon");
+        assert!(result.contains("·"), "medium priority should use · icon");
+        assert!(result.contains("[t1]"));
+        assert!(result.contains("Do something"));
+        assert!(result.contains("1 pending, 0 in_progress, 0 completed"));
+    }
+
+    #[test]
+    fn format_todos_mixed_statuses() {
+        let todos = vec![
+            TodoItem { id: "a".into(), content: "Pending task".into(), status: "pending".into(), priority: "low".into() },
+            TodoItem { id: "b".into(), content: "Active task".into(), status: "in_progress".into(), priority: "medium".into() },
+            TodoItem { id: "c".into(), content: "Done task".into(), status: "completed".into(), priority: "high".into() },
+        ];
+        let result = format_todos(&todos);
+        assert!(result.contains("○"), "pending icon");
+        assert!(result.contains("→"), "in_progress icon");
+        assert!(result.contains("✓"), "completed icon");
+        assert!(result.contains("1 pending, 1 in_progress, 1 completed"));
+        assert!(result.contains("3 items"));
+    }
+
+    #[test]
+    fn format_todos_priority_icons() {
+        let todos = vec![
+            TodoItem { id: "h".into(), content: "High".into(), status: "pending".into(), priority: "high".into() },
+            TodoItem { id: "m".into(), content: "Medium".into(), status: "pending".into(), priority: "medium".into() },
+            TodoItem { id: "l".into(), content: "Low".into(), status: "pending".into(), priority: "low".into() },
+        ];
+        let result = format_todos(&todos);
+        assert!(result.contains("❗"), "high priority should use ❗ icon");
+        assert!(result.contains("·"), "medium priority should use · icon");
+        // low priority is a space, just ensure the line exists
+        assert!(result.contains("[l] Low"));
+    }
+
+    // ── Tool metadata ───────────────────────────────────────────────────
+
+    #[test]
+    fn todo_write_tool_name() {
+        let tool = TodoWriteTool;
+        assert_eq!(tool.name(), "TodoWrite");
+    }
+
+    #[test]
+    fn todo_read_tool_name() {
+        let tool = TodoReadTool;
+        assert_eq!(tool.name(), "TodoRead");
+    }
+
+    #[test]
+    fn todo_read_tool_is_read_only() {
+        assert!(TodoReadTool.is_read_only());
+        // TodoWriteTool should NOT be read-only (default is false)
+        assert!(!TodoWriteTool.is_read_only());
+    }
+}
+

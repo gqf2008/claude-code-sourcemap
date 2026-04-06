@@ -202,3 +202,229 @@ pub struct ApiError {
     pub error_type: String,
     pub message: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── SystemBlock ─────────────────────────────────────────────────────
+
+    #[test]
+    fn system_block_serde() {
+        let block = SystemBlock {
+            block_type: "text".into(),
+            text: "You are helpful.".into(),
+            cache_control: None,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "You are helpful.");
+        // "block_type" should NOT appear — it's renamed to "type"
+        assert!(json.get("block_type").is_none());
+
+        // Roundtrip
+        let back: SystemBlock = serde_json::from_value(json).unwrap();
+        assert_eq!(back.block_type, "text");
+        assert_eq!(back.text, "You are helpful.");
+    }
+
+    // ── ThinkingConfig ──────────────────────────────────────────────────
+
+    #[test]
+    fn thinking_config_serde() {
+        let cfg = ThinkingConfig {
+            thinking_type: "enabled".into(),
+            budget_tokens: Some(10000),
+        };
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(json["type"], "enabled");
+        assert_eq!(json["budget_tokens"], 10000);
+        assert!(json.get("thinking_type").is_none());
+
+        let back: ThinkingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.thinking_type, "enabled");
+        assert_eq!(back.budget_tokens, Some(10000));
+    }
+
+    // ── ApiContentBlock ─────────────────────────────────────────────────
+
+    #[test]
+    fn api_content_text_serde() {
+        let block = ApiContentBlock::Text {
+            text: "Hello".into(),
+            cache_control: None,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "Hello");
+
+        let back: ApiContentBlock = serde_json::from_value(json).unwrap();
+        match back {
+            ApiContentBlock::Text { text, .. } => assert_eq!(text, "Hello"),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn api_content_tool_use_serde() {
+        let block = ApiContentBlock::ToolUse {
+            id: "tu_123".into(),
+            name: "read_file".into(),
+            input: json!({"path": "/foo.txt"}),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_use");
+        assert_eq!(json["id"], "tu_123");
+        assert_eq!(json["name"], "read_file");
+
+        let back: ApiContentBlock = serde_json::from_value(json).unwrap();
+        match back {
+            ApiContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "tu_123");
+                assert_eq!(name, "read_file");
+                assert_eq!(input["path"], "/foo.txt");
+            }
+            _ => panic!("Expected ToolUse variant"),
+        }
+    }
+
+    #[test]
+    fn api_content_tool_result_serde() {
+        let block = ApiContentBlock::ToolResult {
+            tool_use_id: "tu_123".into(),
+            content: vec![ToolResultContent::Text { text: "file contents".into() }],
+            is_error: false,
+            cache_control: None,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_result");
+        assert_eq!(json["tool_use_id"], "tu_123");
+        assert_eq!(json["is_error"], false);
+
+        let back: ApiContentBlock = serde_json::from_value(json).unwrap();
+        match back {
+            ApiContentBlock::ToolResult { tool_use_id, content, is_error, .. } => {
+                assert_eq!(tool_use_id, "tu_123");
+                assert!(!is_error);
+                assert_eq!(content.len(), 1);
+            }
+            _ => panic!("Expected ToolResult variant"),
+        }
+    }
+
+    // ── StreamEvent ─────────────────────────────────────────────────────
+
+    #[test]
+    fn stream_event_message_start() {
+        let json = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-20250514",
+                "stop_reason": null,
+                "usage": { "input_tokens": 10, "output_tokens": 0 }
+            }
+        });
+        let event: StreamEvent = serde_json::from_value(json).unwrap();
+        match event {
+            StreamEvent::MessageStart { message } => {
+                assert_eq!(message.id, "msg_01");
+                assert_eq!(message.role, "assistant");
+            }
+            _ => panic!("Expected MessageStart"),
+        }
+    }
+
+    #[test]
+    fn stream_event_content_block_delta_text() {
+        let json = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": "Hello" }
+        });
+        let event: StreamEvent = serde_json::from_value(json).unwrap();
+        match event {
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                assert_eq!(index, 0);
+                match delta {
+                    DeltaBlock::TextDelta { text } => assert_eq!(text, "Hello"),
+                    _ => panic!("Expected TextDelta"),
+                }
+            }
+            _ => panic!("Expected ContentBlockDelta"),
+        }
+    }
+
+    #[test]
+    fn stream_event_content_block_delta_json() {
+        let json = json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"path\":" }
+        });
+        let event: StreamEvent = serde_json::from_value(json).unwrap();
+        match event {
+            StreamEvent::ContentBlockDelta { delta, .. } => {
+                match delta {
+                    DeltaBlock::InputJsonDelta { partial_json } => {
+                        assert_eq!(partial_json, "{\"path\":");
+                    }
+                    _ => panic!("Expected InputJsonDelta"),
+                }
+            }
+            _ => panic!("Expected ContentBlockDelta"),
+        }
+    }
+
+    #[test]
+    fn stream_event_ping() {
+        let json = json!({"type": "ping"});
+        let event: StreamEvent = serde_json::from_value(json).unwrap();
+        assert!(matches!(event, StreamEvent::Ping));
+    }
+
+    #[test]
+    fn stream_event_error() {
+        let json = json!({
+            "type": "error",
+            "error": { "type": "overloaded_error", "message": "Overloaded" }
+        });
+        let event: StreamEvent = serde_json::from_value(json).unwrap();
+        match event {
+            StreamEvent::Error { error } => {
+                assert_eq!(error.error_type, "overloaded_error");
+                assert_eq!(error.message, "Overloaded");
+            }
+            _ => panic!("Expected Error"),
+        }
+    }
+
+    // ── DeltaBlock ──────────────────────────────────────────────────────
+
+    #[test]
+    fn delta_block_text_delta() {
+        let json = json!({"type": "text_delta", "text": "world"});
+        let delta: DeltaBlock = serde_json::from_value(json).unwrap();
+        match delta {
+            DeltaBlock::TextDelta { text } => assert_eq!(text, "world"),
+            _ => panic!("Expected TextDelta"),
+        }
+    }
+
+    // ── ApiUsage ────────────────────────────────────────────────────────
+
+    #[test]
+    fn api_usage_defaults() {
+        // Optional cache fields should default to None when absent
+        let json = json!({"input_tokens": 42, "output_tokens": 7});
+        let usage: ApiUsage = serde_json::from_value(json).unwrap();
+        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.output_tokens, 7);
+        assert!(usage.cache_creation_input_tokens.is_none());
+        assert!(usage.cache_read_input_tokens.is_none());
+    }
+}
