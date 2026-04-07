@@ -171,10 +171,12 @@ impl ApiClient {
                 }
             },
             |attempt, status, delay| {
-                info!(
-                    "Retrying API request (attempt {}, status {}, wait {:.1}s)",
-                    attempt, status, delay.as_secs_f64()
+                let msg = format!(
+                    "Retrying API request (attempt {}/{}, status {}, wait {:.1}s)",
+                    attempt, self.retry_config.max_retries, status, delay.as_secs_f64()
                 );
+                info!("{}", msg);
+                eprintln!("\x1b[33m⟳ {}\x1b[0m", msg);
             },
         )
         .await
@@ -229,10 +231,12 @@ impl ApiClient {
                 }
             },
             |attempt, status, delay| {
-                info!(
-                    "Retrying stream request (attempt {}, status {}, wait {:.1}s)",
-                    attempt, status, delay.as_secs_f64()
+                let msg = format!(
+                    "Retrying stream request (attempt {}/{}, status {}, wait {:.1}s)",
+                    attempt, self.retry_config.max_retries, status, delay.as_secs_f64()
                 );
+                info!("{}", msg);
+                eprintln!("\x1b[33m⟳ {}\x1b[0m", msg);
             },
         )
         .await

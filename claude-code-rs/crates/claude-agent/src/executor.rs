@@ -6,6 +6,7 @@ use claude_core::permissions::PermissionBehavior;
 use claude_tools::ToolRegistry;
 use serde_json::Value;
 use tracing::{debug, warn};
+use crate::audit::AuditSpan;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::permissions::PermissionChecker;
 
@@ -16,6 +17,7 @@ pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
     permission_checker: Arc<PermissionChecker>,
     hooks: Arc<HookRegistry>,
+    session_id: String,
 }
 
 impl ToolExecutor {
@@ -24,6 +26,7 @@ impl ToolExecutor {
             registry,
             permission_checker,
             hooks: Arc::new(HookRegistry::new()),
+            session_id: String::new(),
         }
     }
 
@@ -32,7 +35,12 @@ impl ToolExecutor {
         permission_checker: Arc<PermissionChecker>,
         hooks: Arc<HookRegistry>,
     ) -> Self {
-        Self { registry, permission_checker, hooks }
+        Self { registry, permission_checker, hooks, session_id: String::new() }
+    }
+
+    /// Set the session ID for audit logging.
+    pub fn set_session_id(&mut self, id: impl Into<String>) {
+        self.session_id = id.into();
     }
 
     pub async fn execute(
@@ -190,8 +198,10 @@ impl ToolExecutor {
         }
 
         debug!("Executing tool: {}", tool_name);
+        let audit = AuditSpan::begin(&self.session_id, tool_name, &input);
         match tool.call(input.clone(), context).await {
             Ok(result) => {
+                audit.finish(true, None);
                 // Apply tool result size limiting to prevent context explosion
                 let limited_content = result.content.into_iter().map(|c| {
                     if let ToolResultContent::Text { text } = c {
@@ -211,8 +221,9 @@ impl ToolExecutor {
                 }
             }
             Err(e) => {
-                warn!("Tool {} failed: {}", tool_name, e);
                 let error_msg = format!("Tool error: {}", e);
+                audit.finish(false, Some(&error_msg));
+                warn!("Tool {} failed: {}", tool_name, e);
 
                 if self.hooks.has_hooks(HookEvent::PostToolUseFailure) {
                     let ctx = self.hooks.tool_failure_ctx(tool_name, Some(input), &error_msg);

@@ -156,6 +156,16 @@ async fn main() -> anyhow::Result<()> {
     let permission_mode = config::parse_permission_mode(&cli.permission_mode);
     let skills = load_skills(&cwd);
 
+    // ── Discover MCP server configs ────────────────────────────────────────
+    let mcp_instructions = discover_mcp_instructions(&cwd);
+    if !mcp_instructions.is_empty() {
+        eprintln!(
+            "\x1b[2m[MCP: {} server{} discovered]\x1b[0m",
+            mcp_instructions.len(),
+            if mcp_instructions.len() == 1 { "" } else { "s" }
+        );
+    }
+
     let engine = claude_agent::engine::QueryEngine::builder(api_key, &cwd)
         .model(&model)
         .system_prompt(system_prompt)
@@ -179,7 +189,8 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         })
-        .append_system_prompt(cli.append_system_prompt);
+        .append_system_prompt(cli.append_system_prompt)
+        .mcp_instructions(mcp_instructions);
 
     // Apply base URL override if specified
     let engine = if let Some(ref url) = cli.base_url {
@@ -502,6 +513,36 @@ fn generate_claude_md_template(cwd: &std::path::Path) -> String {
     sections.join("\n\n")
 }
 
+/// Discover MCP server configs and generate system prompt instructions.
+///
+/// Scans `.mcp.json` at project and user levels, extracts server names and
+/// commands, and returns `(server_name, instruction)` pairs for the system prompt.
+fn discover_mcp_instructions(cwd: &std::path::Path) -> Vec<(String, String)> {
+    let config_paths = claude_tools::mcp::server::discover_mcp_configs(cwd);
+    let mut instructions = Vec::new();
+
+    for path in config_paths {
+        match claude_tools::mcp::server::load_mcp_configs(&path) {
+            Ok(configs) => {
+                for cfg in configs {
+                    let instruction = format!(
+                        "MCP server '{}': command=`{} {}`",
+                        cfg.name,
+                        cfg.command,
+                        cfg.args.join(" "),
+                    );
+                    instructions.push((cfg.name, instruction));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load MCP config {}: {}", path.display(), e);
+            }
+        }
+    }
+
+    instructions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +701,35 @@ mod tests {
         let md = generate_claude_md_template(&tmp);
         assert!(md.contains("npm install"));
         assert!(md.contains("npm test"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_discover_mcp_instructions_empty() {
+        let tmp = std::env::temp_dir().join("claude_test_no_mcp");
+        let _ = std::fs::create_dir_all(&tmp);
+        let result = discover_mcp_instructions(&tmp);
+        assert!(result.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_discover_mcp_instructions_with_config() {
+        let tmp = std::env::temp_dir().join("claude_test_mcp_disc");
+        let _ = std::fs::create_dir_all(&tmp);
+        let mcp_json = r#"{
+            "mcpServers": {
+                "my-server": {
+                    "command": "npx",
+                    "args": ["-y", "my-mcp-server"]
+                }
+            }
+        }"#;
+        std::fs::write(tmp.join(".mcp.json"), mcp_json).unwrap();
+        let result = discover_mcp_instructions(&tmp);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "my-server");
+        assert!(result[0].1.contains("npx"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

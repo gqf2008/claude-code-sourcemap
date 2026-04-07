@@ -323,11 +323,15 @@ impl QueryEngineBuilder {
             self.cwd.clone(),
             session_id.clone(),
         ));
-        let executor = Arc::new(ToolExecutor::with_hooks(
-            registry.clone(),
-            permission_checker,
-            hooks.clone(),
-        ));
+        let executor = Arc::new({
+            let mut exec = ToolExecutor::with_hooks(
+                registry.clone(),
+                permission_checker,
+                hooks.clone(),
+            );
+            exec.set_session_id(&session_id);
+            exec
+        });
 
         let state = new_shared_state_with_model(model_name.clone());
         let abort_signal = AbortSignal::new();

@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod engine;
 pub mod query;
 pub mod executor;

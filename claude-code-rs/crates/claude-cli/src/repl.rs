@@ -59,6 +59,10 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
     // Track config file modification times for auto-reload
     let mut config_mtimes = ConfigMtimes::capture(&cwd);
 
+    // Periodic session checkpoint counter (save every N turns to prevent data loss)
+    const CHECKPOINT_INTERVAL: u32 = 5;
+    let mut turns_since_save: u32 = 0;
+
     loop {
         let readline = rl.readline("\x1b[1;32m> \x1b[0m");
         match readline {
@@ -274,6 +278,17 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                         eprintln!("\x1b[31m⚠ Context {pct}% full — consider /compact or /clear\x1b[0m");
                     } else if pct >= 80 {
                         eprintln!("\x1b[33m⚠ Context {pct}% full\x1b[0m");
+                    }
+                }
+
+                // Periodic session checkpoint to prevent data loss on crash
+                turns_since_save += 1;
+                if turns_since_save >= CHECKPOINT_INTERVAL {
+                    turns_since_save = 0;
+                    if let Err(e) = engine.save_session().await {
+                        tracing::debug!("Session checkpoint failed: {}", e);
+                    } else {
+                        tracing::debug!("Session checkpoint saved");
                     }
                 }
 
