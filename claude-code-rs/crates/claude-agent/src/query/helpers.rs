@@ -99,6 +99,15 @@ pub(super) fn classify_api_error(
     ApiErrorAction::Fatal
 }
 
+/// Add jitter to a delay value (±25%) to prevent thundering herd.
+/// Uses a simple deterministic pseudo-random based on the attempt count
+/// to avoid pulling in a random number generator.
+pub(super) fn with_jitter(base_ms: u64, attempt: u32) -> u64 {
+    // Pseudo-random factor based on attempt: varies between 0.75 and 1.25
+    let factor_pct = 75 + ((attempt as u64 * 37 + 13) % 51); // 75..125
+    base_ms * factor_pct / 100
+}
+
 /// Classify an error string into a tracking category.
 pub(super) fn error_category(err_str: &str) -> &'static str {
     if err_str.contains("rate") || err_str.contains("429") {
@@ -219,5 +228,82 @@ pub(super) fn block_to_api(block: &ContentBlock) -> ApiContentBlock {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── with_jitter ────────────────────────────────────────────────────
+
+    #[test]
+    fn jitter_stays_within_bounds() {
+        for attempt in 0..20 {
+            let result = with_jitter(1000, attempt);
+            assert!(result >= 750, "attempt {}: {} < 750", attempt, result);
+            assert!(result <= 1250, "attempt {}: {} > 1250", attempt, result);
+        }
+    }
+
+    #[test]
+    fn jitter_varies_across_attempts() {
+        let v1 = with_jitter(1000, 1);
+        let v2 = with_jitter(1000, 2);
+        let v3 = with_jitter(1000, 3);
+        assert!(v1 != v2 || v2 != v3, "jitter should vary: {}, {}, {}", v1, v2, v3);
+    }
+
+    #[test]
+    fn jitter_zero_base() {
+        assert_eq!(with_jitter(0, 1), 0);
+    }
+
+    // ── classify_api_error ─────────────────────────────────────────────
+
+    #[test]
+    fn classify_rate_limit_retries() {
+        let action = classify_api_error("rate limit exceeded", false, 1, 1000);
+        assert!(matches!(action, ApiErrorAction::Retry { .. }));
+    }
+
+    #[test]
+    fn classify_prompt_too_long_compacts() {
+        let action = classify_api_error("prompt is too long", false, 1, 1000);
+        assert!(matches!(action, ApiErrorAction::ReactiveCompact));
+    }
+
+    #[test]
+    fn classify_prompt_too_long_after_compact_is_fatal() {
+        let action = classify_api_error("prompt is too long", true, 1, 1000);
+        assert!(matches!(action, ApiErrorAction::Fatal));
+    }
+
+    #[test]
+    fn classify_too_many_errors_is_fatal() {
+        let action = classify_api_error("rate limit", false, 6, 1000);
+        assert!(matches!(action, ApiErrorAction::Fatal));
+    }
+
+    // ── error_category ─────────────────────────────────────────────────
+
+    #[test]
+    fn error_category_rate_limit() {
+        assert_eq!(error_category("429 rate limit"), "rate_limit");
+    }
+
+    #[test]
+    fn error_category_overloaded() {
+        assert_eq!(error_category("529 overloaded"), "overloaded");
+    }
+
+    #[test]
+    fn error_category_server() {
+        assert_eq!(error_category("500 internal server error"), "server_error");
+    }
+
+    #[test]
+    fn error_category_generic() {
+        assert_eq!(error_category("something else"), "api_error");
     }
 }

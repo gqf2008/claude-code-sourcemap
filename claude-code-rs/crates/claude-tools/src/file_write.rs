@@ -7,6 +7,9 @@ use crate::path_util;
 
 pub struct FileWriteTool;
 
+/// Maximum content size we'll write (10 MB).
+const MAX_WRITE_BYTES: usize = 10 * 1024 * 1024;
+
 #[async_trait]
 impl Tool for FileWriteTool {
     fn name(&self) -> &str { "Write" }
@@ -33,6 +36,13 @@ impl Tool for FileWriteTool {
     async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
         let file_path = input["file_path"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'file_path'"))?;
         let content = input["content"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'content'"))?;
+
+        if content.len() > MAX_WRITE_BYTES {
+            return Ok(ToolResult::error(format!(
+                "Content too large ({} bytes, limit is {} MB). Break the write into smaller files.",
+                content.len(), MAX_WRITE_BYTES / 1024 / 1024
+            )));
+        }
 
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
@@ -67,5 +77,29 @@ impl Tool for FileWriteTool {
                 Ok(ToolResult::error(format!("Cannot read existing file: {}", e)))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::Tool;
+    use claude_core::permissions::PermissionMode;
+
+    fn test_context() -> ToolContext {
+        ToolContext {
+            cwd: std::env::temp_dir(),
+            permission_mode: PermissionMode::Default,
+            abort_signal: Default::default(),
+            messages: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn write_rejects_oversized_content() {
+        let big = "x".repeat(MAX_WRITE_BYTES + 1);
+        let input = json!({ "file_path": "/tmp/test_big.txt", "content": big });
+        let result = FileWriteTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error, "should reject oversized content");
     }
 }

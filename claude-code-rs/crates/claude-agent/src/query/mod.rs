@@ -155,11 +155,12 @@ pub fn query_stream(
                         }
                         ApiErrorAction::Retry { wait_ms } => {
                             if turn_count + 1 < config.max_turns {
+                                let jittered = with_jitter(wait_ms, consecutive_errors);
                                 yield AgentEvent::TextDelta(format!(
                                     "\n\x1b[33m[Retrying after API error ({}) in {}ms: {}]\x1b[0m\n",
-                                    consecutive_errors, wait_ms, err_str
+                                    consecutive_errors, jittered, err_str
                                 ));
-                                tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(jittered)).await;
                                 retry_delay_ms = (retry_delay_ms * 2).min(32_000);
                                 continue;
                             }
@@ -290,7 +291,7 @@ pub fn query_stream(
                             consecutive_errors += 1;
                             state.write().await.record_error("stream_timeout");
                             if consecutive_errors <= 3 {
-                                let wait_ms = retry_delay_ms.min(8_000);
+                                let wait_ms = with_jitter(retry_delay_ms.min(8_000), consecutive_errors);
                                 yield AgentEvent::TextDelta(format!(
                                     "\n\x1b[33m[Stream timeout — retrying ({}/3) in {}ms]\x1b[0m\n",
                                     consecutive_errors, wait_ms,

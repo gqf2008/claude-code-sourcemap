@@ -89,6 +89,16 @@ impl Tool for GrepTool {
     async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
         let pattern = input["pattern"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern'"))?.to_string();
+
+        // Reject excessively long patterns that could cause ReDoS
+        const MAX_PATTERN_LEN: usize = 4096;
+        if pattern.len() > MAX_PATTERN_LEN {
+            return Ok(ToolResult::error(format!(
+                "Pattern too long ({} chars, limit is {}). Use a simpler pattern.",
+                pattern.len(), MAX_PATTERN_LEN
+            )));
+        }
+
         let search_path: PathBuf = match input["path"].as_str() {
             Some(p) => {
                 let pa = std::path::Path::new(p);
@@ -340,5 +350,24 @@ mod tests {
         assert!(matches_type_globs(Path::new("lib.mts"), &globs));
         assert!(matches_type_globs(Path::new("lib.cts"), &globs));
         assert!(!matches_type_globs(Path::new("lib.js"), &globs));
+    }
+
+    // ── pattern length limit ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn grep_rejects_long_pattern() {
+        use claude_core::tool::{Tool, ToolContext};
+        use claude_core::permissions::PermissionMode;
+
+        let ctx = ToolContext {
+            cwd: std::env::temp_dir(),
+            permission_mode: PermissionMode::Default,
+            abort_signal: Default::default(),
+            messages: vec![],
+        };
+        let pattern = "a".repeat(5000);
+        let input = serde_json::json!({ "pattern": pattern });
+        let result = GrepTool.call(input, &ctx).await.unwrap();
+        assert!(result.is_error, "should reject long pattern");
     }
 }

@@ -7,6 +7,9 @@ use crate::path_util;
 /// Extensions we support reading as base64-encoded images.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
 
+/// Maximum file size we'll read into memory (50 MB).
+const MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
+
 /// Device files that would hang or cause issues when read.
 const BLOCKED_DEVICE_PATHS: &[&str] = &[
     "/dev/zero", "/dev/random", "/dev/urandom", "/dev/null",
@@ -177,6 +180,17 @@ impl Tool for FileReadTool {
         // Check for Jupyter notebooks
         if ext == "ipynb" {
             return read_notebook(&path).await;
+        }
+
+        // Check file size before reading into memory
+        if let Ok(meta) = tokio::fs::metadata(&path).await {
+            if meta.len() > MAX_READ_BYTES {
+                return Ok(ToolResult::error(format!(
+                    "File too large: {} ({} bytes, limit is {} MB). \
+                     Use offset/limit to read specific portions.",
+                    path.display(), meta.len(), MAX_READ_BYTES / 1024 / 1024
+                )));
+            }
         }
 
         // Read raw bytes first to detect binary
