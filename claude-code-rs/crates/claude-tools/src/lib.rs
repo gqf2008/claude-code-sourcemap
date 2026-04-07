@@ -42,6 +42,7 @@ pub mod send_message;
 pub mod task;
 pub mod skill_tool;
 pub mod plan_mode;
+pub mod agent_tool;
 
 // ── Management tools ────────────────────────────────────────────────────────
 pub mod todo;
@@ -108,7 +109,7 @@ pub fn tool_category(name: &str) -> ToolCategory {
         "AskUser" | "SendUserMessage" => ToolCategory::Interaction,
 
         "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList"
-        | "TaskOutput" | "TaskStop" | "Skill"
+        | "TaskOutput" | "TaskStop" | "Skill" | "Agent"
         | "task_create" | "task_update" | "task_get" | "task_list"
         | "task_output" | "task_stop"
         | "EnterPlanMode" | "ExitPlanMode" => ToolCategory::Agent,
@@ -212,6 +213,7 @@ impl ToolRegistry {
         registry.register(plan_mode::EnterPlanModeTool);
         registry.register(plan_mode::ExitPlanModeTool);
         registry.register(skill_tool::SkillTool);
+        registry.register(agent_tool::AgentTool);
 
         // Management (always included)
         registry.register(todo::TodoWriteTool);

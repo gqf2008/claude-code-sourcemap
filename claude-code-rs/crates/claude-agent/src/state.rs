@@ -105,6 +105,90 @@ impl AppState {
         self.total_lines_added += added;
         self.total_lines_removed += removed;
     }
+
+    /// Create a SessionSnapshot from the current state.
+    pub fn to_session_snapshot(
+        &self,
+        session_id: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> claude_core::session::SessionSnapshot {
+        use claude_core::session::{SessionModelUsage, SessionSnapshot};
+
+        let now = chrono::Utc::now();
+        SessionSnapshot {
+            id: session_id.to_string(),
+            title: claude_core::session::title_from_messages(&self.messages),
+            model: self.model.clone(),
+            cwd: self.cwd.as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            created_at,
+            updated_at: now,
+            turn_count: self.turn_count,
+            input_tokens: self.total_input_tokens,
+            output_tokens: self.total_output_tokens,
+            model_usage: self.model_usage.iter().map(|(k, v)| {
+                (k.clone(), SessionModelUsage {
+                    input_tokens: v.input_tokens,
+                    output_tokens: v.output_tokens,
+                    cache_read_tokens: v.cache_read_tokens,
+                    cache_creation_tokens: v.cache_creation_tokens,
+                    api_calls: v.api_calls,
+                    cost_usd: v.cost_usd,
+                })
+            }).collect(),
+            total_cost_usd: self.total_cost(),
+            messages: self.messages.clone(),
+            git_branch: None,
+            custom_title: None,
+            ai_title: None,
+            summary: None,
+            last_prompt: self.last_user_prompt(),
+        }
+    }
+
+    /// Restore state from a session snapshot (for --resume).
+    pub fn restore_from_snapshot(&mut self, snap: &claude_core::session::SessionSnapshot) {
+        self.model = snap.model.clone();
+        self.messages = snap.messages.clone();
+        self.turn_count = snap.turn_count;
+        self.total_input_tokens = snap.input_tokens;
+        self.total_output_tokens = snap.output_tokens;
+
+        // Restore per-model usage
+        self.model_usage = snap.model_usage.iter().map(|(k, v)| {
+            (k.clone(), ModelUsage {
+                input_tokens: v.input_tokens,
+                output_tokens: v.output_tokens,
+                cache_read_tokens: v.cache_read_tokens,
+                cache_creation_tokens: v.cache_creation_tokens,
+                api_calls: v.api_calls,
+                cost_usd: v.cost_usd,
+            })
+        }).collect();
+
+        if !snap.cwd.is_empty() {
+            self.cwd = Some(std::path::PathBuf::from(&snap.cwd));
+        }
+    }
+
+    /// Extract the last user prompt (truncated to 200 chars) from messages.
+    fn last_user_prompt(&self) -> Option<String> {
+        for msg in self.messages.iter().rev() {
+            if let claude_core::message::Message::User(u) = msg {
+                for block in &u.content {
+                    if let claude_core::message::ContentBlock::Text { text } = block {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            let display: String = trimmed.chars().take(200).collect();
+                            return Some(display);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 impl Default for AppState {
@@ -216,5 +300,97 @@ mod tests {
         state.record_usage_auto_cost("claude-sonnet-4", 100_000, 50_000, 0, 0);
         let summary = state.cost_summary();
         assert!(summary.starts_with('$'));
+    }
+
+    // ── to_session_snapshot / restore_from_snapshot ──────────────────────
+
+    #[test]
+    fn test_to_session_snapshot() {
+        use claude_core::message::{ContentBlock, Message, UserMessage};
+
+        let mut state = AppState::default();
+        state.model = "claude-sonnet-4".to_string();
+        state.turn_count = 5;
+        state.total_input_tokens = 1000;
+        state.total_output_tokens = 500;
+        state.messages.push(Message::User(UserMessage {
+            uuid: "u1".to_string(),
+            content: vec![ContentBlock::Text { text: "Hello Rust".to_string() }],
+        }));
+        state.cwd = Some(std::path::PathBuf::from("/project"));
+
+        let created = chrono::Utc::now();
+        let snap = state.to_session_snapshot("test-id", created);
+        assert_eq!(snap.id, "test-id");
+        assert_eq!(snap.model, "claude-sonnet-4");
+        assert_eq!(snap.turn_count, 5);
+        assert_eq!(snap.input_tokens, 1000);
+        assert_eq!(snap.messages.len(), 1);
+        assert_eq!(snap.title, "Hello Rust");
+        assert_eq!(snap.cwd, "/project");
+        assert_eq!(snap.last_prompt.as_deref(), Some("Hello Rust"));
+    }
+
+    #[test]
+    fn test_restore_from_snapshot() {
+        use claude_core::session::SessionSnapshot;
+
+        let snap = SessionSnapshot {
+            id: "s1".to_string(),
+            title: "Restored".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            cwd: "/restored".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            turn_count: 10,
+            input_tokens: 5000,
+            output_tokens: 2000,
+            model_usage: std::collections::HashMap::new(),
+            total_cost_usd: 0.1,
+            messages: vec![],
+            git_branch: Some("main".to_string()),
+            custom_title: None,
+            ai_title: None,
+            summary: None,
+            last_prompt: None,
+        };
+
+        let mut state = AppState::default();
+        state.restore_from_snapshot(&snap);
+        assert_eq!(state.model, "claude-haiku-4-5");
+        assert_eq!(state.turn_count, 10);
+        assert_eq!(state.total_input_tokens, 5000);
+        assert_eq!(state.cwd.as_ref().unwrap().to_str().unwrap(), "/restored");
+    }
+
+    #[test]
+    fn test_last_user_prompt() {
+        use claude_core::message::{ContentBlock, Message, UserMessage, AssistantMessage};
+
+        let mut state = AppState::default();
+        state.messages = vec![
+            Message::User(UserMessage {
+                uuid: "u1".to_string(),
+                content: vec![ContentBlock::Text { text: "first question".to_string() }],
+            }),
+            Message::Assistant(AssistantMessage {
+                uuid: "a1".to_string(),
+                content: vec![ContentBlock::Text { text: "answer".to_string() }],
+                stop_reason: None,
+                usage: None,
+            }),
+            Message::User(UserMessage {
+                uuid: "u2".to_string(),
+                content: vec![ContentBlock::Text { text: "second question".to_string() }],
+            }),
+        ];
+
+        assert_eq!(state.last_user_prompt().as_deref(), Some("second question"));
+    }
+
+    #[test]
+    fn test_last_user_prompt_empty() {
+        let state = AppState::default();
+        assert!(state.last_user_prompt().is_none());
     }
 }

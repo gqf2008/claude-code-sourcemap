@@ -1,14 +1,15 @@
 //! Session persistence — save/restore conversation sessions to disk.
 //!
-//! Sessions are stored as JSON files under `~/.claude/sessions/`.
-//! Each file contains the full conversation state: messages, model, cwd,
-//! token usage, and turn count.
+//! Two storage formats:
 //!
-//! A lightweight manifest file (`index.json`) caches session metadata to
-//! avoid reading every session file when listing.
+//! 1. **JSON snapshot** (`{id}.json`) — full session state, atomic write.
+//!    Good for small sessions, used by `save_session()` / `load_session()`.
 //!
-//! Aligned with TS `sessionStorage.ts` — simplified to JSON (not JSONL)
-//! since the Rust port doesn't need streaming append or sub-agent metadata.
+//! 2. **JSONL transcript** (`{id}.jsonl`) — append-only, one entry per line.
+//!    Used for incremental recording during live sessions.
+//!    Aligned with TS `sessionStorage.ts` `appendEntry()`.
+//!
+//! A lightweight manifest (`index.json`) caches session metadata.
 
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
@@ -58,6 +59,21 @@ pub struct SessionSnapshot {
     pub total_cost_usd: f64,
     /// Full conversation history.
     pub messages: Vec<Message>,
+    /// Git branch at time of session (for resume picker).
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    /// User-set session name.
+    #[serde(default)]
+    pub custom_title: Option<String>,
+    /// Auto-generated title from AI.
+    #[serde(default)]
+    pub ai_title: Option<String>,
+    /// Conversation summary (at leaf).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Last user prompt (truncated, for resume picker).
+    #[serde(default)]
+    pub last_prompt: Option<String>,
 }
 
 /// Lightweight session metadata for listing (without messages).
@@ -73,6 +89,14 @@ pub struct SessionMeta {
     pub message_count: usize,
     #[serde(default)]
     pub total_cost_usd: f64,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub custom_title: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub last_prompt: Option<String>,
 }
 
 /// Manifest file for fast session listing.
@@ -205,6 +229,10 @@ pub fn save_session(session: &SessionSnapshot) -> anyhow::Result<()> {
         turn_count: session.turn_count,
         message_count: session.messages.len(),
         total_cost_usd: session.total_cost_usd,
+        git_branch: session.git_branch.clone(),
+        custom_title: session.custom_title.clone(),
+        summary: session.summary.clone(),
+        last_prompt: session.last_prompt.clone(),
     };
     update_manifest_entry(&meta);
     Ok(())
@@ -284,6 +312,10 @@ fn read_session_meta(path: &Path) -> Option<SessionMeta> {
         updated_at: snap.updated_at,
         turn_count: snap.turn_count,
         total_cost_usd: snap.total_cost_usd,
+        git_branch: snap.git_branch,
+        custom_title: snap.custom_title,
+        summary: snap.summary,
+        last_prompt: snap.last_prompt,
     })
 }
 
@@ -295,8 +327,356 @@ pub fn delete_session(id: &str) -> anyhow::Result<()> {
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
+    // Also remove JSONL transcript if present
+    let jsonl = transcript_path(id)?;
+    if jsonl.exists() {
+        let _ = std::fs::remove_file(&jsonl);
+    }
     remove_manifest_entry(id);
     Ok(())
+}
+
+// ── JSONL Transcript ─────────────────────────────────────────────────────────
+
+/// A single entry in a JSONL transcript file.
+///
+/// Aligned with TS `types/logs.ts` — each variant maps to a `type` discriminator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TranscriptEntry {
+    /// User message.
+    #[serde(rename = "user")]
+    User {
+        uuid: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_uuid: Option<String>,
+        message: Message,
+        timestamp: DateTime<Utc>,
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        git_branch: Option<String>,
+    },
+    /// Assistant response.
+    #[serde(rename = "assistant")]
+    Assistant {
+        uuid: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_uuid: Option<String>,
+        message: Message,
+        timestamp: DateTime<Utc>,
+        session_id: String,
+    },
+    /// System event (compaction, hook output, etc.).
+    #[serde(rename = "system")]
+    System {
+        uuid: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_uuid: Option<String>,
+        subtype: String,
+        message: String,
+        timestamp: DateTime<Utc>,
+        session_id: String,
+    },
+    /// User-set session title.
+    #[serde(rename = "custom-title")]
+    CustomTitle {
+        session_id: String,
+        custom_title: String,
+    },
+    /// Auto-generated session title.
+    #[serde(rename = "ai-title")]
+    AiTitle {
+        session_id: String,
+        ai_title: String,
+    },
+    /// Conversation summary at a leaf node.
+    #[serde(rename = "summary")]
+    Summary {
+        leaf_uuid: String,
+        summary: String,
+    },
+    /// Last user prompt (for resume picker).
+    #[serde(rename = "last-prompt")]
+    LastPrompt {
+        session_id: String,
+        last_prompt: String,
+    },
+    /// Turn duration checkpoint (for consistency checks).
+    #[serde(rename = "turn-duration")]
+    TurnDuration {
+        session_id: String,
+        turn_index: u32,
+        duration_ms: u64,
+        message_count: usize,
+        timestamp: DateTime<Utc>,
+    },
+}
+
+/// Path for a JSONL transcript file.
+fn transcript_path(id: &str) -> anyhow::Result<PathBuf> {
+    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        anyhow::bail!("Invalid session ID for transcript");
+    }
+    Ok(sessions_dir().join(format!("{}.jsonl", id)))
+}
+
+/// Append a single entry to the JSONL transcript file.
+///
+/// Thread-safe: each call opens → appends → closes the file.
+/// Creates the sessions directory and file if they don't exist.
+pub fn append_transcript_entry(id: &str, entry: &TranscriptEntry) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let dir = sessions_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = transcript_path(id)?;
+
+    let mut line = serde_json::to_string(entry)?;
+    line.push('\n');
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+/// Load all entries from a JSONL transcript file.
+///
+/// Skips malformed lines (logs warning). Returns entries in file order.
+pub fn load_transcript(id: &str) -> anyhow::Result<Vec<TranscriptEntry>> {
+    let path = transcript_path(id)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let mut entries = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TranscriptEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                tracing::warn!("Skipping malformed transcript line {} in {}: {}", i + 1, id, e);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Rebuild a `SessionSnapshot` from a JSONL transcript.
+///
+/// Walks all entries to extract messages, metadata, and token usage.
+pub fn rebuild_from_transcript(id: &str, model: &str) -> anyhow::Result<SessionSnapshot> {
+    let entries = load_transcript(id)?;
+
+    let mut messages = Vec::new();
+    let mut custom_title = None;
+    let mut ai_title = None;
+    let mut summary = None;
+    let mut last_prompt = None;
+    let mut git_branch = None;
+    let mut cwd = String::new();
+    let mut created_at = Utc::now();
+    let mut updated_at = Utc::now();
+    let mut turn_count: u32 = 0;
+
+    for (i, entry) in entries.iter().enumerate() {
+        match entry {
+            TranscriptEntry::User { message, timestamp, cwd: entry_cwd, git_branch: gb, .. } => {
+                if i == 0 {
+                    created_at = *timestamp;
+                }
+                updated_at = *timestamp;
+                if let Some(c) = entry_cwd {
+                    cwd = c.clone();
+                }
+                if git_branch.is_none() {
+                    git_branch = gb.clone();
+                }
+                messages.push(message.clone());
+            }
+            TranscriptEntry::Assistant { message, timestamp, .. } => {
+                updated_at = *timestamp;
+                turn_count += 1;
+                messages.push(message.clone());
+            }
+            TranscriptEntry::System { message: msg, timestamp, .. } => {
+                updated_at = *timestamp;
+                messages.push(Message::System(crate::message::SystemMessage {
+                    uuid: uuid::Uuid::new_v4().to_string(),
+                    message: msg.clone(),
+                }));
+            }
+            TranscriptEntry::CustomTitle { custom_title: t, .. } => {
+                custom_title = Some(t.clone());
+            }
+            TranscriptEntry::AiTitle { ai_title: t, .. } => {
+                ai_title = Some(t.clone());
+            }
+            TranscriptEntry::Summary { summary: s, .. } => {
+                summary = Some(s.clone());
+            }
+            TranscriptEntry::LastPrompt { last_prompt: p, .. } => {
+                last_prompt = Some(p.clone());
+            }
+            TranscriptEntry::TurnDuration { .. } => {}
+        }
+    }
+
+    let title = custom_title.clone()
+        .or_else(|| ai_title.clone())
+        .unwrap_or_else(|| title_from_messages(&messages));
+
+    Ok(SessionSnapshot {
+        id: id.to_string(),
+        title,
+        model: model.to_string(),
+        cwd,
+        created_at,
+        updated_at,
+        turn_count,
+        input_tokens: 0,
+        output_tokens: 0,
+        model_usage: HashMap::new(),
+        total_cost_usd: 0.0,
+        messages,
+        git_branch,
+        custom_title,
+        ai_title,
+        summary,
+        last_prompt,
+    })
+}
+
+/// Set a custom title on a session (appends to JSONL transcript).
+pub fn set_custom_title(id: &str, title: &str) -> anyhow::Result<()> {
+    append_transcript_entry(id, &TranscriptEntry::CustomTitle {
+        session_id: id.to_string(),
+        custom_title: title.to_string(),
+    })
+}
+
+/// Set a summary on a session (appends to JSONL transcript).
+pub fn set_summary(id: &str, leaf_uuid: &str, summary: &str) -> anyhow::Result<()> {
+    append_transcript_entry(id, &TranscriptEntry::Summary {
+        leaf_uuid: leaf_uuid.to_string(),
+        summary: summary.to_string(),
+    })
+}
+
+// ── Prompt History ──────────────────────────────────────────────────────────
+
+/// A single entry in the global prompt history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptHistoryEntry {
+    /// Display text (first 200 chars of user prompt).
+    pub display: String,
+    /// Timestamp (millis since epoch).
+    pub timestamp: i64,
+    /// Project directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Session that this prompt belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// Max entries per project in prompt history.
+const MAX_HISTORY_PER_PROJECT: usize = 100;
+
+/// Path to the global prompt history file.
+fn prompt_history_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude")
+        .join("prompt_history.jsonl")
+}
+
+/// Add a prompt to the global history.
+pub fn add_to_prompt_history(entry: &PromptHistoryEntry) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let path = prompt_history_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut line = serde_json::to_string(entry)?;
+    line.push('\n');
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+/// Load prompt history, optionally filtered by project.
+///
+/// Returns entries in reverse chronological order (newest first).
+/// Limits to MAX_HISTORY_PER_PROJECT per project.
+pub fn get_prompt_history(project: Option<&str>) -> Vec<PromptHistoryEntry> {
+    let path = prompt_history_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: Vec<PromptHistoryEntry> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    // Filter by project if specified
+    if let Some(proj) = project {
+        entries.retain(|e| e.project.as_deref() == Some(proj));
+    }
+
+    // Reverse to get newest first
+    entries.reverse();
+
+    // Limit
+    entries.truncate(MAX_HISTORY_PER_PROJECT);
+    entries
+}
+
+/// Search prompt history by keyword (case-insensitive).
+pub fn search_prompt_history(query: &str) -> Vec<PromptHistoryEntry> {
+    let path = prompt_history_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let query_lower = query.to_lowercase();
+
+    let mut entries: Vec<PromptHistoryEntry> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<PromptHistoryEntry>(l).ok())
+        .filter(|e| e.display.to_lowercase().contains(&query_lower))
+        .collect();
+
+    entries.reverse();
+    entries.truncate(MAX_HISTORY_PER_PROJECT);
+    entries
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -524,6 +904,11 @@ mod tests {
             model_usage: HashMap::new(),
             total_cost_usd: 0.05,
             messages: vec![user_msg("Hi")],
+            git_branch: Some("main".to_string()),
+            custom_title: None,
+            ai_title: Some("AI title".to_string()),
+            summary: None,
+            last_prompt: Some("Hi".to_string()),
         };
         let json = serde_json::to_string(&snap).expect("serialize");
         let deser: SessionSnapshot = serde_json::from_str(&json).expect("deserialize");
@@ -531,6 +916,8 @@ mod tests {
         assert_eq!(deser.title, snap.title);
         assert_eq!(deser.turn_count, 3);
         assert_eq!(deser.messages.len(), 1);
+        assert_eq!(deser.git_branch.as_deref(), Some("main"));
+        assert_eq!(deser.ai_title.as_deref(), Some("AI title"));
     }
 
     // ── SessionMeta serde ───────────────────────────────────────────────
@@ -548,6 +935,10 @@ mod tests {
             turn_count: 1,
             message_count: 5,
             total_cost_usd: 0.0,
+            git_branch: None,
+            custom_title: None,
+            summary: None,
+            last_prompt: None,
         };
         let json = serde_json::to_string(&meta).expect("serialize");
         let deser: SessionMeta = serde_json::from_str(&json).expect("deserialize");
@@ -611,5 +1002,265 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "new content");
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── TranscriptEntry serde ───────────────────────────────────────────
+
+    #[test]
+    fn transcript_entry_user_serde() {
+        let entry = TranscriptEntry::User {
+            uuid: "u1".to_string(),
+            parent_uuid: None,
+            message: user_msg("Hello"),
+            timestamp: Utc::now(),
+            session_id: "s1".to_string(),
+            cwd: Some("/tmp".to_string()),
+            git_branch: Some("main".to_string()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"type\":\"user\""));
+        let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+        match deser {
+            TranscriptEntry::User { uuid, cwd, .. } => {
+                assert_eq!(uuid, "u1");
+                assert_eq!(cwd.as_deref(), Some("/tmp"));
+            }
+            _ => panic!("Expected User variant"),
+        }
+    }
+
+    #[test]
+    fn transcript_entry_assistant_serde() {
+        let entry = TranscriptEntry::Assistant {
+            uuid: "a1".to_string(),
+            parent_uuid: Some("u1".to_string()),
+            message: assistant_msg("Hi"),
+            timestamp: Utc::now(),
+            session_id: "s1".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"type\":\"assistant\""));
+    }
+
+    #[test]
+    fn transcript_entry_custom_title_serde() {
+        let entry = TranscriptEntry::CustomTitle {
+            session_id: "s1".to_string(),
+            custom_title: "My Session".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"type\":\"custom-title\""));
+        let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+        match deser {
+            TranscriptEntry::CustomTitle { custom_title, .. } => {
+                assert_eq!(custom_title, "My Session");
+            }
+            _ => panic!("Expected CustomTitle"),
+        }
+    }
+
+    #[test]
+    fn transcript_entry_summary_serde() {
+        let entry = TranscriptEntry::Summary {
+            leaf_uuid: "leaf1".to_string(),
+            summary: "We discussed Rust".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+        match deser {
+            TranscriptEntry::Summary { summary, .. } => assert_eq!(summary, "We discussed Rust"),
+            _ => panic!("Expected Summary"),
+        }
+    }
+
+    #[test]
+    fn transcript_entry_turn_duration_serde() {
+        let entry = TranscriptEntry::TurnDuration {
+            session_id: "s1".to_string(),
+            turn_index: 3,
+            duration_ms: 1500,
+            message_count: 7,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"type\":\"turn-duration\""));
+    }
+
+    // ── JSONL append / load ─────────────────────────────────────────────
+
+    #[test]
+    fn transcript_path_valid() {
+        let p = transcript_path("test-session").unwrap();
+        assert!(p.to_string_lossy().ends_with("test-session.jsonl"));
+    }
+
+    #[test]
+    fn transcript_path_invalid() {
+        assert!(transcript_path("../bad").is_err());
+    }
+
+    #[test]
+    fn append_and_load_transcript() {
+        let id = format!("test-transcript-{}", uuid::Uuid::new_v4().simple());
+        let now = Utc::now();
+
+        // Append two entries
+        let e1 = TranscriptEntry::User {
+            uuid: "u1".to_string(),
+            parent_uuid: None,
+            message: user_msg("Hello"),
+            timestamp: now,
+            session_id: id.clone(),
+            cwd: Some("/tmp".to_string()),
+            git_branch: None,
+        };
+        let e2 = TranscriptEntry::Assistant {
+            uuid: "a1".to_string(),
+            parent_uuid: Some("u1".to_string()),
+            message: assistant_msg("Hi there"),
+            timestamp: now,
+            session_id: id.clone(),
+        };
+
+        append_transcript_entry(&id, &e1).unwrap();
+        append_transcript_entry(&id, &e2).unwrap();
+
+        // Load and verify
+        let entries = load_transcript(&id).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        // Cleanup
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    #[test]
+    fn load_transcript_nonexistent() {
+        let entries = load_transcript("does-not-exist-99999").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    // ── rebuild_from_transcript ──────────────────────────────────────────
+
+    #[test]
+    fn rebuild_from_transcript_roundtrip() {
+        let id = format!("test-rebuild-{}", uuid::Uuid::new_v4().simple());
+        let now = Utc::now();
+
+        append_transcript_entry(&id, &TranscriptEntry::User {
+            uuid: "u1".to_string(),
+            parent_uuid: None,
+            message: user_msg("Build me a thing"),
+            timestamp: now,
+            session_id: id.clone(),
+            cwd: Some("/project".to_string()),
+            git_branch: Some("feature".to_string()),
+        }).unwrap();
+
+        append_transcript_entry(&id, &TranscriptEntry::Assistant {
+            uuid: "a1".to_string(),
+            parent_uuid: Some("u1".to_string()),
+            message: assistant_msg("Sure!"),
+            timestamp: now,
+            session_id: id.clone(),
+        }).unwrap();
+
+        append_transcript_entry(&id, &TranscriptEntry::CustomTitle {
+            session_id: id.clone(),
+            custom_title: "My Build".to_string(),
+        }).unwrap();
+
+        let snap = rebuild_from_transcript(&id, "claude-sonnet").unwrap();
+        assert_eq!(snap.messages.len(), 2);
+        assert_eq!(snap.turn_count, 1);
+        assert_eq!(snap.title, "My Build");
+        assert_eq!(snap.git_branch.as_deref(), Some("feature"));
+        assert_eq!(snap.cwd, "/project");
+
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    // ── Prompt history ──────────────────────────────────────────────────
+
+    #[test]
+    fn prompt_history_entry_serde() {
+        let entry = PromptHistoryEntry {
+            display: "hello world".to_string(),
+            timestamp: 1704067200000,
+            project: Some("/home/user/project".to_string()),
+            session_id: Some("s1".to_string()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deser: PromptHistoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.display, "hello world");
+        assert_eq!(deser.timestamp, 1704067200000);
+    }
+
+    #[test]
+    fn prompt_history_entry_minimal() {
+        let json = r#"{"display":"hi","timestamp":0}"#;
+        let entry: PromptHistoryEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.display, "hi");
+        assert!(entry.project.is_none());
+        assert!(entry.session_id.is_none());
+    }
+
+    // ── set_custom_title / set_summary ────────────────────────────────
+
+    #[test]
+    fn set_custom_title_appends_to_transcript() {
+        let id = format!("test-title-{}", uuid::Uuid::new_v4().simple());
+        set_custom_title(&id, "My Title").unwrap();
+
+        let entries = load_transcript(&id).unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            TranscriptEntry::CustomTitle { custom_title, .. } => {
+                assert_eq!(custom_title, "My Title");
+            }
+            _ => panic!("Expected CustomTitle"),
+        }
+
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    #[test]
+    fn set_summary_appends_to_transcript() {
+        let id = format!("test-summary-{}", uuid::Uuid::new_v4().simple());
+        set_summary(&id, "leaf1", "We discussed Rust porting").unwrap();
+
+        let entries = load_transcript(&id).unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            TranscriptEntry::Summary { summary, leaf_uuid, .. } => {
+                assert_eq!(summary, "We discussed Rust porting");
+                assert_eq!(leaf_uuid, "leaf1");
+            }
+            _ => panic!("Expected Summary"),
+        }
+
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    // ── SessionSnapshot new fields backward compat ───────────────────
+
+    #[test]
+    fn snapshot_without_new_fields_deserializes() {
+        let json = r#"{
+            "id": "old",
+            "title": "t",
+            "model": "m",
+            "cwd": "/",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "turn_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_cost_usd": 0,
+            "messages": []
+        }"#;
+        let snap: SessionSnapshot = serde_json::from_str(json).unwrap();
+        assert!(snap.git_branch.is_none());
+        assert!(snap.custom_title.is_none());
+        assert!(snap.summary.is_none());
     }
 }

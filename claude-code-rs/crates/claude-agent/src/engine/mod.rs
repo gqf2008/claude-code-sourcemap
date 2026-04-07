@@ -535,6 +535,11 @@ impl QueryEngine {
             }).collect(),
             total_cost_usd: s.model_usage.values().map(|u| u.cost_usd).sum(),
             messages: s.messages.clone(),
+            git_branch: None,
+            custom_title: None,
+            ai_title: None,
+            summary: None,
+            last_prompt: None,
         };
         save_session(&snapshot)
     }
