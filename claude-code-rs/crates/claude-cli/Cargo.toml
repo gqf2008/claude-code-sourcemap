@@ -26,3 +26,6 @@ tracing-subscriber = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 rpassword = { workspace = true }
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+similar = { workspace = true }
+indicatif = "0.18.4"

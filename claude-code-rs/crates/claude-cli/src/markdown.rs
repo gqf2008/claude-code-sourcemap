@@ -2,8 +2,30 @@
 //!
 //! Processes text deltas character-by-character and emits ANSI-colored output.
 //! Handles: headers, bold, italic, inline code, fenced code blocks, bullet lists.
+//! Code blocks get syntax highlighting via `syntect`.
 
 use std::io::Write;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+
+/// Lazy-initialized syntax highlighting resources (loaded once).
+struct SyntaxResources {
+    syntax_set: SyntaxSet,
+    theme_set: ThemeSet,
+}
+
+impl SyntaxResources {
+    fn get() -> &'static Self {
+        use std::sync::OnceLock;
+        static INSTANCE: OnceLock<SyntaxResources> = OnceLock::new();
+        INSTANCE.get_or_init(|| SyntaxResources {
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
+        })
+    }
+}
 
 /// Streaming markdown rendering state machine.
 pub struct MarkdownRenderer {
@@ -15,6 +37,8 @@ pub struct MarkdownRenderer {
     code_lang: String,
     /// Whether the code block header (```lang) has been printed.
     code_header_printed: bool,
+    /// Accumulated code lines for syntax highlighting (flushed on block end).
+    code_lines: Vec<String>,
 }
 
 impl MarkdownRenderer {
@@ -24,6 +48,7 @@ impl MarkdownRenderer {
             in_code_block: false,
             code_lang: String::new(),
             code_header_printed: false,
+            code_lines: Vec::new(),
         }
     }
 
@@ -44,7 +69,8 @@ impl MarkdownRenderer {
             self.flush_line();
         }
         if self.in_code_block {
-            // Unterminated code block — close it
+            // Unterminated code block — flush accumulated code with highlighting
+            self.flush_code_block();
             print!("\x1b[0m");
             std::io::stdout().flush().ok();
         }
@@ -55,14 +81,15 @@ impl MarkdownRenderer {
 
         if self.in_code_block {
             if line.trim_start().starts_with("```") {
-                // End of code block
+                // End of code block — flush with syntax highlighting
                 self.in_code_block = false;
+                self.flush_code_block();
                 self.code_lang.clear();
                 self.code_header_printed = false;
                 println!("\x1b[0m");
             } else {
-                // Inside code block — dim text
-                println!("\x1b[2m{}\x1b[0m", line);
+                // Accumulate code lines
+                self.code_lines.push(line);
             }
             return;
         }
@@ -125,6 +152,62 @@ impl MarkdownRenderer {
         // Regular paragraph — apply inline formatting
         render_inline(&line);
         println!();
+    }
+
+    /// Flush accumulated code lines with syntax highlighting.
+    fn flush_code_block(&mut self) {
+        let lines = std::mem::take(&mut self.code_lines);
+        if lines.is_empty() {
+            return;
+        }
+
+        let res = SyntaxResources::get();
+        let theme = &res.theme_set.themes["base16-ocean.dark"];
+
+        // Map common language aliases
+        let lang = match self.code_lang.as_str() {
+            "js" | "jsx" => "JavaScript",
+            "ts" | "tsx" => "TypeScript",
+            "py" => "Python",
+            "rb" => "Ruby",
+            "rs" => "Rust",
+            "sh" | "bash" | "zsh" | "shell" => "Bourne Again Shell (bash)",
+            "yml" => "YAML",
+            "md" | "markdown" => "Markdown",
+            "cs" => "C#",
+            "cpp" | "cc" | "cxx" => "C++",
+            other => other,
+        };
+
+        // Try to find syntax by language hint
+        let syntax = if lang.is_empty() {
+            res.syntax_set.find_syntax_plain_text()
+        } else {
+            res.syntax_set
+                .find_syntax_by_name(lang)
+                .or_else(|| res.syntax_set.find_syntax_by_extension(lang))
+                .or_else(|| res.syntax_set.find_syntax_by_extension(&self.code_lang))
+                .unwrap_or_else(|| res.syntax_set.find_syntax_plain_text())
+        };
+
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
+        // Rejoin lines with newlines for syntect (it expects `\n` terminated lines)
+        let code = lines.join("\n") + "\n";
+        for line in LinesWithEndings::from(&code) {
+            match highlighter.highlight_line(line, &res.syntax_set) {
+                Ok(ranges) => {
+                    let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                    print!("{}", escaped);
+                }
+                Err(_) => {
+                    // Fallback: dim text
+                    print!("\x1b[2m{}\x1b[0m", line);
+                }
+            }
+        }
+        print!("\x1b[0m");
+        std::io::stdout().flush().ok();
     }
 }
 

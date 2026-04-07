@@ -4,6 +4,7 @@ mod repl_commands;
 mod commands;
 mod output;
 mod markdown;
+mod diff_display;
 
 use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;

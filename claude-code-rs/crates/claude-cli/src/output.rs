@@ -3,59 +3,41 @@ use claude_agent::engine::QueryEngine;
 use claude_agent::query::AgentEvent;
 use claude_agent::task_runner::{run_task, CompletionReason, TaskProgress};
 use tokio_stream::StreamExt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write as _;
 
+use indicatif::{ProgressBar, ProgressStyle};
+
 /// An animated spinner shown while waiting for the first streaming token.
+/// Uses indicatif for richer animation with elapsed time.
 struct Spinner {
-    running: Arc<AtomicBool>,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    bar: ProgressBar,
 }
 
 impl Spinner {
-    fn start() -> Self {
-        let running = Arc::new(AtomicBool::new(true));
-        let r = running.clone();
-        let handle = tokio::spawn(async move {
-            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let mut i = 0;
-            while r.load(Ordering::Relaxed) {
-                eprint!("\r\x1b[2m{} Thinking...\x1b[0m", frames[i % frames.len()]);
-                use std::io::Write;
-                std::io::stderr().flush().ok();
-                i += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            }
-            // Clear the spinner line
-            eprint!("\r\x1b[2K");
-            std::io::stderr().flush().ok();
-        });
-        Self { running, handle: Some(handle) }
+    fn start(message: &str) -> Self {
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(
+            ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:.dim}")
+                .unwrap()
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+        );
+        bar.set_message(message.to_string());
+        bar.enable_steady_tick(std::time::Duration::from_millis(80));
+        Self { bar }
+    }
+
+    fn set_message(&self, msg: &str) {
+        self.bar.set_message(msg.to_string());
     }
 
     fn stop(&self) {
-        self.running.store(false, Ordering::Relaxed);
+        self.bar.finish_and_clear();
     }
 }
 
 impl Drop for Spinner {
     fn drop(&mut self) {
         self.stop();
-        // Give the task a moment to print the clear sequence before aborting
-        if let Some(h) = self.handle.take() {
-            // Spin-wait briefly for the task to notice the flag (max ~100ms)
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-            while !h.is_finished() && std::time::Instant::now() < deadline {
-                std::hint::spin_loop();
-            }
-            if !h.is_finished() {
-                h.abort();
-                // Ensure spinner line is cleared even if task didn't finish
-                eprint!("\r\x1b[2K");
-                std::io::stderr().flush().ok();
-            }
-        }
     }
 }
 
@@ -213,9 +195,12 @@ pub async fn print_stream(
     let mut thinking_started = false;
     let mut first_content = true;
     let mut md = crate::markdown::MarkdownRenderer::new();
+    let mut total_input_tokens: u64 = 0;
+    let mut total_output_tokens: u64 = 0;
 
     // Start the thinking spinner
-    let spinner = Spinner::start();
+    let spinner = Spinner::start("Thinking...");
+    let mut tool_spinner: Option<Spinner> = None;
 
     while let Some(event) = stream.next().await {
         match event {
@@ -223,6 +208,10 @@ pub async fn print_stream(
                 if first_content {
                     first_content = false;
                     spinner.stop();
+                }
+                // Stop tool spinner if text arrives
+                if let Some(ts) = tool_spinner.take() {
+                    ts.stop();
                 }
                 if thinking_started {
                     thinking_started = false;
@@ -233,6 +222,7 @@ pub async fn print_stream(
             AgentEvent::ThinkingDelta(text) => {
                 if first_content {
                     first_content = false;
+                    spinner.set_message("💭 Thinking...");
                     spinner.stop();
                 }
                 if !thinking_started {
@@ -240,7 +230,6 @@ pub async fn print_stream(
                     eprint!("\x1b[2;3m💭 ");
                 }
                 eprint!("{}", text);
-                use std::io::Write;
                 std::io::stderr().flush().ok();
             }
             AgentEvent::ToolUseStart { name, .. } => {
@@ -248,13 +237,24 @@ pub async fn print_stream(
                     first_content = false;
                     spinner.stop();
                 }
+                // Start a spinner for the tool execution
+                let tool_msg = format!("🔧 Running {}...", name);
+                tool_spinner = Some(Spinner::start(&tool_msg));
                 last_tool_name = name.clone();
                 tool_start_time = Some(std::time::Instant::now());
             }
             AgentEvent::ToolUseReady { name, input, .. } => {
+                // Stop tool spinner before printing tool details
+                if let Some(ts) = tool_spinner.take() {
+                    ts.stop();
+                }
                 eprintln!("\n{}", format_tool_start(&name, &input));
             }
             AgentEvent::ToolResult { is_error, text, .. } => {
+                // Stop tool spinner
+                if let Some(ts) = tool_spinner.take() {
+                    ts.stop();
+                }
                 let elapsed = tool_start_time
                     .map(|t| t.elapsed())
                     .unwrap_or_default();
@@ -276,7 +276,8 @@ pub async fn print_stream(
             AgentEvent::TurnComplete { .. } => {
                 // Flush any remaining markdown content
                 md.finish();
-                // Show per-turn cost summary
+                // Show per-turn cost and token summary
+                let mut parts = Vec::new();
                 if let Some(tracker) = cost_tracker {
                     let cost = tracker.total_usd();
                     if cost > 0.0 {
@@ -287,12 +288,20 @@ pub async fn print_stream(
                         } else {
                             "$0.00".to_string()
                         };
-                        eprintln!("\x1b[2m  [{}]\x1b[0m", cost_str);
+                        parts.push(cost_str);
                     }
+                }
+                if total_input_tokens > 0 || total_output_tokens > 0 {
+                    parts.push(format!("{}↓ {}↑", total_input_tokens, total_output_tokens));
+                }
+                if !parts.is_empty() {
+                    eprintln!("\x1b[2m  [{}]\x1b[0m", parts.join(" · "));
                 }
                 println!();
             }
             AgentEvent::UsageUpdate(u) => {
+                total_input_tokens += u.input_tokens;
+                total_output_tokens += u.output_tokens;
                 if let Some(tracker) = cost_tracker {
                     tracker.add(model, &u);
                 }
@@ -300,6 +309,9 @@ pub async fn print_stream(
             }
             AgentEvent::Error(msg) => {
                 spinner.stop();
+                if let Some(ts) = tool_spinner.take() {
+                    ts.stop();
+                }
                 let (icon, hint) = categorize_error(&msg);
                 eprintln!("\x1b[31m{} {}\x1b[0m", icon, msg);
                 if let Some(h) = hint {
