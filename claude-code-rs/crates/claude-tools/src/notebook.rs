@@ -151,3 +151,142 @@ impl Tool for NotebookEditTool {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn sample_notebook() -> String {
+        json!({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": ["print('hello')\n"],
+                    "outputs": [],
+                    "execution_count": 1
+                },
+                {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": ["# Title\n"]
+                }
+            ]
+        }).to_string()
+    }
+
+    #[tokio::test]
+    async fn replace_cell() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nb_path = tmp.path().join("test.ipynb");
+        std::fs::write(&nb_path, sample_notebook()).unwrap();
+
+        let tool = NotebookEditTool;
+        let input = json!({
+            "notebook_path": nb_path.to_str().unwrap(),
+            "cell_number": 0,
+            "new_source": "print('updated')",
+            "edit_mode": "replace"
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("replace"));
+
+        let updated: Value = serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        let source = updated["cells"][0]["source"][0].as_str().unwrap();
+        assert!(source.contains("updated"));
+    }
+
+    #[tokio::test]
+    async fn insert_cell() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nb_path = tmp.path().join("test.ipynb");
+        std::fs::write(&nb_path, sample_notebook()).unwrap();
+
+        let tool = NotebookEditTool;
+        let input = json!({
+            "notebook_path": nb_path.to_str().unwrap(),
+            "cell_number": 0,
+            "new_source": "x = 42",
+            "cell_type": "code",
+            "edit_mode": "insert"
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+
+        let updated: Value = serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        assert_eq!(updated["cells"].as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn delete_cell() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nb_path = tmp.path().join("test.ipynb");
+        std::fs::write(&nb_path, sample_notebook()).unwrap();
+
+        let tool = NotebookEditTool;
+        let input = json!({
+            "notebook_path": nb_path.to_str().unwrap(),
+            "cell_number": 1,
+            "new_source": "",
+            "edit_mode": "delete"
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+
+        let updated: Value = serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        assert_eq!(updated["cells"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn replace_out_of_range() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nb_path = tmp.path().join("test.ipynb");
+        std::fs::write(&nb_path, sample_notebook()).unwrap();
+
+        let tool = NotebookEditTool;
+        let input = json!({
+            "notebook_path": nb_path.to_str().unwrap(),
+            "cell_number": 99,
+            "new_source": "x",
+            "edit_mode": "replace"
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("out of range"));
+    }
+
+    #[tokio::test]
+    async fn rejects_non_ipynb() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = NotebookEditTool;
+        let input = json!({
+            "notebook_path": "test.py",
+            "new_source": "x = 1"
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains(".ipynb"));
+    }
+}

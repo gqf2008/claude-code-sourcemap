@@ -197,3 +197,85 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
 
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx() -> ToolContext {
+        ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn format_brave_results() {
+        let body = json!({
+            "web": {
+                "results": [
+                    {
+                        "title": "Rust Lang",
+                        "url": "https://www.rust-lang.org",
+                        "description": "A language empowering everyone."
+                    }
+                ]
+            }
+        });
+        let out = format_search_results(&body, "rust").unwrap();
+        assert!(out.contains("Rust Lang"));
+        assert!(out.contains("rust-lang.org"));
+        assert!(out.contains("(1 results)"));
+    }
+
+    #[test]
+    fn format_generic_results() {
+        let body = json!({
+            "results": [
+                {
+                    "title": "Example",
+                    "link": "https://example.com",
+                    "snippet": "A test snippet."
+                }
+            ]
+        });
+        let out = format_search_results(&body, "test").unwrap();
+        assert!(out.contains("Example"));
+        assert!(out.contains("example.com"));
+    }
+
+    #[test]
+    fn format_empty_results() {
+        let body = json!({});
+        let out = format_search_results(&body, "nothing").unwrap();
+        assert!(out.contains("No results found"));
+    }
+
+    #[tokio::test]
+    async fn query_too_short() {
+        let tool = WebSearchTool;
+        let result = tool.call(json!({"query": "x"}), &ctx()).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("at least 2"));
+    }
+
+    #[tokio::test]
+    async fn missing_api_key_returns_not_configured() {
+        std::env::remove_var("SEARCH_API_KEY");
+        let tool = WebSearchTool;
+        let result = tool.call(json!({"query": "test query"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("not configured"));
+    }
+}
