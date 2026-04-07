@@ -5,13 +5,15 @@
 //! - `session` — /session save, load, list, delete; /undo; /export
 //! - `config` — /config, /context, /login, /logout
 //! - `doctor` — /doctor diagnostics
-//! - `prompt` — /review, /init, /commit (AI-driven)
+//! - `review` — /review (code review on git changes / PRs)
+//! - `prompt` — /init, /commit, /pr, /bug (AI-driven)
 //! - `skill` — skill runner
 
 mod memory;
 mod session;
 mod config;
 mod doctor;
+mod review;
 mod prompt;
 mod skill;
 mod mcp;
@@ -21,7 +23,8 @@ pub(crate) use memory::handle_memory_command;
 pub(crate) use session::{handle_session_command, handle_undo, handle_export, handle_search};
 pub(crate) use config::{handle_config_command, handle_context, handle_login, handle_logout, handle_reload_context};
 pub(crate) use doctor::handle_doctor;
-pub(crate) use prompt::{handle_review, handle_init, handle_commit, handle_pr, handle_bug, handle_commit_push_pr};
+pub(crate) use review::handle_review;
+pub(crate) use prompt::{handle_init, handle_commit, handle_pr, handle_bug, handle_commit_push_pr};
 pub(crate) use skill::run_skill;
 pub(crate) use mcp::handle_mcp_command;
 
