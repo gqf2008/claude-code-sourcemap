@@ -62,6 +62,8 @@ pub struct DynamicSections<'a> {
     pub token_budget: u64,
     /// Enable proactive/autonomous mode section
     pub proactive_mode: bool,
+    /// Enable coordinator mode section
+    pub coordinator_mode: bool,
     /// Include file editing best practices (default: true)
     pub include_editing_guidance: bool,
     /// Include git operations guidance (default: true)
@@ -83,6 +85,7 @@ impl<'a> Default for DynamicSections<'a> {
             scratchpad_dir: None,
             token_budget: 0,
             proactive_mode: false,
+            coordinator_mode: false,
             include_editing_guidance: true,
             include_git_guidance: true,
             include_testing_guidance: true,
@@ -194,6 +197,11 @@ pub fn build_system_prompt_ext(
     // Proactive/autonomous mode
     if dynamic.proactive_mode {
         dynamic_parts.push(section_proactive_mode().to_string());
+    }
+
+    // Coordinator mode (worker orchestration)
+    if dynamic.coordinator_mode {
+        dynamic_parts.push(section_coordinator().to_string());
     }
 
     // Best-practice guidance sections
@@ -526,5 +534,27 @@ mod tests {
         assert!(prompt.text.contains("Git operations"));
         assert!(prompt.text.contains("Testing"));
         assert!(prompt.text.contains("Debugging"));
+        // Coordinator NOT included by default
+        assert!(!prompt.text.contains("Coordinator Mode"));
+    }
+
+    #[test]
+    fn test_coordinator_mode_section() {
+        let cwd = PathBuf::from(".");
+        let dynamic = DynamicSections {
+            coordinator_mode: true,
+            ..Default::default()
+        };
+        let prompt = build_system_prompt_ext(
+            &cwd,
+            "claude-sonnet-4-20250514",
+            &[],
+            "",
+            "",
+            &dynamic,
+        );
+        assert!(prompt.text.contains("Coordinator Mode"));
+        assert!(prompt.text.contains("task-notification"));
+        assert!(prompt.text.contains("SendMessage"));
     }
 }

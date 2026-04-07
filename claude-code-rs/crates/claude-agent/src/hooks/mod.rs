@@ -89,13 +89,27 @@ impl HookRegistry {
             HookEvent::ConfigChange => &self.config.config_change,
             HookEvent::TaskCreated => &self.config.task_created,
             HookEvent::TaskCompleted => &self.config.task_completed,
+            HookEvent::TeammateIdle => &self.config.teammate_idle,
+            HookEvent::Elicitation => &self.config.elicitation,
+            HookEvent::ElicitationResult => &self.config.elicitation_result,
+            HookEvent::WorktreeCreate => &self.config.worktree_create,
+            HookEvent::WorktreeRemove => &self.config.worktree_remove,
         }
     }
 
     /// Run all matching hooks for `event`.  Returns the first non-Continue decision.
+    ///
+    /// When multiple hooks match, they run sequentially. The first `Block` decision
+    /// wins immediately. `AppendContext` and `FeedbackAndContinue` results are
+    /// collected and merged — the last non-Continue decision is returned with all
+    /// accumulated context/feedback combined.
     pub(crate) async fn run(&self, event: HookEvent, ctx: HookContext) -> HookDecision {
         let rules = self.rules_for(event);
         let tool_name = ctx.tool_name.as_deref().unwrap_or("");
+
+        let mut accumulated_context: Vec<String> = Vec::new();
+        let mut accumulated_feedback: Vec<String> = Vec::new();
+        let mut final_modify: Option<Value> = None;
 
         for rule in rules {
             if !tool_matches(&rule.matcher, tool_name) {
@@ -115,8 +129,21 @@ impl HookRegistry {
                             stdout.len()
                         );
                         let decision = interpret_output(event, exit_code, stdout);
-                        if !matches!(decision, HookDecision::Continue) {
-                            return decision;
+                        match decision {
+                            HookDecision::Continue => {}
+                            HookDecision::Block { .. } => {
+                                // Block wins immediately — short-circuit
+                                return decision;
+                            }
+                            HookDecision::AppendContext { text } => {
+                                accumulated_context.push(text);
+                            }
+                            HookDecision::FeedbackAndContinue { feedback } => {
+                                accumulated_feedback.push(feedback);
+                            }
+                            HookDecision::ModifyInput { new_input } => {
+                                final_modify = Some(new_input);
+                            }
                         }
                     }
                     Err(e) => {
@@ -124,6 +151,21 @@ impl HookRegistry {
                     }
                 }
             }
+        }
+
+        // Return merged result (priority: ModifyInput > FeedbackAndContinue > AppendContext)
+        if let Some(new_input) = final_modify {
+            return HookDecision::ModifyInput { new_input };
+        }
+        if !accumulated_feedback.is_empty() {
+            return HookDecision::FeedbackAndContinue {
+                feedback: accumulated_feedback.join("\n\n"),
+            };
+        }
+        if !accumulated_context.is_empty() {
+            return HookDecision::AppendContext {
+                text: accumulated_context.join("\n\n"),
+            };
         }
 
         HookDecision::Continue

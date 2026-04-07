@@ -36,6 +36,13 @@ const MAX_MEMORY_FILES: usize = 200;
 const MAX_MEMORY_BYTES_PER_FILE: usize = 10_000;
 const MAX_TOTAL_MEMORY_BYTES: usize = 100_000;
 
+// ── MEMORY.md index constraints (TS parity: memdir.ts) ──────────────────────
+const MAX_ENTRYPOINT_LINES: usize = 200;
+const MAX_ENTRYPOINT_BYTES: usize = 25_000;
+
+/// Name of the index file (always loaded, never counted as a memory file itself).
+pub const MEMORY_INDEX_FILENAME: &str = "MEMORY.md";
+
 // ── Memory types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +55,8 @@ pub enum MemoryType {
 }
 
 impl MemoryType {
-    fn from_str(s: &str) -> Option<Self> {
+    /// Parse a memory type string (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "user" => Some(Self::User),
             "feedback" => Some(Self::Feedback),
@@ -75,6 +83,7 @@ pub struct MemoryHeader {
     pub filename: String,
     pub file_path: PathBuf,
     pub mtime: SystemTime,
+    pub name: Option<String>,
     pub description: Option<String>,
     pub memory_type: Option<MemoryType>,
 }
@@ -119,19 +128,21 @@ fn parse_yaml_kv(line: &str) -> Option<(&str, &str)> {
     Some((k.trim(), v.trim()))
 }
 
-fn parse_header_from_frontmatter(lines: &[String]) -> (Option<MemoryType>, Option<String>) {
+fn parse_header_from_frontmatter(lines: &[String]) -> (Option<MemoryType>, Option<String>, Option<String>) {
     let mut mem_type = None;
     let mut description = None;
+    let mut name = None;
     for line in lines {
         if let Some((k, v)) = parse_yaml_kv(line) {
             match k {
-                "type" => mem_type = MemoryType::from_str(v),
+                "type" => mem_type = MemoryType::parse(v),
                 "description" => description = Some(v.to_string()),
+                "name" => name = Some(v.to_string()),
                 _ => {}
             }
         }
     }
-    (mem_type, description)
+    (mem_type, description, name)
 }
 
 // ── Directory scanning ───────────────────────────────────────────────────────
@@ -174,12 +185,13 @@ pub fn scan_memory_dir(dir: &Path) -> Vec<MemoryHeader> {
         };
         let first_30: String = preview.lines().take(30).collect::<Vec<_>>().join("\n");
         let (fm_lines, _) = parse_frontmatter(&first_30);
-        let (mem_type, description) = parse_header_from_frontmatter(&fm_lines);
+        let (mem_type, description, name) = parse_header_from_frontmatter(&fm_lines);
 
         headers.push(MemoryHeader {
             filename,
             file_path: path,
             mtime,
+            name,
             description,
             memory_type: mem_type,
         });
@@ -402,34 +414,141 @@ pub fn ensure_user_memory_dir() -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+// ── MEMORY.md Index Management (TS parity: memdir.ts) ────────────────────────
+
+/// Format a one-line manifest entry for a memory header.
+///
+/// TS format: `- [Title](file.md) — one-line description`
+fn format_manifest_entry(h: &MemoryHeader) -> String {
+    let title = h.name.as_deref()
+        .or(h.description.as_deref())
+        .unwrap_or(&h.filename);
+    let desc_part = h.description.as_deref()
+        .map(|d| format!(" — {}", d))
+        .unwrap_or_default();
+    format!("- [{}]({}){}",  title, h.filename, desc_part)
+}
+
+/// Format the complete memory manifest from a list of headers.
+///
+/// Returns the index content (one line per memory file, newest first).
+/// Used for both MEMORY.md file content and system prompt injection.
+pub fn format_memory_manifest(headers: &[MemoryHeader]) -> String {
+    let mut lines: Vec<String> = Vec::with_capacity(headers.len());
+    for h in headers {
+        lines.push(format_manifest_entry(h));
+    }
+    lines.join("\n")
+}
+
+/// Truncate manifest text to stay within MEMORY.md limits.
+///
+/// TS parity: max 200 lines, 25KB. Appends warning if truncated.
+pub fn truncate_manifest(manifest: &str) -> String {
+    let lines: Vec<&str> = manifest.lines().collect();
+    let line_count = lines.len();
+
+    // Line truncation
+    let line_limited: Vec<&str> = if line_count > MAX_ENTRYPOINT_LINES {
+        lines[..MAX_ENTRYPOINT_LINES].to_vec()
+    } else {
+        lines
+    };
+
+    let mut result = line_limited.join("\n");
+
+    // Byte truncation
+    if result.len() > MAX_ENTRYPOINT_BYTES {
+        let truncated = &result[..MAX_ENTRYPOINT_BYTES];
+        let end = truncated.rfind('\n').unwrap_or(MAX_ENTRYPOINT_BYTES);
+        result = result[..end].to_string();
+    }
+
+    let was_truncated = line_count > MAX_ENTRYPOINT_LINES || manifest.len() > MAX_ENTRYPOINT_BYTES;
+    if was_truncated {
+        result.push_str("\n\n> ⚠️ Memory index truncated. Use FileRead on individual memory files for full content.");
+    }
+
+    result
+}
+
+/// Update (or create) the MEMORY.md index file in the given memory directory.
+///
+/// Scans the directory for `.md` files, builds the manifest, writes it out.
+/// Returns the number of indexed entries.
+pub fn update_memory_index(memory_dir: &Path) -> std::io::Result<usize> {
+    let headers = scan_memory_dir(memory_dir);
+    let manifest = format_memory_manifest(&headers);
+    let truncated = truncate_manifest(&manifest);
+
+    let index_path = memory_dir.join(MEMORY_INDEX_FILENAME);
+    std::fs::write(&index_path, &truncated)?;
+
+    Ok(headers.len())
+}
+
+/// Read and return the MEMORY.md index contents, if it exists and is non-empty.
+pub fn read_memory_index(memory_dir: &Path) -> Option<String> {
+    let index_path = memory_dir.join(MEMORY_INDEX_FILENAME);
+    match std::fs::read_to_string(&index_path) {
+        Ok(content) if !content.trim().is_empty() => Some(content),
+        _ => None,
+    }
+}
+
+/// Write a single memory file with proper frontmatter format.
+///
+/// Creates `<memory_dir>/<filename>` with YAML frontmatter containing
+/// name, description, and type fields. Updates the MEMORY.md index afterwards.
+pub fn write_memory_file(
+    memory_dir: &Path,
+    filename: &str,
+    name: &str,
+    description: &str,
+    memory_type: MemoryType,
+    content: &str,
+) -> std::io::Result<PathBuf> {
+    let path = memory_dir.join(filename);
+    let file_content = format!(
+        "---\nname: {}\ndescription: {}\ntype: {}\n---\n\n{}",
+        name, description, memory_type.as_str(), content
+    );
+    std::fs::write(&path, &file_content)?;
+
+    // Auto-update the MEMORY.md index
+    let _ = update_memory_index(memory_dir);
+
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
-    // ── MemoryType::from_str ─────────────────────────────────────────────
+    // ── MemoryType::parse ─────────────────────────────────────────────
 
     #[test]
     fn memory_type_from_str_valid() {
-        assert_eq!(MemoryType::from_str("user"), Some(MemoryType::User));
-        assert_eq!(MemoryType::from_str("feedback"), Some(MemoryType::Feedback));
-        assert_eq!(MemoryType::from_str("project"), Some(MemoryType::Project));
-        assert_eq!(MemoryType::from_str("reference"), Some(MemoryType::Reference));
+        assert_eq!(MemoryType::parse("user"), Some(MemoryType::User));
+        assert_eq!(MemoryType::parse("feedback"), Some(MemoryType::Feedback));
+        assert_eq!(MemoryType::parse("project"), Some(MemoryType::Project));
+        assert_eq!(MemoryType::parse("reference"), Some(MemoryType::Reference));
     }
 
     #[test]
     fn memory_type_from_str_invalid() {
-        assert_eq!(MemoryType::from_str("unknown"), None);
-        assert_eq!(MemoryType::from_str(""), None);
-        assert_eq!(MemoryType::from_str("  "), None);
+        assert_eq!(MemoryType::parse("unknown"), None);
+        assert_eq!(MemoryType::parse(""), None);
+        assert_eq!(MemoryType::parse("  "), None);
     }
 
     #[test]
     fn memory_type_from_str_case_insensitive() {
-        assert_eq!(MemoryType::from_str("User"), Some(MemoryType::User));
-        assert_eq!(MemoryType::from_str("FEEDBACK"), Some(MemoryType::Feedback));
-        assert_eq!(MemoryType::from_str("Project"), Some(MemoryType::Project));
-        assert_eq!(MemoryType::from_str("REFERENCE"), Some(MemoryType::Reference));
+        assert_eq!(MemoryType::parse("User"), Some(MemoryType::User));
+        assert_eq!(MemoryType::parse("FEEDBACK"), Some(MemoryType::Feedback));
+        assert_eq!(MemoryType::parse("Project"), Some(MemoryType::Project));
+        assert_eq!(MemoryType::parse("REFERENCE"), Some(MemoryType::Reference));
     }
 
     // ── MemoryType::as_str roundtrip ─────────────────────────────────────
@@ -443,7 +562,7 @@ mod tests {
             MemoryType::Reference,
         ] {
             let s = variant.as_str();
-            let back = MemoryType::from_str(s).expect("roundtrip should succeed");
+            let back = MemoryType::parse(s).expect("roundtrip should succeed");
             assert_eq!(back, variant);
         }
     }
@@ -508,25 +627,29 @@ mod tests {
         let lines = vec![
             "type: feedback".to_string(),
             "description: My memory note".to_string(),
+            "name: My Note".to_string(),
         ];
-        let (mt, desc) = parse_header_from_frontmatter(&lines);
+        let (mt, desc, name) = parse_header_from_frontmatter(&lines);
         assert_eq!(mt, Some(MemoryType::Feedback));
         assert_eq!(desc.as_deref(), Some("My memory note"));
+        assert_eq!(name.as_deref(), Some("My Note"));
     }
 
     #[test]
     fn parse_header_unknown_type() {
         let lines = vec!["type: banana".to_string()];
-        let (mt, desc) = parse_header_from_frontmatter(&lines);
+        let (mt, desc, name) = parse_header_from_frontmatter(&lines);
         assert_eq!(mt, None);
         assert_eq!(desc, None);
+        assert_eq!(name, None);
     }
 
     #[test]
     fn parse_header_empty_lines() {
-        let (mt, desc) = parse_header_from_frontmatter(&[]);
+        let (mt, desc, name) = parse_header_from_frontmatter(&[]);
         assert_eq!(mt, None);
         assert_eq!(desc, None);
+        assert_eq!(name, None);
     }
 
     // ── human_age ────────────────────────────────────────────────────────
@@ -716,5 +839,167 @@ mod tests {
 
         let dirs = memory_dirs(tmp.path());
         assert!(dirs.contains(&in_repo));
+    }
+
+    // ── MEMORY.md index management ──────────────────────────────────────
+
+    #[test]
+    fn format_manifest_entry_with_name_and_desc() {
+        let h = MemoryHeader {
+            filename: "user_role.md".to_string(),
+            file_path: PathBuf::from("/tmp/user_role.md"),
+            mtime: SystemTime::now(),
+            name: Some("User's Role".to_string()),
+            description: Some("Data scientist focused on logging".to_string()),
+            memory_type: Some(MemoryType::User),
+        };
+        let entry = format_manifest_entry(&h);
+        assert_eq!(entry, "- [User's Role](user_role.md) — Data scientist focused on logging");
+    }
+
+    #[test]
+    fn format_manifest_entry_no_name_uses_description() {
+        let h = MemoryHeader {
+            filename: "note.md".to_string(),
+            file_path: PathBuf::from("/tmp/note.md"),
+            mtime: SystemTime::now(),
+            name: None,
+            description: Some("A simple note".to_string()),
+            memory_type: None,
+        };
+        let entry = format_manifest_entry(&h);
+        assert_eq!(entry, "- [A simple note](note.md) — A simple note");
+    }
+
+    #[test]
+    fn format_manifest_entry_no_name_no_desc() {
+        let h = MemoryHeader {
+            filename: "orphan.md".to_string(),
+            file_path: PathBuf::from("/tmp/orphan.md"),
+            mtime: SystemTime::now(),
+            name: None,
+            description: None,
+            memory_type: None,
+        };
+        let entry = format_manifest_entry(&h);
+        assert_eq!(entry, "- [orphan.md](orphan.md)");
+    }
+
+    #[test]
+    fn format_memory_manifest_multiple() {
+        let headers = vec![
+            MemoryHeader {
+                filename: "a.md".to_string(),
+                file_path: PathBuf::from("a.md"),
+                mtime: SystemTime::now(),
+                name: Some("Alpha".to_string()),
+                description: Some("First".to_string()),
+                memory_type: Some(MemoryType::User),
+            },
+            MemoryHeader {
+                filename: "b.md".to_string(),
+                file_path: PathBuf::from("b.md"),
+                mtime: SystemTime::now(),
+                name: Some("Beta".to_string()),
+                description: None,
+                memory_type: Some(MemoryType::Project),
+            },
+        ];
+        let manifest = format_memory_manifest(&headers);
+        assert!(manifest.contains("- [Alpha](a.md) — First"));
+        assert!(manifest.contains("- [Beta](b.md)"));
+        assert_eq!(manifest.lines().count(), 2);
+    }
+
+    #[test]
+    fn truncate_manifest_within_limits() {
+        let manifest = "- [A](a.md) — desc\n- [B](b.md) — desc2";
+        let result = truncate_manifest(manifest);
+        assert_eq!(result, manifest);
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn truncate_manifest_over_line_limit() {
+        let lines: Vec<String> = (0..250).map(|i| format!("- [Item{}](item{}.md) — desc", i, i)).collect();
+        let manifest = lines.join("\n");
+        let result = truncate_manifest(&manifest);
+        // Should be 200 lines + warning
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert!(result_lines.len() <= 203); // 200 content + blank + warning
+        assert!(result.contains("truncated"));
+    }
+
+    #[test]
+    fn update_memory_index_creates_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("note1.md"),
+            "---\nname: Note One\ndescription: First note\ntype: user\n---\nContent",
+        ).unwrap();
+
+        let count = update_memory_index(tmp.path()).unwrap();
+        assert_eq!(count, 1);
+
+        let index_path = tmp.path().join("MEMORY.md");
+        assert!(index_path.exists());
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        assert!(content.contains("[Note One]"));
+        assert!(content.contains("note1.md"));
+        assert!(content.contains("First note"));
+    }
+
+    #[test]
+    fn read_memory_index_none_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_memory_index(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn read_memory_index_some_when_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("MEMORY.md"), "- [A](a.md)").unwrap();
+        let content = read_memory_index(tmp.path()).unwrap();
+        assert!(content.contains("[A](a.md)"));
+    }
+
+    #[test]
+    fn write_memory_file_creates_with_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_memory_file(
+            tmp.path(),
+            "test_mem.md",
+            "Test Memory",
+            "A test memory",
+            MemoryType::Feedback,
+            "Some important feedback",
+        ).unwrap();
+
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("name: Test Memory"));
+        assert!(content.contains("description: A test memory"));
+        assert!(content.contains("type: feedback"));
+        assert!(content.contains("Some important feedback"));
+
+        // Should also have created MEMORY.md index
+        let index_path = tmp.path().join("MEMORY.md");
+        assert!(index_path.exists());
+        let index = std::fs::read_to_string(&index_path).unwrap();
+        assert!(index.contains("test_mem.md"));
+    }
+
+    #[test]
+    fn scan_memory_dir_parses_name_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("named.md"),
+            "---\nname: My Named Memory\ntype: reference\n---\nContent",
+        ).unwrap();
+
+        let headers = scan_memory_dir(tmp.path());
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name.as_deref(), Some("My Named Memory"));
+        assert_eq!(headers[0].memory_type, Some(MemoryType::Reference));
     }
 }

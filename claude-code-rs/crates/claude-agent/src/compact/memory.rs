@@ -3,8 +3,13 @@
 //! During compaction, we can ask Claude to identify key facts (user preferences,
 //! project conventions, architecture decisions) and persist them as memory files
 //! for future sessions.
+//!
+//! Uses the 4-type taxonomy from `claude_core::memory::MemoryType`:
+//! user, feedback, project, reference.
 
 use serde::{Deserialize, Serialize};
+
+use claude_core::memory::{self, MemoryType};
 
 /// A memory fact extracted from conversation during compaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,8 +18,16 @@ pub struct ExtractedMemory {
     pub fact: String,
     /// Source/citation (e.g., "user mentioned", "discovered during task X").
     pub source: String,
-    /// Category tag (e.g., "preference", "convention", "architecture").
+    /// Category tag matching MemoryType (user, feedback, project, reference).
     pub category: String,
+}
+
+impl ExtractedMemory {
+    /// Map `category` string to the formal `MemoryType` enum.
+    /// Falls back to `Feedback` for unrecognized categories.
+    pub fn memory_type(&self) -> MemoryType {
+        MemoryType::parse(&self.category).unwrap_or(MemoryType::Feedback)
+    }
 }
 
 /// Prompt template for session memory extraction.
@@ -23,13 +36,19 @@ pub fn build_memory_extraction_prompt(summary: &str) -> String {
     format!(
         r#"Below is a compacted summary of a conversation session. Extract any important, reusable facts that should be remembered for future sessions.
 
-Focus on:
-- User preferences (language, style, workflow)
-- Project conventions or architecture decisions
-- Important paths, commands, or configuration
-- Recurring patterns or anti-patterns
+Focus on these memory types:
+- **user**: User's role, goals, preferences, knowledge level
+- **feedback**: Guidance about work approach (corrections AND confirmations)
+- **project**: Ongoing work, goals, incidents NOT derivable from code/git
+- **reference**: Pointers to external systems (Linear, Grafana, Slack channels)
+
+Do NOT save:
+- Code patterns, architecture, file paths (derivable from current state)
+- Git history, recent changes, debugging solutions
+- Ephemeral task details or in-progress work
 
 Return a JSON array of objects, each with "fact", "source", and "category" fields.
+Category must be one of: user, feedback, project, reference.
 Only include facts that are:
 1. Likely to remain true across sessions
 2. Actionable for future tasks
@@ -62,12 +81,19 @@ pub fn parse_extracted_memories(response: &str) -> Vec<ExtractedMemory> {
     Vec::new()
 }
 
-/// Write extracted memories to the user memory directory.
-pub fn save_extracted_memories(memories: &[ExtractedMemory]) -> anyhow::Result<usize> {
+/// Write extracted memories to the given memory directory using proper frontmatter.
+///
+/// Each memory gets its own file with YAML frontmatter (name, description, type).
+/// The MEMORY.md index is updated after all writes.
+pub fn save_extracted_memories(
+    memories: &[ExtractedMemory],
+    memory_dir: &std::path::Path,
+) -> anyhow::Result<usize> {
     if memories.is_empty() {
         return Ok(0);
     }
-    let dir = claude_core::memory::ensure_user_memory_dir()?;
+    std::fs::create_dir_all(memory_dir)?;
+
     let mut saved = 0;
     for mem in memories {
         let slug: String = mem.fact.chars()
@@ -75,15 +101,20 @@ pub fn save_extracted_memories(memories: &[ExtractedMemory]) -> anyhow::Result<u
             .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
             .collect();
         let slug = slug.trim_matches('-').to_string();
-        let filename = format!("session-{}-{}.md", slug, &uuid::Uuid::new_v4().to_string()[..8]);
-        let path = dir.join(&filename);
-
-        let content = format!(
-            "---\ntype: feedback\ndescription: {}\n---\n\n{}\n\nSource: {}\n",
-            mem.category, mem.fact, mem.source
+        let filename = format!(
+            "session-{}-{}.md",
+            slug,
+            &uuid::Uuid::new_v4().to_string()[..8]
         );
 
-        if std::fs::write(&path, &content).is_ok() {
+        if memory::write_memory_file(
+            memory_dir,
+            &filename,
+            &mem.fact,
+            &format!("{} (source: {})", mem.fact, mem.source),
+            mem.memory_type(),
+            &format!("{}\n\nSource: {}", mem.fact, mem.source),
+        ).is_ok() {
             saved += 1;
         }
     }
@@ -96,19 +127,21 @@ mod tests {
 
     #[test]
     fn test_parse_extracted_memories_valid_json() {
-        let json = r#"[{"fact":"User prefers Chinese","source":"user said so","category":"preference"}]"#;
+        let json = r#"[{"fact":"User prefers Chinese","source":"user said so","category":"user"}]"#;
         let memories = parse_extracted_memories(json);
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].fact, "User prefers Chinese");
-        assert_eq!(memories[0].category, "preference");
+        assert_eq!(memories[0].category, "user");
+        assert_eq!(memories[0].memory_type(), MemoryType::User);
     }
 
     #[test]
     fn test_parse_extracted_memories_wrapped_in_markdown() {
-        let response = "```json\n[{\"fact\":\"uses Rust\",\"source\":\"project\",\"category\":\"tech\"}]\n```";
+        let response = "```json\n[{\"fact\":\"uses Rust\",\"source\":\"project\",\"category\":\"project\"}]\n```";
         let memories = parse_extracted_memories(response);
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].fact, "uses Rust");
+        assert_eq!(memories[0].memory_type(), MemoryType::Project);
     }
 
     #[test]
@@ -123,5 +156,60 @@ mod tests {
         assert!(prompt.contains("User discussed Rust porting"));
         assert!(prompt.contains("JSON array"));
         assert!(prompt.contains("<summary>"));
+        assert!(prompt.contains("user"));
+        assert!(prompt.contains("feedback"));
+        assert!(prompt.contains("project"));
+        assert!(prompt.contains("reference"));
+    }
+
+    #[test]
+    fn test_memory_type_fallback() {
+        let mem = ExtractedMemory {
+            fact: "test".to_string(),
+            source: "test".to_string(),
+            category: "unknown_category".to_string(),
+        };
+        // Unknown categories fall back to Feedback
+        assert_eq!(mem.memory_type(), MemoryType::Feedback);
+    }
+
+    #[test]
+    fn test_save_extracted_memories_creates_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let memories = vec![
+            ExtractedMemory {
+                fact: "User prefers Rust".to_string(),
+                source: "user said so".to_string(),
+                category: "user".to_string(),
+            },
+            ExtractedMemory {
+                fact: "Always run clippy".to_string(),
+                source: "feedback".to_string(),
+                category: "feedback".to_string(),
+            },
+        ];
+
+        let saved = save_extracted_memories(&memories, tmp.path()).unwrap();
+        assert_eq!(saved, 2);
+
+        // Check files were created with frontmatter
+        let files: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .filter(|e| e.file_name() != "MEMORY.md")
+            .collect();
+        assert_eq!(files.len(), 2);
+
+        // Check MEMORY.md index was created
+        let index = tmp.path().join("MEMORY.md");
+        assert!(index.exists());
+    }
+
+    #[test]
+    fn test_save_extracted_memories_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = save_extracted_memories(&[], tmp.path()).unwrap();
+        assert_eq!(saved, 0);
     }
 }

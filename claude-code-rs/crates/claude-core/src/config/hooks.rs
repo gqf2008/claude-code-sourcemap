@@ -80,6 +80,16 @@ pub struct HooksConfig {
     pub task_created: Vec<HookRule>,
     #[serde(default, rename = "TaskCompleted")]
     pub task_completed: Vec<HookRule>,
+    #[serde(default, rename = "TeammateIdle")]
+    pub teammate_idle: Vec<HookRule>,
+    #[serde(default, rename = "Elicitation")]
+    pub elicitation: Vec<HookRule>,
+    #[serde(default, rename = "ElicitationResult")]
+    pub elicitation_result: Vec<HookRule>,
+    #[serde(default, rename = "WorktreeCreate")]
+    pub worktree_create: Vec<HookRule>,
+    #[serde(default, rename = "WorktreeRemove")]
+    pub worktree_remove: Vec<HookRule>,
 }
 
 /// Check whether a HooksConfig has any non-empty event lists.
@@ -102,4 +112,9 @@ pub(super) fn has_any_hooks(h: &HooksConfig) -> bool {
         || !h.permission_denied.is_empty()
         || !h.instructions_loaded.is_empty()
         || !h.user_prompt_submit.is_empty()
+        || !h.teammate_idle.is_empty()
+        || !h.elicitation.is_empty()
+        || !h.elicitation_result.is_empty()
+        || !h.worktree_create.is_empty()
+        || !h.worktree_remove.is_empty()
 }

@@ -40,6 +40,17 @@ pub enum HookEvent {
     TaskCreated,
     /// Task completed.
     TaskCompleted,
+    // ── Additional events (TS parity) ──
+    /// Teammate agent is idle/waiting for messages.
+    TeammateIdle,
+    /// User elicitation prompt presented.
+    Elicitation,
+    /// User responded to an elicitation.
+    ElicitationResult,
+    /// Git worktree created for isolated work.
+    WorktreeCreate,
+    /// Git worktree removed after cleanup.
+    WorktreeRemove,
 }
 
 impl HookEvent {
@@ -68,6 +79,11 @@ impl HookEvent {
             Self::ConfigChange => "ConfigChange",
             Self::TaskCreated => "TaskCreated",
             Self::TaskCompleted => "TaskCompleted",
+            Self::TeammateIdle => "TeammateIdle",
+            Self::Elicitation => "Elicitation",
+            Self::ElicitationResult => "ElicitationResult",
+            Self::WorktreeCreate => "WorktreeCreate",
+            Self::WorktreeRemove => "WorktreeRemove",
         }
     }
 }
