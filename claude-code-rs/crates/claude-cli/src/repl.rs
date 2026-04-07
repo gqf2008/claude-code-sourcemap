@@ -32,20 +32,84 @@ impl Completer for CommandCompleter {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        if !line.starts_with('/') {
-            return Ok((0, vec![]));
+        // Slash command completion
+        if line.starts_with('/') {
+            let prefix = &line[..pos];
+            let matches: Vec<Pair> = SLASH_COMMANDS
+                .iter()
+                .filter(|cmd| cmd.starts_with(prefix))
+                .map(|cmd| Pair {
+                    display: cmd.to_string(),
+                    replacement: cmd.to_string(),
+                })
+                .collect();
+            return Ok((0, matches));
         }
-        let prefix = &line[..pos];
-        let matches: Vec<Pair> = SLASH_COMMANDS
-            .iter()
-            .filter(|cmd| cmd.starts_with(prefix))
-            .map(|cmd| Pair {
-                display: cmd.to_string(),
-                replacement: cmd.to_string(),
-            })
-            .collect();
-        Ok((0, matches))
+
+        // @file path completion — find the last @ token
+        let before_cursor = &line[..pos];
+        if let Some(at_pos) = before_cursor.rfind('@') {
+            let partial = &before_cursor[at_pos + 1..];
+            if let Ok(completions) = complete_file_path(partial) {
+                return Ok((at_pos, completions));
+            }
+        }
+
+        Ok((0, vec![]))
     }
+}
+
+/// Complete file paths relative to the current directory.
+/// Returns pairs with @-prefixed display and replacement strings.
+fn complete_file_path(partial: &str) -> std::io::Result<Vec<Pair>> {
+    let (dir, prefix) = if partial.contains('/') || partial.contains('\\') {
+        let p = std::path::Path::new(partial);
+        let parent = p.parent().unwrap_or(std::path::Path::new("."));
+        let file_prefix = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        (parent.to_path_buf(), file_prefix)
+    } else {
+        (std::path::PathBuf::from("."), partial.to_string())
+    };
+
+    let mut results = Vec::new();
+    let prefix_lower = prefix.to_lowercase();
+
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue; // skip hidden files
+            }
+            if !name.to_lowercase().starts_with(&prefix_lower) {
+                continue;
+            }
+
+            let full = if dir == std::path::Path::new(".") {
+                name.clone()
+            } else {
+                format!("{}/{}", dir.display(), name).replace('\\', "/")
+            };
+
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let display_name = if is_dir {
+                format!("@{}/", full)
+            } else {
+                format!("@{}", full)
+            };
+            let replacement = display_name.clone();
+
+            results.push(Pair {
+                display: display_name,
+                replacement,
+            });
+        }
+    }
+
+    results.sort_by(|a, b| a.display.cmp(&b.display));
+    if results.len() > 20 {
+        results.truncate(20);
+    }
+    Ok(results)
 }
 
 impl Hinter for CommandCompleter {
@@ -576,5 +640,29 @@ mod tests {
         assert!(result.starts_with('…'));
         // Display length matters, not byte length
         assert!(result.chars().count() <= 16);
+    }
+
+    #[test]
+    fn complete_file_path_current_dir() {
+        // Should find at least Cargo.toml in current dir (or wherever tests run)
+        let result = complete_file_path("").unwrap_or_default();
+        // May be empty if run from an unexpected dir, but should not panic
+        assert!(result.len() <= 20); // respects limit
+    }
+
+    #[test]
+    fn complete_file_path_nonexistent() {
+        let result = complete_file_path("zzz_no_such_prefix").unwrap_or_default();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn complete_file_path_skips_hidden() {
+        let result = complete_file_path("").unwrap_or_default();
+        // No entries should start with @.
+        for pair in &result {
+            let after_at = pair.display.strip_prefix('@').unwrap_or(&pair.display);
+            assert!(!after_at.starts_with('.'), "should skip hidden: {}", pair.display);
+        }
     }
 }
