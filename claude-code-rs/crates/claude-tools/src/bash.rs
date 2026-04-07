@@ -276,7 +276,7 @@ impl Tool for BashTool {
             _ = async {
                 loop {
                     if abort.is_aborted() { break; }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             } => {
                 // Abort signal fired — kill the child
@@ -336,11 +336,25 @@ impl Tool for BashTool {
 }
 
 /// Kill a child process by PID (platform-specific).
+/// Silently ignores failures (process may have already exited).
 fn kill_process(pid: u32) {
+    if pid == 0 {
+        // pid 0 on Unix would kill the entire process group — never do that
+        return;
+    }
     #[cfg(unix)]
-    { let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).status(); }
+    {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status();
+    }
     #[cfg(windows)]
-    { let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status(); }
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .status();
+    }
 }
 
 #[cfg(test)]
@@ -358,6 +372,18 @@ mod tests {
         assert!(check_dangerous("git reset --soft HEAD~1").is_none());
         assert!(check_dangerous("git commit --no-verify").is_some());
         assert!(check_dangerous("git config user.email foo").is_some());
+    }
+
+    #[test]
+    fn test_kill_process_pid_zero_is_noop() {
+        // pid 0 on Unix would kill entire process group — must be rejected
+        kill_process(0); // should not panic or do anything harmful
+    }
+
+    #[test]
+    fn test_kill_process_nonexistent_pid() {
+        // Killing a non-existent PID should not panic
+        kill_process(999_999_999);
     }
 
     #[test]

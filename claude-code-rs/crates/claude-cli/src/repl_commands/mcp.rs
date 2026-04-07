@@ -17,7 +17,12 @@ pub(crate) fn handle_mcp_command(sub: &str, cwd: &std::path::Path) {
             println!("  2. ~/.claude/.mcp.json      (user-level)");
         }
         _ => {
-            println!("Unknown subcommand: /mcp {}. Try /mcp help", sub);
+            // Sanitize user input to prevent terminal control character injection
+            let safe_sub: String = sub.chars()
+                .filter(|c| !c.is_control() || *c == ' ')
+                .take(50)
+                .collect();
+            println!("Unknown subcommand: /mcp {}. Try /mcp help", safe_sub);
         }
     }
 }
@@ -94,7 +99,7 @@ mod tests {
     fn test_show_mcp_no_configs() {
         // Should not panic on a directory without .mcp.json
         let tmp = std::env::temp_dir().join("claude_test_mcp_cmd");
-        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("failed to create temp dir");
         show_mcp_status(&tmp);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -102,7 +107,7 @@ mod tests {
     #[test]
     fn test_show_mcp_with_config() {
         let tmp = std::env::temp_dir().join("claude_test_mcp_cmd2");
-        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("failed to create temp dir");
         let config = r#"{
             "mcpServers": {
                 "test-server": {
@@ -115,5 +120,11 @@ mod tests {
         std::fs::write(tmp.join(".mcp.json"), config).unwrap();
         show_mcp_status(&tmp);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_handle_mcp_unknown_sanitizes_input() {
+        // Control characters should be stripped from echo output
+        handle_mcp_command("\x1b[31mevil\x1b[0m", &std::env::temp_dir());
     }
 }
