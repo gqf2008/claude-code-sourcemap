@@ -319,15 +319,14 @@ impl MemoryExtractor {
             }
         };
 
-        let memory_dir_str = self.memory_dir.to_string_lossy();
-
         for msg in &messages[start_idx..] {
             if let Message::Assistant(a) = msg {
                 for block in &a.content {
                     if let claude_core::message::ContentBlock::ToolUse { name, input, .. } = block {
                         if name == "Write" || name == "Edit" {
-                            if let Some(path) = input["file_path"].as_str() {
-                                if path.contains(memory_dir_str.as_ref()) {
+                            if let Some(path_str) = input["file_path"].as_str() {
+                                let path = Path::new(path_str);
+                                if path.starts_with(&self.memory_dir) {
                                     return true;
                                 }
                             }
@@ -357,14 +356,14 @@ impl MemoryExtractor {
     ///
     /// Called when `should_extract()` would have returned true but the
     /// overlap guard is held by another extraction.
-    pub async fn queue_pending_extraction(&self, messages: Vec<Message>) {
+    pub async fn queue_pending_extraction(&self, messages: Vec<Message>, has_direct_writes: bool) {
         let pending = PendingExtraction {
             message_snapshot: messages,
-            has_direct_writes: false,
+            has_direct_writes,
         };
         let mut lock = self.pending_context.lock().await;
         *lock = Some(pending);
-        debug!("Pending extraction queued");
+        debug!("Pending extraction queued (direct_writes={})", has_direct_writes);
     }
 
     /// Check if there is a pending extraction waiting.
@@ -407,18 +406,30 @@ impl MemoryExtractor {
         // Execute pending extraction if any
         let pending = self.pending_context.lock().await.take();
         if let Some(pending) = pending {
-            if pending.has_direct_writes {
+            // Re-check for direct writes (main agent may have written since queueing)
+            if pending.has_direct_writes || self.has_memory_writes_since(&pending.message_snapshot) {
                 debug!("Drain: skipping pending extraction — main agent wrote directly");
                 return 0;
             }
             debug!("Drain: executing pending extraction ({} messages)", pending.message_snapshot.len());
-            if let Some(prompt) = self.build_extraction_prompt(&pending.message_snapshot) {
-                // In a real implementation, this would call the extraction agent.
-                // For now, we just log and return 0.
-                info!("Drain: extraction prompt built ({} chars)", prompt.len());
+            if !self.try_acquire() {
+                debug!("Drain: overlap guard still held, skipping");
+                return 0;
             }
+            let saved = if let Some(_prompt) = self.build_extraction_prompt(&pending.message_snapshot) {
+                // Build and process: in a full integration, the prompt would be sent
+                // to a sub-agent. Here we run the local extraction pipeline.
+                let response = String::new(); // Placeholder: agent would return response
+                self.process_results(&response, &pending.message_snapshot)
+            } else {
+                0
+            };
+            self.release();
+            self.notify_drain();
+            saved
+        } else {
+            0
         }
-        0
     }
 
     /// Notify drain waiters that the current extraction is complete.
@@ -834,7 +845,7 @@ mod tests {
         assert!(!ext.has_pending().await);
 
         let msgs = vec![make_user_msg("u1", "hello")];
-        ext.queue_pending_extraction(msgs.clone()).await;
+        ext.queue_pending_extraction(msgs.clone(), false).await;
         assert!(ext.has_pending().await);
 
         let pending = ext.take_pending().await.unwrap();
@@ -855,7 +866,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut ext = MemoryExtractor::new(tmp.path().to_path_buf());
         let msgs = vec![make_user_msg("u1", "drain test")];
-        ext.queue_pending_extraction(msgs).await;
+        ext.queue_pending_extraction(msgs, false).await;
         let saved = ext.drain_pending_extraction(None).await;
         assert_eq!(saved, 0); // no actual agent, so 0
         assert!(!ext.has_pending().await); // pending was consumed

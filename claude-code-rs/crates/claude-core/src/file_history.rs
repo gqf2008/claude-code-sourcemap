@@ -68,6 +68,8 @@ pub struct FileHistoryState {
     pub snapshots: Vec<FileHistorySnapshot>,
     /// Set of relative paths currently being tracked.
     pub tracked_files: HashSet<String>,
+    /// Backups staged before the first snapshot (from `track_edit` calls).
+    pending_backups: HashMap<String, FileHistoryBackup>,
     /// Monotonically increasing counter (activity signal).
     pub snapshot_sequence: u64,
     /// Whether file history is enabled.
@@ -88,6 +90,7 @@ impl FileHistoryState {
             base_dir,
             snapshots: Vec::new(),
             tracked_files: HashSet::new(),
+            pending_backups: HashMap::new(),
             snapshot_sequence: 0,
             enabled: true,
         }
@@ -130,10 +133,12 @@ impl FileHistoryState {
         self.snapshots.last()
     }
 
-    /// Get the latest backup for a tracked file from the most recent snapshot.
+    /// Get the latest backup for a tracked file from the most recent snapshot
+    /// or from pending backups.
     fn latest_backup(&self, tracking_path: &str) -> Option<&FileHistoryBackup> {
         self.most_recent_snapshot()
             .and_then(|s| s.tracked_file_backups.get(tracking_path))
+            .or_else(|| self.pending_backups.get(tracking_path))
     }
 }
 
@@ -168,12 +173,15 @@ pub fn track_edit(state: &mut FileHistoryState, file_path: &str) -> anyhow::Resu
 
     let tracking_path = state.shorten_path(file_path);
 
-    // Check if already tracked in current snapshot
+    // Check if already tracked in current snapshot or pending
     if let Some(snapshot) = state.most_recent_snapshot() {
         if snapshot.tracked_file_backups.contains_key(&tracking_path) {
             debug!("File already tracked: {}", tracking_path);
             return Ok(());
         }
+    } else if state.pending_backups.contains_key(&tracking_path) {
+        debug!("File already tracked (pending): {}", tracking_path);
+        return Ok(());
     }
 
     // Create backup
@@ -183,19 +191,11 @@ pub fn track_edit(state: &mut FileHistoryState, file_path: &str) -> anyhow::Resu
     // Add to tracked files
     state.tracked_files.insert(tracking_path.clone());
 
-    // Update or create the most recent snapshot
-    if state.snapshots.is_empty() {
-        // Create initial snapshot
-        let mut backups = HashMap::new();
-        backups.insert(tracking_path, backup);
-        state.snapshots.push(FileHistorySnapshot {
-            message_id: String::new(), // Will be set by make_snapshot
-            tracked_file_backups: backups,
-            timestamp: SystemTime::now(),
-        });
-    } else {
-        let last = state.snapshots.last_mut().unwrap();
+    // Add backup to the most recent snapshot, or stage as pending.
+    if let Some(last) = state.snapshots.last_mut() {
         last.tracked_file_backups.insert(tracking_path, backup);
+    } else {
+        state.pending_backups.insert(tracking_path, backup);
     }
 
     Ok(())
@@ -268,6 +268,12 @@ pub fn make_snapshot(state: &mut FileHistoryState, message_id: &str) -> anyhow::
     }
 
     // Create new snapshot
+    // Incorporate pending_backups for files that have no new backup in this snapshot
+    // (their pre-edit state was captured by track_edit before the first snapshot).
+    for (path, pending_backup) in state.pending_backups.drain() {
+        backups.entry(path).or_insert(pending_backup);
+    }
+
     let new_snapshot = FileHistorySnapshot {
         message_id: message_id.to_string(),
         tracked_file_backups: backups,
@@ -383,11 +389,13 @@ pub fn get_diff_stats(state: &FileHistoryState, message_id: &str) -> anyhow::Res
 
         if current_content != backup_content {
             stats.files_changed.push(tracking_path.clone());
-            let diff = TextDiff::from_lines(&backup_content, &current_content);
+            // Diff from current → backup: shows what rewind would produce
+            let diff = TextDiff::from_lines(&current_content, &backup_content);
             for change in diff.iter_all_changes() {
+                let line_count = change.value().lines().count().max(1);
                 match change.tag() {
-                    ChangeTag::Insert => stats.deletions += 1, // Reverting: insert = deletion
-                    ChangeTag::Delete => stats.insertions += 1, // Reverting: delete = insertion
+                    ChangeTag::Insert => stats.insertions += line_count,
+                    ChangeTag::Delete => stats.deletions += line_count,
                     ChangeTag::Equal => {}
                 }
             }
@@ -665,8 +673,8 @@ mod tests {
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
 
         assert!(state.tracked_files.contains("test.rs"));
-        assert_eq!(state.snapshots.len(), 1);
-        let backup = state.snapshots[0].tracked_file_backups.get("test.rs").unwrap();
+        // Before any make_snapshot, backup is in pending_backups
+        let backup = state.pending_backups.get("test.rs").unwrap();
         assert!(backup.backup_file_name.is_some());
         assert_eq!(backup.version, 1);
     }
@@ -679,7 +687,7 @@ mod tests {
         let file_path = tmp.path().join("new_file.rs");
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
 
-        let backup = state.snapshots[0].tracked_file_backups.get("new_file.rs").unwrap();
+        let backup = state.pending_backups.get("new_file.rs").unwrap();
         assert!(backup.backup_file_name.is_none()); // File doesn't exist yet
     }
 
@@ -692,10 +700,12 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
+        // Make snapshot so second track_edit checks existing snapshot
+        make_snapshot(&mut state, "msg-0").unwrap();
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
 
-        // Should still have only one backup
-        assert_eq!(state.snapshots[0].tracked_file_backups.len(), 1);
+        // Should still have only one backup per file
+        assert_eq!(state.snapshots.last().unwrap().tracked_file_backups.len(), 1);
     }
 
     #[test]
@@ -707,14 +717,14 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
-        let v1 = state.snapshots[0].tracked_file_backups.get("test.rs")
-            .unwrap().version;
+        // pending_backups has v1
 
         make_snapshot(&mut state, "msg-1").unwrap();
+        // pending_backups drained into snapshot; file unchanged → v1 preserved
 
         let last = state.snapshots.last().unwrap();
         let backup = last.tracked_file_backups.get("test.rs").unwrap();
-        assert_eq!(backup.version, v1); // Unchanged, version stays the same
+        assert_eq!(backup.version, 1);
     }
 
     #[test]
@@ -726,6 +736,9 @@ mod tests {
         std::fs::write(&file_path, "v1 content").unwrap();
 
         track_edit(&mut state, &file_path.to_string_lossy()).unwrap();
+
+        // Create first snapshot with v1
+        make_snapshot(&mut state, "msg-0").unwrap();
 
         // Modify file
         std::fs::write(&file_path, "v2 content").unwrap();

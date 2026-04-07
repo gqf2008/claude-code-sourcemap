@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,10 @@ const SESSIONS_DIR_MODE: u32 = 0o700;
 
 /// PID file name validation regex pattern.
 const PID_FILE_PATTERN: &str = r"^\d+\.json$";
+
+/// Compiled regex for PID file names (avoids recompilation on every call).
+static PID_FILE_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(PID_FILE_PATTERN).expect("PID_FILE_PATTERN is valid"));
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -197,6 +201,22 @@ impl SessionGuard {
             debug!("Failed to update session status: {}", e);
         }
     }
+
+    /// Update the session ID in the PID file (e.g., after `/resume`).
+    pub fn update_session_id(&self, new_session_id: &str) {
+        if !self.active.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Ok(data) = std::fs::read_to_string(&self.pid_file) {
+            if let Ok(mut content) = serde_json::from_str::<PidFileContent>(&data) {
+                content.session_id = new_session_id.to_string();
+                content.updated_at = Some(Utc::now().timestamp_millis());
+                if let Ok(json) = serde_json::to_string_pretty(&content) {
+                    let _ = std::fs::write(&self.pid_file, json);
+                }
+            }
+        }
+    }
 }
 
 impl Drop for SessionGuard {
@@ -238,9 +258,9 @@ pub fn register_session(
         name: std::env::var("CLAUDE_CODE_SESSION_NAME").ok(),
         log_path: std::env::var("CLAUDE_CODE_SESSION_LOG").ok(),
         agent: std::env::var("CLAUDE_CODE_AGENT").ok(),
-        status: Some(SessionStatus::Idle),
+        status: None,
         waiting_for: None,
-        updated_at: Some(Utc::now().timestamp_millis()),
+        updated_at: None,
     };
 
     match serde_json::to_string_pretty(&content) {
@@ -300,7 +320,7 @@ pub fn count_concurrent_sessions() -> usize {
         }
     };
 
-    let pid_re = regex::Regex::new(PID_FILE_PATTERN).unwrap();
+    let pid_re = &*PID_FILE_REGEX;
     let current_pid = std::process::id();
     let wsl = is_wsl();
     let mut count = 0;
@@ -354,7 +374,7 @@ pub fn list_active_sessions() -> Vec<PidFileContent> {
         Err(_) => return Vec::new(),
     };
 
-    let pid_re = regex::Regex::new(PID_FILE_PATTERN).unwrap();
+    let pid_re = &*PID_FILE_REGEX;
     let mut sessions = Vec::new();
 
     for entry in entries.flatten() {

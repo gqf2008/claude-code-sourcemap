@@ -317,7 +317,16 @@ pub async fn download_session_files(
         let cfg = config.clone();
         let bp = base_path.to_path_buf();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return DownloadResult {
+                    file_id: att.file_id.clone(),
+                    path: String::new(),
+                    success: false,
+                    error: Some("Semaphore closed".to_string()),
+                    bytes_written: None,
+                },
+            };
             download_and_save_file(&att, &cfg, &bp).await
         }));
     }
@@ -372,8 +381,9 @@ pub async fn upload_file(
             file_id: None,
             size: Some(file_size),
             error: Some(format!(
-                "File exceeds maximum size of {} MB",
-                MAX_FILE_SIZE_BYTES / (1024 * 1024)
+                "File exceeds maximum size of {} MB (actual: {} bytes)",
+                MAX_FILE_SIZE_BYTES / (1024 * 1024),
+                file_size,
             )),
         };
     }
@@ -498,7 +508,16 @@ pub async fn upload_session_files(
         let relative = relative.clone();
         let cfg = config.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return UploadResult {
+                    path: relative.to_string(),
+                    success: false,
+                    file_id: None,
+                    size: None,
+                    error: Some("Semaphore closed".to_string()),
+                },
+            };
             upload_file(&path, &relative, &cfg).await
         }));
     }

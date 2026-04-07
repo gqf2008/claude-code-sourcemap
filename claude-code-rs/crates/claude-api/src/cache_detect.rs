@@ -93,6 +93,10 @@ pub struct PromptStateSnapshot {
     pub extra_body_json: Option<String>,
     /// System prompt character count.
     pub system_char_count: usize,
+    /// Cache control scope identifier (e.g. "global", "org", "none").
+    pub cache_control_scope: Option<String>,
+    /// Whether using usage overage.
+    pub is_using_overage: bool,
 }
 
 /// Internal tracking state per source.
@@ -109,6 +113,8 @@ struct PreviousState {
     auto_mode_active: bool,
     effort_value: String,
     extra_body_hash: u64,
+    cache_control_hash: u64,
+    is_using_overage: bool,
     call_count: u64,
     pending_changes: Option<PendingChanges>,
     prev_cache_read_tokens: Option<i64>,
@@ -212,6 +218,10 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
     let system_hash = compute_hash(&snapshot.system_text);
     let tools_combined: String = snapshot.tool_schemas_json.join("\n---\n");
     let tools_hash = compute_hash(&tools_combined);
+    let cache_control_hash = snapshot.cache_control_scope
+        .as_deref()
+        .map(compute_hash)
+        .unwrap_or(0);
 
     let sorted_betas = {
         let mut b = snapshot.betas.clone();
@@ -244,6 +254,8 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
         let auto_mode_changed = snapshot.auto_mode_active != prev.auto_mode_active;
         let effort_changed = effort_str != prev.effort_value;
         let extra_body_changed = extra_body_hash != prev.extra_body_hash;
+        let cache_control_changed = cache_control_hash != prev.cache_control_hash;
+        let overage_changed = snapshot.is_using_overage != prev.is_using_overage;
 
         let any_change = system_prompt_changed
             || tool_schemas_changed
@@ -252,7 +264,9 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
             || betas_changed
             || auto_mode_changed
             || effort_changed
-            || extra_body_changed;
+            || extra_body_changed
+            || cache_control_changed
+            || overage_changed;
 
         if any_change {
             let prev_tool_set: HashSet<&str> = prev.tool_names.iter().map(|s| s.as_str()).collect();
@@ -300,7 +314,7 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
                 tool_schemas_changed,
                 model_changed,
                 fast_mode_changed,
-                cache_control_changed: false, // Simplified
+                cache_control_changed,
                 betas_changed,
                 auto_mode_changed,
                 effort_changed,
@@ -333,6 +347,8 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
         prev.auto_mode_active = snapshot.auto_mode_active;
         prev.effort_value = effort_str;
         prev.extra_body_hash = extra_body_hash;
+        prev.cache_control_hash = cache_control_hash;
+        prev.is_using_overage = snapshot.is_using_overage;
         prev.last_call_time = Instant::now();
     } else {
         // First call — initialize state
@@ -365,6 +381,8 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
             auto_mode_active: snapshot.auto_mode_active,
             effort_value: effort_str,
             extra_body_hash,
+            cache_control_hash,
+            is_using_overage: snapshot.is_using_overage,
             call_count: 1,
             pending_changes: None,
             prev_cache_read_tokens: None,
@@ -480,6 +498,9 @@ pub fn check_response_for_cache_break(
         if c.extra_body_changed {
             parts.push("extra body params changed".to_string());
         }
+        if c.cache_control_changed {
+            parts.push("cache control scope changed".to_string());
+        }
     }
 
     // Determine reason
@@ -584,6 +605,8 @@ mod tests {
             effort_value: String::new(),
             extra_body_json: None,
             system_char_count: 28,
+            cache_control_scope: None,
+            is_using_overage: false,
         }
     }
 
