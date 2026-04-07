@@ -452,6 +452,61 @@ impl QueryEngine {
         s.total_output_tokens = 0;
     }
 
+    /// Get the last user message text from conversation history (for /retry).
+    ///
+    /// Returns `None` if no user messages exist.
+    pub async fn last_user_prompt(&self) -> Option<String> {
+        let s = self.state.read().await;
+        s.messages.iter().rev().find_map(|msg| {
+            if let Message::User(u) = msg {
+                u.content.iter().find_map(|b| {
+                    if let claude_core::message::ContentBlock::Text { text } = b {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Undo the last assistant turn and return the user prompt that preceded it.
+    ///
+    /// Removes both the last assistant message and the last user message from history.
+    /// Used by `/retry` to resend the last user prompt.
+    pub async fn pop_last_turn(&self) -> Option<String> {
+        let prompt = self.last_user_prompt().await?;
+        let mut s = self.state.write().await;
+
+        // Pop messages from the end until we've removed the last assistant + user pair
+        let mut removed_assistant = false;
+        while let Some(last) = s.messages.last() {
+            match last {
+                Message::Assistant(_) if !removed_assistant => {
+                    s.messages.pop();
+                    removed_assistant = true;
+                }
+                Message::User(_) if removed_assistant => {
+                    s.messages.pop();
+                    break;
+                }
+                _ if removed_assistant => {
+                    break; // stop if we hit a non-user message
+                }
+                _ => {
+                    s.messages.pop(); // skip tool result messages etc.
+                }
+            }
+        }
+        if s.turn_count > 0 {
+            s.turn_count -= 1;
+        }
+
+        Some(prompt)
+    }
+
     // ── Session persistence ──────────────────────────────────────────────────
 
     /// Save the current session to disk.

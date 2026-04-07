@@ -389,3 +389,86 @@ async fn test_context_usage_with_messages() {
     let pct = engine.context_usage_percent().await.unwrap();
     assert!(pct > 0, "should have non-zero usage with a large message");
 }
+
+// ── last_user_prompt / pop_last_turn ─────────────────────────────
+
+#[tokio::test]
+async fn test_last_user_prompt_empty() {
+    let engine = QueryEngineBuilder::new("key", ".")
+        .load_claude_md(false)
+        .load_memory(false)
+        .build();
+    assert!(engine.last_user_prompt().await.is_none());
+}
+
+#[tokio::test]
+async fn test_last_user_prompt_found() {
+    let engine = QueryEngineBuilder::new("key", ".")
+        .load_claude_md(false)
+        .load_memory(false)
+        .build();
+
+    {
+        let mut s = engine.state().write().await;
+        s.messages.push(claude_core::message::Message::User(
+            claude_core::message::UserMessage {
+                uuid: "u1".into(),
+                content: vec![claude_core::message::ContentBlock::Text { text: "hello world".into() }],
+            }
+        ));
+        s.messages.push(claude_core::message::Message::Assistant(
+            claude_core::message::AssistantMessage {
+                uuid: "a1".into(),
+                content: vec![claude_core::message::ContentBlock::Text { text: "hi".into() }],
+                stop_reason: Some(claude_core::message::StopReason::EndTurn),
+                usage: None,
+            }
+        ));
+    }
+
+    assert_eq!(engine.last_user_prompt().await.unwrap(), "hello world");
+}
+
+#[tokio::test]
+async fn test_pop_last_turn() {
+    let engine = QueryEngineBuilder::new("key", ".")
+        .load_claude_md(false)
+        .load_memory(false)
+        .build();
+
+    {
+        let mut s = engine.state().write().await;
+        s.turn_count = 1;
+        s.messages.push(claude_core::message::Message::User(
+            claude_core::message::UserMessage {
+                uuid: "u1".into(),
+                content: vec![claude_core::message::ContentBlock::Text { text: "first prompt".into() }],
+            }
+        ));
+        s.messages.push(claude_core::message::Message::Assistant(
+            claude_core::message::AssistantMessage {
+                uuid: "a1".into(),
+                content: vec![claude_core::message::ContentBlock::Text { text: "response".into() }],
+                stop_reason: Some(claude_core::message::StopReason::EndTurn),
+                usage: None,
+            }
+        ));
+    }
+
+    let prompt = engine.pop_last_turn().await;
+    assert_eq!(prompt.unwrap(), "first prompt");
+
+    let s = engine.state().read().await;
+    assert!(s.messages.is_empty());
+    assert_eq!(s.turn_count, 0);
+}
+
+#[tokio::test]
+async fn test_pop_last_turn_empty() {
+    let engine = QueryEngineBuilder::new("key", ".")
+        .load_claude_md(false)
+        .load_memory(false)
+        .build();
+
+    assert!(engine.pop_last_turn().await.is_none());
+}

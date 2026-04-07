@@ -19,8 +19,8 @@ const SLASH_COMMANDS: &[&str] = &[
     "/help", "/clear", "/model", "/compact", "/cost", "/skills", "/memory",
     "/session", "/diff", "/status", "/permissions", "/config", "/undo",
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
-    "/bug", "/search", "/history", "/version", "/login", "/logout", "/context",
-    "/export", "/reload-context", "/mcp", "/plugin", "/exit",
+    "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
+    "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
 ];
 
 impl Completer for CommandCompleter {
@@ -340,6 +340,20 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             }
                             CommandResult::History { page } => {
                                 handle_history(&engine, page).await;
+                            }
+                            CommandResult::Retry => {
+                                if let Some(prompt) = engine.pop_last_turn().await {
+                                    eprintln!("\x1b[33m[Retrying: {}…]\x1b[0m",
+                                        if prompt.len() > 50 { &prompt[..50] } else { &prompt });
+                                    let model = { engine.state().read().await.model.clone() };
+                                    let stream = engine.submit(&prompt).await;
+                                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+                                        eprintln!("\x1b[31mRetry error: {}\x1b[0m", e);
+                                    }
+                                    print_turn_stats(&engine).await;
+                                } else {
+                                    println!("No previous prompt to retry.");
+                                }
                             }
                             CommandResult::Login => {
                                 handle_login();

@@ -23,6 +23,7 @@ pub enum SlashCommand {
     Bug { prompt: String },
     Search { query: String },
     History { page: usize },
+    Retry,
     Version,
     Login,
     Logout,
@@ -68,6 +69,7 @@ impl SlashCommand {
             "bug" | "debug" => Self::Bug { prompt: args },
             "search" | "find" | "grep" => Self::Search { query: args },
             "history" => Self::History { page: args.parse().unwrap_or(1) },
+            "retry" | "redo" => Self::Retry,
             "version" => Self::Version,
             "login" => Self::Login,
             "logout" => Self::Logout,
@@ -139,6 +141,7 @@ impl SlashCommand {
             Self::Bug { prompt } => CommandResult::Bug { prompt: prompt.clone() },
             Self::Search { query } => CommandResult::Search { query: query.clone() },
             Self::History { page } => CommandResult::History { page: *page },
+            Self::Retry => CommandResult::Retry,
             Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
             Self::Login => CommandResult::Login,
             Self::Logout => CommandResult::Logout,
@@ -185,6 +188,7 @@ pub enum CommandResult {
     Bug { prompt: String },
     Search { query: String },
     History { page: usize },
+    Retry,
     Login,
     Logout,
     Context,
@@ -229,6 +233,7 @@ const HELP_TEXT_BASE: &str = "\
   /undo              Undo last assistant turn
   /search <query>    Search conversation history
   /history [page]    Browse conversation turns
+  /retry             Retry the last failed prompt (alias: /redo)
   /cost              Show token usage and costs
   /exit              Exit the CLI
 
@@ -739,5 +744,31 @@ mod tests {
     fn test_help_text_includes_history() {
         let text = build_help_text(&no_skills(), &no_plugins());
         assert!(text.contains("/history"));
+    }
+
+    // ── /retry command ────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_retry() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/retry", &s), Some(SlashCommand::Retry)));
+    }
+
+    #[test]
+    fn test_parse_redo_alias() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/redo", &s), Some(SlashCommand::Retry)));
+    }
+
+    #[test]
+    fn test_execute_retry() {
+        let cmd = SlashCommand::Retry;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Retry));
+    }
+
+    #[test]
+    fn test_help_text_includes_retry() {
+        let text = build_help_text(&no_skills(), &no_plugins());
+        assert!(text.contains("/retry"));
     }
 }
