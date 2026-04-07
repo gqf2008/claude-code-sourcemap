@@ -173,16 +173,8 @@ impl Tool for FileReadTool {
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
-        if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-            return read_image(&path, &ext).await;
-        }
 
-        // Check for Jupyter notebooks
-        if ext == "ipynb" {
-            return read_notebook(&path).await;
-        }
-
-        // Check file size before reading into memory
+        // Check file size before reading into memory (applies to ALL file types)
         if let Ok(meta) = tokio::fs::metadata(&path).await {
             if meta.len() > MAX_READ_BYTES {
                 return Ok(ToolResult::error(format!(
@@ -191,6 +183,15 @@ impl Tool for FileReadTool {
                     path.display(), meta.len(), MAX_READ_BYTES / 1024 / 1024
                 )));
             }
+        }
+
+        if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+            return read_image(&path, &ext).await;
+        }
+
+        // Check for Jupyter notebooks
+        if ext == "ipynb" {
+            return read_notebook(&path).await;
         }
 
         // Read raw bytes first to detect binary

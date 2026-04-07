@@ -90,15 +90,6 @@ impl Tool for GrepTool {
         let pattern = input["pattern"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern'"))?.to_string();
 
-        // Reject excessively long patterns that could cause ReDoS
-        const MAX_PATTERN_LEN: usize = 4096;
-        if pattern.len() > MAX_PATTERN_LEN {
-            return Ok(ToolResult::error(format!(
-                "Pattern too long ({} chars, limit is {}). Use a simpler pattern.",
-                pattern.len(), MAX_PATTERN_LEN
-            )));
-        }
-
         let search_path: PathBuf = match input["path"].as_str() {
             Some(p) => {
                 let pa = std::path::Path::new(p);
@@ -118,12 +109,23 @@ impl Tool for GrepTool {
 
         let max_results = head_limit.unwrap_or(100);
 
+        // Build final pattern (with flags) and check length AFTER wrapping
+        let final_pattern = if case_insensitive {
+            format!("(?i){}", pattern)
+        } else {
+            pattern.clone()
+        };
+        const MAX_PATTERN_LEN: usize = 4096;
+        if final_pattern.len() > MAX_PATTERN_LEN {
+            return Ok(ToolResult::error(format!(
+                "Pattern too long ({} chars, limit is {}). Use a simpler pattern.",
+                final_pattern.len(), MAX_PATTERN_LEN
+            )));
+        }
+
         let output = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-            let regex = if case_insensitive {
-                Regex::new(&format!("(?i){}", pattern))
-            } else {
-                Regex::new(&pattern)
-            }.map_err(|e| anyhow::anyhow!("Bad regex: {}", e))?;
+            let regex = Regex::new(&final_pattern)
+                .map_err(|e| anyhow::anyhow!("Bad regex: {}", e))?;
 
             let type_globs: Option<Vec<&str>> = type_filter.as_deref()
                 .and_then(type_to_globs);
