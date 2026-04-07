@@ -105,11 +105,15 @@ impl AuditLog {
     fn write(&self, entry: AuditEntry) {
         let mut guard = match self.file.lock() {
             Ok(g) => g,
-            Err(_) => return,
+            Err(poisoned) => {
+                // Recover from poisoned mutex — still usable
+                poisoned.into_inner()
+            }
         };
         if let Some(ref mut f) = *guard {
             if let Ok(json) = serde_json::to_string(&entry) {
                 let _ = writeln!(f, "{}", json);
+                let _ = f.flush();
             }
         }
     }
@@ -119,7 +123,12 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max.min(s.len())])
+        // Find the last valid char boundary at or before `max`
+        let mut end = max.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -171,6 +180,33 @@ mod tests {
         let result = truncate(&long, 200);
         assert!(result.len() <= 204); // 200 + "…" in utf-8
         assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_truncate_multibyte_utf8() {
+        // Emoji is 4 bytes — slicing at various positions must not panic
+        let input = "hello🔥world🎉test";
+        for max in 0..input.len() {
+            let result = truncate(input, max);
+            // Must be valid UTF-8 (no panic) and end with … if truncated
+            assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_truncate_chinese() {
+        // Chinese chars are 3 bytes each
+        let input = "你好世界测试数据";
+        let result = truncate(input, 6); // 6 bytes = 2 chars
+        assert!(result.starts_with("你好"));
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_truncate_exact_boundary() {
+        let input = "abc";
+        assert_eq!(truncate(input, 3), "abc"); // exact fit, no truncation
+        assert_eq!(truncate(input, 2), "ab…"); // truncated
     }
 
     #[test]
