@@ -164,7 +164,7 @@ pub fn scan_memory_dir(dir: &Path) -> Vec<MemoryHeader> {
         let preview = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Skipped unreadable memory file {}: {}", path.display(), e);
+                warn!("Skipped unreadable memory file {}: {}", path.display(), e);
                 continue;
             }
         };

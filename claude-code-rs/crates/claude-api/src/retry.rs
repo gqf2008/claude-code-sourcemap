@@ -155,12 +155,19 @@ impl ApiHttpError {
     pub fn user_message(&self) -> String {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.body) {
             if let Some(msg) = v["error"]["message"].as_str() {
-                return msg.to_string();
+                if !msg.is_empty() {
+                    return msg.to_string();
+                }
             }
         }
         // Truncate raw body for display (avoid dumping huge HTML error pages)
         if self.body.len() > 200 {
-            format!("{}...", &self.body[..200])
+            // Find a valid char boundary to avoid panicking on multi-byte UTF-8
+            let mut end = 200;
+            while !self.body.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            format!("{}...", &self.body[..end])
         } else {
             self.body.clone()
         }
@@ -446,6 +453,33 @@ mod tests {
         let msg = err.user_message();
         assert!(msg.len() < 210);
         assert!(msg.ends_with("..."));
+    }
+
+    #[test]
+    fn test_user_message_truncate_multibyte_safe() {
+        // 3-byte UTF-8 chars (中) — cutting at byte 200 could split a char
+        let body = "中".repeat(100); // 300 bytes, 100 chars
+        let err = ApiHttpError {
+            status: 500,
+            body,
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        let msg = err.user_message();
+        assert!(msg.ends_with("..."));
+        // Must not panic — the point is it runs without crashing
+    }
+
+    #[test]
+    fn test_user_message_empty_message_field() {
+        let err = ApiHttpError {
+            status: 400,
+            body: r#"{"error":{"message":""}}"#.into(),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        // Empty message should fall back to raw body
+        assert_eq!(err.user_message(), r#"{"error":{"message":""}}"#);
     }
 
     #[test]

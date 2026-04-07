@@ -122,7 +122,11 @@ fn save_manifest(manifest: &SessionManifest) {
 /// partially-written file. If the process crashes before rename, only the
 /// `.tmp` file is left (harmless).
 fn atomic_write(target: &Path, data: &[u8]) -> anyhow::Result<()> {
-    let tmp = target.with_extension("json.tmp");
+    // Create temp file in the same directory as target to ensure rename
+    // stays on the same filesystem (required for atomic rename).
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = target.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = parent.join(format!(".{}.tmp", file_name));
     std::fs::write(&tmp, data)?;
     std::fs::rename(&tmp, target)?;
     Ok(())
@@ -585,17 +589,17 @@ mod tests {
 
     #[test]
     fn atomic_write_creates_file() {
-        let tmp = std::env::temp_dir().join("claude_test_atomic_write.json");
-        let _ = std::fs::remove_file(&tmp);
+        let target = std::env::temp_dir().join("claude_test_atomic_write.json");
+        let _ = std::fs::remove_file(&target);
 
-        atomic_write(&tmp, b"hello world").unwrap();
-        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "hello world");
+        atomic_write(&target, b"hello world").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello world");
 
         // No .tmp file should remain
-        let tmp_path = tmp.with_extension("json.tmp");
+        let tmp_path = target.parent().unwrap().join(".claude_test_atomic_write.json.tmp");
         assert!(!tmp_path.exists(), "temp file should be cleaned up");
 
-        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&target);
     }
 
     #[test]
