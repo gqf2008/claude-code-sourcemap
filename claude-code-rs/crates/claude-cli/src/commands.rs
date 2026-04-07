@@ -30,6 +30,7 @@ pub enum SlashCommand {
     RunSkill { name: String, prompt: String },
     ReloadContext,
     Mcp { sub: String },
+    Plugin { sub: String },
     Exit,
     Unknown(String),
 }
@@ -70,6 +71,7 @@ impl SlashCommand {
             "export" => Self::Export { format: if args.is_empty() { "markdown".into() } else { args } },
             "reload-context" | "reload" => Self::ReloadContext,
             "mcp" => Self::Mcp { sub: args },
+            "plugin" | "plugins" => Self::Plugin { sub: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -139,6 +141,7 @@ impl SlashCommand {
             Self::Export { format } => CommandResult::Export { format: format.clone() },
             Self::ReloadContext => CommandResult::ReloadContext,
             Self::Mcp { sub } => CommandResult::Mcp { sub: sub.clone() },
+            Self::Plugin { sub } => CommandResult::Plugin { sub: sub.clone() },
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -179,6 +182,7 @@ pub enum CommandResult {
     RunSkill { name: String, prompt: String },
     ReloadContext,
     Mcp { sub: String },
+    Plugin { sub: String },
     Exit,
 }
 
@@ -222,6 +226,7 @@ const HELP_TEXT_BASE: &str = "\
   /context           Show loaded context (CLAUDE.md, memory, model)
   /reload-context    Reload CLAUDE.md, memory, and settings
   /mcp               Show discovered MCP servers
+  /plugin            List loaded plugins (alias: /plugins)
 
 \x1b[1mSession & Memory\x1b[0m
   /session save      Save current session

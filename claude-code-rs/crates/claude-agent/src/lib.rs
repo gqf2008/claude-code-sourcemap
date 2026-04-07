@@ -11,3 +11,4 @@ pub mod task_runner;
 pub mod coordinator;
 pub mod cost;
 pub mod system_prompt;
+pub mod plugin;

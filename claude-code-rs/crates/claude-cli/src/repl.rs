@@ -183,6 +183,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::Mcp { sub } => {
                                 handle_mcp_command(&sub, &cwd);
                             }
+                            CommandResult::Plugin { sub } => {
+                                handle_plugin_command(&sub, &cwd);
+                            }
                             CommandResult::RunSkill { name, prompt } => {
                                 run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                             }

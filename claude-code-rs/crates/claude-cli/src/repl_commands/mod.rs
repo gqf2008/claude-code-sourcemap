@@ -26,6 +26,93 @@ pub(crate) use skill::run_skill;
 pub(crate) use mcp::handle_mcp_command;
 
 use claude_agent::engine::QueryEngine;
+use claude_agent::plugin::PluginLoader;
+
+/// Show loaded plugins and their status.
+pub(crate) fn handle_plugin_command(sub: &str, cwd: &std::path::Path) {
+    let loader = PluginLoader::discover(cwd);
+
+    match sub.split_whitespace().next().unwrap_or("list") {
+        "list" | "" => {
+            if loader.count() == 0 {
+                println!("No plugins found.");
+                println!("\x1b[2mAdd plugins to .claude/plugins/ or ~/.claude/plugins/\x1b[0m");
+                return;
+            }
+
+            println!("\x1b[1mLoaded Plugins\x1b[0m ({} total, {} enabled)\n",
+                loader.count(), loader.enabled_count());
+
+            for plugin in loader.plugins() {
+                let status = if plugin.manifest.enabled {
+                    "\x1b[32m●\x1b[0m"
+                } else {
+                    "\x1b[31m○\x1b[0m"
+                };
+                println!("  {} \x1b[1m{}\x1b[0m v{} \x1b[2m({})\x1b[0m",
+                    status,
+                    plugin.manifest.name,
+                    plugin.manifest.version,
+                    plugin.source,
+                );
+                if !plugin.manifest.description.is_empty() {
+                    println!("    {}", plugin.manifest.description);
+                }
+                if !plugin.manifest.commands.is_empty() {
+                    let cmd_names: Vec<&str> = plugin.manifest.commands.iter()
+                        .map(|c| c.name.as_str())
+                        .collect();
+                    println!("    Commands: /{}", cmd_names.join(", /"));
+                }
+                if !plugin.manifest.skills.is_empty() {
+                    let skill_names: Vec<&str> = plugin.manifest.skills.iter()
+                        .map(|s| s.name.as_str())
+                        .collect();
+                    println!("    Skills: {}", skill_names.join(", "));
+                }
+                if !plugin.manifest.hooks.is_empty() {
+                    println!("    Hooks: {}", plugin.manifest.hooks.len());
+                }
+            }
+        }
+        "info" => {
+            let name = sub.split_whitespace().nth(1);
+            match name {
+                Some(name) => {
+                    match loader.get(name) {
+                        Some(plugin) => {
+                            println!("\x1b[1m{}\x1b[0m v{}", plugin.manifest.name, plugin.manifest.version);
+                            println!("Source:  {}", plugin.source);
+                            println!("Path:    {}", plugin.dir.display());
+                            println!("Enabled: {}", plugin.manifest.enabled);
+                            if !plugin.manifest.description.is_empty() {
+                                println!("Desc:    {}", plugin.manifest.description);
+                            }
+                            for cmd in &plugin.manifest.commands {
+                                println!("\n  Command: /{}", cmd.name);
+                                if !cmd.description.is_empty() {
+                                    println!("  Desc:    {}", cmd.description);
+                                }
+                                if let Some(ref file) = cmd.prompt_file {
+                                    println!("  Prompt:  {}", file);
+                                }
+                            }
+                            for skill in &plugin.manifest.skills {
+                                println!("\n  Skill: {}", skill.name);
+                                println!("  File:  {}", skill.prompt_file);
+                            }
+                        }
+                        None => println!("Plugin '{}' not found.", name),
+                    }
+                }
+                None => println!("Usage: /plugin info <name>"),
+            }
+        }
+        other => {
+            println!("Unknown subcommand: {}. Use: /plugin [list|info <name>]", other);
+        }
+    }
+}
 
 /// Show git diff (staged + unstaged).
 pub(crate) fn handle_diff_command(cwd: &std::path::Path) {
