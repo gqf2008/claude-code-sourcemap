@@ -97,20 +97,7 @@ fn collect_rules_dir(rules_dir: &Path, paths: &mut Vec<PathBuf>) {
 
 /// Detect git repository root directory.
 fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
-    std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout)
-                    .ok()
-                    .map(|s| PathBuf::from(s.trim()))
-            } else {
-                None
-            }
-        })
+    crate::git_util::find_git_root(cwd)
 }
 
 // ── @include resolution ──────────────────────────────────────────────────────

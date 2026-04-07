@@ -11,3 +11,4 @@ pub mod model;
 pub mod text_util;
 pub mod message_sanitize;
 pub mod image;
+pub mod git_util;

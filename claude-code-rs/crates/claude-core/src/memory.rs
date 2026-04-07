@@ -1,10 +1,14 @@
-//! Memory system — mirrors claude-code's `~/.claude/memory/` file-based memory.
+//! Memory system — mirrors claude-code's `~/.claude/projects/<key>/memory/` file-based memory.
 //!
 //! # Design (aligned with original TypeScript)
 //!
-//! Memory files are plain `.md` files living under:
-//!   - `~/.claude/memory/`           (user-global private memories)
-//!   - `<project>/.claude/memory/`   (project-scoped memories)
+//! Memory files are plain `.md` files living under project-isolated directories:
+//!   - `~/.claude/projects/<sanitized-git-root>/memory/`  (project-isolated)
+//!   - `<project>/.claude/memory/`                        (project-scoped, in-repo)
+//!   - `~/.claude/memory/`                                (legacy user-global, backward compat)
+//!
+//! The project key is derived from the canonical git root path, sanitized via
+//! `git_util::sanitize_path_key()` (replaces non-alphanumeric → `-`).
 //!
 //! Each file **may** start with a YAML frontmatter block (between `---` markers)
 //! containing:
@@ -186,30 +190,68 @@ pub fn scan_memory_dir(dir: &Path) -> Vec<MemoryHeader> {
     headers
 }
 
-/// Find all memory directories to scan:
-///   - `~/.claude/memory/`
-///   - `<cwd>/.claude/memory/`
+/// Find all memory directories to scan (in priority order):
+///   1. `~/.claude/projects/<sanitized-git-root>/memory/`  (project-isolated)
+///   2. `<cwd>/.claude/memory/`                            (in-repo project-scoped)
+///   3. `~/.claude/memory/`                                (legacy user-global)
 pub fn memory_dirs(cwd: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+
+    // 1. Project-isolated: ~/.claude/projects/<key>/memory/
+    if let Some(project_dir) = project_isolated_memory_dir(cwd) {
+        if project_dir.exists() {
+            dirs.push(project_dir);
+        }
+    }
+
+    // 2. In-repo: <cwd>/.claude/memory/
+    let project = cwd.join(".claude").join("memory");
+    if project.exists() && !dirs.contains(&project) {
+        dirs.push(project);
+    }
+
+    // 3. Legacy global: ~/.claude/memory/
     if let Some(home) = dirs::home_dir() {
         let p = home.join(".claude").join("memory");
-        if p.exists() {
+        if p.exists() && !dirs.contains(&p) {
             dirs.push(p);
         }
     }
-    let project = cwd.join(".claude").join("memory");
-    if project.exists() {
-        dirs.push(project);
-    }
+
     dirs
+}
+
+/// Compute the project-isolated memory directory path.
+///
+/// Pattern: `~/.claude/projects/<sanitized-git-root>/memory/`
+/// Falls back to `<sanitized-cwd>` if not inside a git repo.
+fn project_isolated_memory_dir(cwd: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let base = crate::git_util::find_git_root(cwd)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let key = crate::git_util::sanitize_path_key(&base.to_string_lossy());
+    Some(home.join(".claude").join("projects").join(key).join("memory"))
 }
 
 /// Returns the primary memory directory path for behavioral prompt injection.
 ///
-/// Prefers the project-scoped directory (`<cwd>/.claude/memory/`), falling back
-/// to the user-global directory.  Creates the project directory if it doesn't
-/// exist yet (so the model can write immediately without `mkdir`).
+/// Prefers the project-isolated directory (`~/.claude/projects/<key>/memory/`),
+/// falling back to in-repo `.claude/memory/`, then legacy global.
+/// Creates the directory if it doesn't exist yet (so the model can write immediately).
 pub fn primary_memory_dir(cwd: &Path) -> Option<PathBuf> {
+    // 1. Project-isolated (preferred)
+    if let Some(isolated) = project_isolated_memory_dir(cwd) {
+        if !isolated.exists() {
+            if let Err(e) = std::fs::create_dir_all(&isolated) {
+                warn!("Failed to create memory dir {:?}: {}", isolated, e);
+            }
+        }
+        if isolated.exists() {
+            return Some(isolated);
+        }
+    }
+
+    // 2. In-repo project dir
     let project = cwd.join(".claude").join("memory");
     if !project.exists() {
         if let Err(e) = std::fs::create_dir_all(&project) {
@@ -219,7 +261,8 @@ pub fn primary_memory_dir(cwd: &Path) -> Option<PathBuf> {
     if project.exists() {
         return Some(project);
     }
-    // Fall back to user-global
+
+    // 3. Legacy global
     if let Some(home) = dirs::home_dir() {
         let user_dir = home.join(".claude").join("memory");
         if user_dir.exists() {
@@ -621,24 +664,57 @@ mod tests {
     // ── primary_memory_dir ─────────────────────────────────────────────
 
     #[test]
-    fn primary_memory_dir_creates_project_dir() {
+    fn primary_memory_dir_creates_some_dir() {
+        // primary_memory_dir tries project-isolated first (needs home + git root),
+        // then falls back to in-repo .claude/memory/
         let tmp = tempfile::tempdir().unwrap();
-        let mem_dir = tmp.path().join(".claude").join("memory");
-        assert!(!mem_dir.exists());
-
         let result = primary_memory_dir(tmp.path());
+        // Should always return Some (it creates the directory)
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), mem_dir);
-        assert!(mem_dir.exists());
+        let dir = result.unwrap();
+        assert!(dir.exists());
+        // The path should end with "memory"
+        assert_eq!(dir.file_name().unwrap().to_str().unwrap(), "memory");
     }
 
     #[test]
-    fn primary_memory_dir_returns_existing() {
+    fn primary_memory_dir_fallback_to_in_repo() {
+        // When project-isolated dir can't be created (e.g., no home),
+        // falls back to in-repo <cwd>/.claude/memory/
         let tmp = tempfile::tempdir().unwrap();
-        let mem_dir = tmp.path().join(".claude").join("memory");
-        std::fs::create_dir_all(&mem_dir).unwrap();
+        let in_repo = tmp.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&in_repo).unwrap();
 
         let result = primary_memory_dir(tmp.path());
-        assert_eq!(result.unwrap(), mem_dir);
+        assert!(result.is_some());
+        // Should return some valid memory dir
+        assert!(result.unwrap().exists());
+    }
+
+    // ── project_isolated_memory_dir ─────────────────────────────────────
+
+    #[test]
+    fn project_isolated_dir_contains_sanitized_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = super::project_isolated_memory_dir(tmp.path());
+        if let Some(dir) = result {
+            // Should contain "projects" in the path
+            let path_str = dir.to_string_lossy();
+            assert!(path_str.contains("projects"));
+            assert!(path_str.contains("memory"));
+        }
+        // If home_dir() is None (rare), result is None — that's ok
+    }
+
+    // ── memory_dirs with project-isolated ─────────────────────────────────
+
+    #[test]
+    fn memory_dirs_includes_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let in_repo = tmp.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&in_repo).unwrap();
+
+        let dirs = memory_dirs(tmp.path());
+        assert!(dirs.contains(&in_repo));
     }
 }

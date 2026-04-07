@@ -23,6 +23,8 @@ pub struct SanitizeReport {
     pub unresolved_tool_uses_removed: usize,
     /// Number of unresolved tool_result blocks removed.
     pub unresolved_tool_results_removed: usize,
+    /// Number of synthetic tool_result blocks injected for orphaned tool_use.
+    pub synthetic_tool_results_injected: usize,
     /// Number of empty-content assistant messages patched.
     pub empty_content_patched: usize,
     /// Number of adjacent user messages merged.
@@ -36,6 +38,7 @@ impl SanitizeReport {
             || self.whitespace_only_removed > 0
             || self.unresolved_tool_uses_removed > 0
             || self.unresolved_tool_results_removed > 0
+            || self.synthetic_tool_results_injected > 0
             || self.empty_content_patched > 0
             || self.adjacent_users_merged > 0
     }
@@ -58,6 +61,9 @@ impl SanitizeReport {
         if self.unresolved_tool_results_removed > 0 {
             parts.push(format!("{} unresolved tool_result", self.unresolved_tool_results_removed));
         }
+        if self.synthetic_tool_results_injected > 0 {
+            parts.push(format!("{} synthetic tool_result", self.synthetic_tool_results_injected));
+        }
         if self.empty_content_patched > 0 {
             parts.push(format!("{} empty patched", self.empty_content_patched));
         }
@@ -74,8 +80,9 @@ impl SanitizeReport {
 /// 1. Filter orphaned thinking-only assistant messages
 /// 2. Filter whitespace-only assistant messages  
 /// 3. Ensure non-empty assistant content
-/// 4. Filter unresolved tool_use / tool_result pairs
-/// 5. Merge adjacent user messages
+/// 4. Filter unresolved tool_use / tool_result pairs (remove orphaned tool_results)
+/// 5. Ensure tool_result pairing (inject synthetic error results for orphaned tool_use)
+/// 6. Merge adjacent user messages
 pub fn sanitize_messages(messages: Vec<Message>) -> (Vec<Message>, SanitizeReport) {
     let mut report = SanitizeReport::default();
 
@@ -91,7 +98,10 @@ pub fn sanitize_messages(messages: Vec<Message>) -> (Vec<Message>, SanitizeRepor
     // Pass 4: Remove unresolved tool_use / tool_result references
     let messages = filter_unresolved_tool_refs(messages, &mut report);
 
-    // Pass 5: Merge adjacent user messages (can happen after filtering)
+    // Pass 5: Inject synthetic error tool_results for orphaned tool_use blocks
+    let messages = ensure_tool_result_pairing(messages, &mut report);
+
+    // Pass 6: Merge adjacent user messages (can happen after filtering)
     let messages = merge_adjacent_users(messages, &mut report);
 
     (messages, report)
@@ -251,7 +261,99 @@ fn filter_unresolved_tool_refs(messages: Vec<Message>, report: &mut SanitizeRepo
         .collect()
 }
 
-// ── Pass 5: Merge adjacent users ─────────────────────────────────────────────
+// ── Pass 5: Ensure tool_result pairing ───────────────────────────────────────
+
+/// Placeholder content for synthetic error tool_result blocks.
+const SYNTHETIC_TOOL_RESULT_PLACEHOLDER: &str = "[Tool use interrupted]";
+
+/// Ensure every tool_use block has a matching tool_result.
+///
+/// Mirrors TS `ensureToolResultPairing()`: for each assistant message containing
+/// tool_use blocks without matching tool_result in the next user message, inject
+/// a synthetic error tool_result. This is safer than removing the tool_use block
+/// (which would lose context about what the model tried to do).
+fn ensure_tool_result_pairing(mut messages: Vec<Message>, report: &mut SanitizeReport) -> Vec<Message> {
+    if messages.is_empty() {
+        return messages;
+    }
+
+    // Collect (assistant_index, missing_tool_use_ids) pairs
+    let mut repairs: Vec<(usize, Vec<String>)> = Vec::new();
+
+    for i in 0..messages.len() {
+        if let Message::Assistant(a) = &messages[i] {
+            let tool_use_ids: Vec<String> = a.content.iter().filter_map(|b| {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            }).collect();
+
+            if tool_use_ids.is_empty() {
+                continue;
+            }
+
+            // Collect existing tool_result IDs from the next user message
+            let mut existing = HashSet::new();
+            if i + 1 < messages.len() {
+                if let Message::User(u) = &messages[i + 1] {
+                    for block in &u.content {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
+                            existing.insert(tool_use_id.clone());
+                        }
+                    }
+                }
+            }
+
+            let missing: Vec<String> = tool_use_ids
+                .into_iter()
+                .filter(|id| !existing.contains(id))
+                .collect();
+
+            if !missing.is_empty() {
+                repairs.push((i, missing));
+            }
+        }
+    }
+
+    // Apply repairs in reverse order to preserve indices
+    for (assistant_idx, missing_ids) in repairs.into_iter().rev() {
+        let synthetic_blocks: Vec<ContentBlock> = missing_ids
+            .iter()
+            .map(|id| {
+                report.synthetic_tool_results_injected += 1;
+                ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: vec![crate::message::ToolResultContent::Text {
+                        text: SYNTHETIC_TOOL_RESULT_PLACEHOLDER.into(),
+                    }],
+                    is_error: true,
+                }
+            })
+            .collect();
+
+        let next_idx = assistant_idx + 1;
+        if next_idx < messages.len() {
+            if let Message::User(u) = &mut messages[next_idx] {
+                // Prepend synthetic blocks before existing content
+                let mut new_content = synthetic_blocks;
+                new_content.append(&mut u.content);
+                u.content = new_content;
+                continue;
+            }
+        }
+        // No next user message — insert a synthetic one
+        messages.insert(next_idx, Message::User(crate::message::UserMessage {
+            uuid: format!("synthetic-{}", assistant_idx),
+            content: synthetic_blocks,
+        }));
+    }
+
+    messages
+}
+
+// ── Pass 6: Merge adjacent users ─────────────────────────────────────────────
 
 /// Merge consecutive user messages into one.
 ///
@@ -614,5 +716,93 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("2 orphaned thinking"));
         assert!(summary.contains("1 whitespace-only"));
+    }
+
+    // ── Ensure tool_result pairing tests ────────────────────────────────
+
+    #[test]
+    fn pairing_injects_synthetic_for_missing_result() {
+        // assistant has tool_use(t1), but no following user message
+        let msgs = vec![
+            user_msg("hello"),
+            tool_use_msg("t1", "read"),
+        ];
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(msgs, &mut report);
+        assert_eq!(report.synthetic_tool_results_injected, 1);
+        // Should have 3 messages: user, assistant(tool_use), user(synthetic result)
+        assert_eq!(result.len(), 3);
+        if let Message::User(u) = &result[2] {
+            assert!(matches!(&u.content[0], ContentBlock::ToolResult { is_error: true, .. }));
+        } else {
+            panic!("Expected synthetic user message");
+        }
+    }
+
+    #[test]
+    fn pairing_prepends_to_existing_user_message() {
+        // assistant has tool_use(t1, t2), next user only has result for t1
+        let msgs = vec![
+            user_msg("hello"),
+            Message::Assistant(AssistantMessage {
+                uuid: "a-multi".into(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t2".into(),
+                        name: "write".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+                stop_reason: Some(StopReason::ToolUse),
+                usage: None,
+            }),
+            tool_result_msg("t1", "ok"),
+        ];
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(msgs, &mut report);
+        assert_eq!(report.synthetic_tool_results_injected, 1);
+        // Still 3 messages, but the user msg now has 2 tool_results
+        assert_eq!(result.len(), 3);
+        if let Message::User(u) = &result[2] {
+            let result_count = u.content.iter().filter(|b| matches!(b, ContentBlock::ToolResult { .. })).count();
+            assert_eq!(result_count, 2); // 1 synthetic + 1 original
+        }
+    }
+
+    #[test]
+    fn pairing_no_change_when_all_paired() {
+        let msgs = vec![
+            user_msg("hello"),
+            tool_use_msg("t1", "read"),
+            tool_result_msg("t1", "file contents"),
+            assistant_msg("done"),
+        ];
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(msgs, &mut report);
+        assert_eq!(report.synthetic_tool_results_injected, 0);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn pairing_handles_empty_messages() {
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(vec![], &mut report);
+        assert!(result.is_empty());
+        assert_eq!(report.synthetic_tool_results_injected, 0);
+    }
+
+    #[test]
+    fn report_summary_includes_synthetic() {
+        let report = SanitizeReport {
+            synthetic_tool_results_injected: 3,
+            ..Default::default()
+        };
+        let summary = report.summary();
+        assert!(summary.contains("3 synthetic tool_result"));
     }
 }
