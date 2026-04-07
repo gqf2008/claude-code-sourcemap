@@ -7,3 +7,5 @@ pub mod retry;
 pub mod oauth;
 pub mod model;
 pub mod usage;
+pub mod files;
+pub mod cache_detect;

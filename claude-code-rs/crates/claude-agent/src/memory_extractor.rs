@@ -11,7 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use claude_core::memory;
@@ -26,6 +28,9 @@ pub const MAX_EXTRACTION_TURNS: u32 = 5;
 
 /// Default throttle: extract every N turns (1 = every turn).
 const DEFAULT_THROTTLE_INTERVAL: usize = 1;
+
+/// Default timeout for drain operations.
+const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ── Tool permission for extraction agent ────────────────────────────────────
 
@@ -56,11 +61,25 @@ pub fn is_tool_allowed(tool_name: &str, file_path: Option<&str>, memory_dir: &Pa
     false
 }
 
+// ── Pending extraction context ──────────────────────────────────────────────
+
+/// Context queued for extraction when another extraction is already running.
+///
+/// TS parity: `pendingContext` in `extractMemories.ts`.
+#[derive(Debug, Clone)]
+pub struct PendingExtraction {
+    /// Snapshot of the conversation at the time of queueing.
+    pub message_snapshot: Vec<Message>,
+    /// Whether the main agent has been writing memories directly.
+    pub has_direct_writes: bool,
+}
+
 // ── Extraction state ────────────────────────────────────────────────────────
 
 /// State for the memory extraction pipeline.
 ///
-/// Tracks cursor position, overlap guard, and throttle counter.
+/// Tracks cursor position, overlap guard, throttle counter,
+/// pending extraction context, and drain synchronization.
 pub struct MemoryExtractor {
     /// Memory directory to write to.
     memory_dir: PathBuf,
@@ -74,6 +93,14 @@ pub struct MemoryExtractor {
     throttle_interval: usize,
     /// Whether auto-memory extraction is enabled.
     pub enabled: bool,
+    /// Whether this is a sub-agent context (extraction never runs in sub-agents).
+    pub is_subagent: bool,
+    /// Whether this is a remote/bridge session (extraction skipped).
+    pub is_remote: bool,
+    /// Pending extraction context (queued while another extraction is running).
+    pending_context: Arc<tokio::sync::Mutex<Option<PendingExtraction>>>,
+    /// Notification for drain waiters.
+    drain_notify: Arc<Notify>,
 }
 
 impl MemoryExtractor {
@@ -86,6 +113,10 @@ impl MemoryExtractor {
             turns_since_last: AtomicUsize::new(0),
             throttle_interval: DEFAULT_THROTTLE_INTERVAL,
             enabled: true,
+            is_subagent: false,
+            is_remote: false,
+            pending_context: Arc::new(tokio::sync::Mutex::new(None)),
+            drain_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -95,24 +126,40 @@ impl MemoryExtractor {
         self
     }
 
+    /// Mark as sub-agent context (extraction will always be skipped).
+    pub fn with_subagent(mut self, is_subagent: bool) -> Self {
+        self.is_subagent = is_subagent;
+        self
+    }
+
+    /// Mark as remote/bridge session (extraction will always be skipped).
+    pub fn with_remote(mut self, is_remote: bool) -> Self {
+        self.is_remote = is_remote;
+        self
+    }
+
     /// Check whether extraction should run.
     ///
     /// Gates (all must pass):
     /// 1. Enabled flag is true
-    /// 2. Not a sub-agent (caller must check this)
-    /// 3. No overlap (not already extracting)
-    /// 4. Throttle interval reached
-    /// 5. Main agent hasn't written to memory since last extraction
+    /// 2. Not a sub-agent context
+    /// 3. Not a remote/bridge session
+    /// 4. No overlap (not already extracting)
+    /// 5. Throttle interval reached
+    /// 6. Main agent hasn't written to memory since last extraction
     pub fn should_extract(
         &self,
         messages: &[Message],
-        is_subagent: bool,
     ) -> bool {
         if !self.enabled {
             return false;
         }
-        if is_subagent {
+        if self.is_subagent {
             debug!("Memory extraction skipped: sub-agent context");
+            return false;
+        }
+        if self.is_remote {
+            debug!("Memory extraction skipped: remote/bridge session");
             return false;
         }
         if self.in_progress.load(Ordering::Relaxed) {
@@ -303,6 +350,83 @@ impl MemoryExtractor {
     fn reset_throttle(&self) {
         self.turns_since_last.store(0, Ordering::Relaxed);
     }
+
+    // ── Pending extraction / drain ──────────────────────────────────────
+
+    /// Queue a pending extraction context for later execution.
+    ///
+    /// Called when `should_extract()` would have returned true but the
+    /// overlap guard is held by another extraction.
+    pub async fn queue_pending_extraction(&self, messages: Vec<Message>) {
+        let pending = PendingExtraction {
+            message_snapshot: messages,
+            has_direct_writes: false,
+        };
+        let mut lock = self.pending_context.lock().await;
+        *lock = Some(pending);
+        debug!("Pending extraction queued");
+    }
+
+    /// Check if there is a pending extraction waiting.
+    pub async fn has_pending(&self) -> bool {
+        self.pending_context.lock().await.is_some()
+    }
+
+    /// Take the pending extraction context (if any).
+    pub async fn take_pending(&self) -> Option<PendingExtraction> {
+        self.pending_context.lock().await.take()
+    }
+
+    /// Drain pending extractions: wait for in-progress extraction to finish,
+    /// then execute any queued pending extraction.
+    ///
+    /// TS parity: `drainPendingExtraction()` — waits up to `DEFAULT_DRAIN_TIMEOUT`
+    /// for the current extraction to complete, then runs the pending one.
+    ///
+    /// Returns the number of memories saved (0 if nothing was pending or timed out).
+    pub async fn drain_pending_extraction(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> usize {
+        let timeout = timeout.unwrap_or(DEFAULT_DRAIN_TIMEOUT);
+
+        // Wait for in-progress extraction to finish
+        if self.in_progress.load(Ordering::Relaxed) {
+            debug!("Drain: waiting for in-progress extraction (timeout {:?})", timeout);
+            let result = tokio::time::timeout(
+                timeout,
+                self.drain_notify.notified(),
+            ).await;
+
+            if result.is_err() {
+                warn!("Drain: timed out waiting for in-progress extraction");
+                return 0;
+            }
+        }
+
+        // Execute pending extraction if any
+        let pending = self.pending_context.lock().await.take();
+        if let Some(pending) = pending {
+            if pending.has_direct_writes {
+                debug!("Drain: skipping pending extraction — main agent wrote directly");
+                return 0;
+            }
+            debug!("Drain: executing pending extraction ({} messages)", pending.message_snapshot.len());
+            if let Some(prompt) = self.build_extraction_prompt(&pending.message_snapshot) {
+                // In a real implementation, this would call the extraction agent.
+                // For now, we just log and return 0.
+                info!("Drain: extraction prompt built ({} chars)", prompt.len());
+            }
+        }
+        0
+    }
+
+    /// Notify drain waiters that the current extraction is complete.
+    ///
+    /// Call this after `release()` when an extraction finishes.
+    pub fn notify_drain(&self) {
+        self.drain_notify.notify_waiters();
+    }
 }
 
 // ── Stop hooks integration ──────────────────────────────────────────────────
@@ -325,7 +449,6 @@ pub enum StopDecision {
 pub fn handle_stop_hooks(
     extractor: Option<&mut MemoryExtractor>,
     messages: &[Message],
-    is_subagent: bool,
     hook_decision: Option<crate::hooks::HookDecision>,
 ) -> StopDecision {
     // 1. Check hook decision first
@@ -343,7 +466,7 @@ pub fn handle_stop_hooks(
 
     // 2. Check memory extraction
     if let Some(extractor) = extractor {
-        if extractor.should_extract(messages, is_subagent) {
+        if extractor.should_extract(messages) {
             return StopDecision::ExtractMemories;
         }
     }
@@ -485,15 +608,16 @@ mod tests {
         let mut ext = MemoryExtractor::new(tmp.path().to_path_buf());
         ext.enabled = false;
         ext.turns_since_last.store(5, Ordering::Relaxed);
-        assert!(!ext.should_extract(&[], false));
+        assert!(!ext.should_extract(&[]));
     }
 
     #[test]
     fn should_extract_subagent() {
         let tmp = tempfile::tempdir().unwrap();
-        let ext = MemoryExtractor::new(tmp.path().to_path_buf());
+        let ext = MemoryExtractor::new(tmp.path().to_path_buf())
+            .with_subagent(true);
         ext.turns_since_last.store(5, Ordering::Relaxed);
-        assert!(!ext.should_extract(&[], true));
+        assert!(!ext.should_extract(&[]));
     }
 
     #[test]
@@ -501,7 +625,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ext = MemoryExtractor::new(tmp.path().to_path_buf());
         // turns_since_last is 0, throttle_interval is 1
-        assert!(!ext.should_extract(&[], false));
+        assert!(!ext.should_extract(&[]));
     }
 
     #[test]
@@ -510,7 +634,7 @@ mod tests {
         let ext = MemoryExtractor::new(tmp.path().to_path_buf());
         ext.turns_since_last.store(1, Ordering::Relaxed);
         let msgs = vec![make_user_msg("u1", "hello")];
-        assert!(ext.should_extract(&msgs, false));
+        assert!(ext.should_extract(&msgs));
     }
 
     #[test]
@@ -521,7 +645,7 @@ mod tests {
         ext.turns_since_last.store(1, Ordering::Relaxed);
 
         let msgs = vec![make_assistant_tool_use("a1", "Write", &memory_path)];
-        assert!(!ext.should_extract(&msgs, false));
+        assert!(!ext.should_extract(&msgs));
     }
 
     #[test]
@@ -612,7 +736,7 @@ mod tests {
 
     #[test]
     fn stop_decision_no_hooks_no_extractor() {
-        let result = handle_stop_hooks(None, &[], false, None);
+        let result = handle_stop_hooks(None, &[], None);
         assert!(matches!(result, StopDecision::Stop));
     }
 
@@ -621,7 +745,7 @@ mod tests {
         let decision = crate::hooks::HookDecision::FeedbackAndContinue {
             feedback: "please continue".to_string(),
         };
-        let result = handle_stop_hooks(None, &[], false, Some(decision));
+        let result = handle_stop_hooks(None, &[], Some(decision));
         match result {
             StopDecision::Continue { feedback } => assert_eq!(feedback, "please continue"),
             _ => panic!("Expected Continue"),
@@ -634,7 +758,7 @@ mod tests {
         let mut ext = MemoryExtractor::new(tmp.path().to_path_buf());
         ext.turns_since_last.store(1, Ordering::Relaxed);
         let msgs = vec![make_user_msg("u1", "hello")];
-        let result = handle_stop_hooks(Some(&mut ext), &msgs, false, None);
+        let result = handle_stop_hooks(Some(&mut ext), &msgs, None);
         assert!(matches!(result, StopDecision::ExtractMemories));
     }
 
@@ -699,5 +823,57 @@ mod tests {
     fn build_notification_empty() {
         let msg = MemoryExtractor::build_notification(3, &[]);
         assert_eq!(msg, "3 memories saved");
+    }
+
+    // ── Pending extraction / drain ───────────────────────────────────
+
+    #[tokio::test]
+    async fn queue_and_take_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ext = MemoryExtractor::new(tmp.path().to_path_buf());
+        assert!(!ext.has_pending().await);
+
+        let msgs = vec![make_user_msg("u1", "hello")];
+        ext.queue_pending_extraction(msgs.clone()).await;
+        assert!(ext.has_pending().await);
+
+        let pending = ext.take_pending().await.unwrap();
+        assert_eq!(pending.message_snapshot.len(), 1);
+        assert!(!ext.has_pending().await);
+    }
+
+    #[tokio::test]
+    async fn drain_when_nothing_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ext = MemoryExtractor::new(tmp.path().to_path_buf());
+        let saved = ext.drain_pending_extraction(None).await;
+        assert_eq!(saved, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_with_pending_and_no_overlap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ext = MemoryExtractor::new(tmp.path().to_path_buf());
+        let msgs = vec![make_user_msg("u1", "drain test")];
+        ext.queue_pending_extraction(msgs).await;
+        let saved = ext.drain_pending_extraction(None).await;
+        assert_eq!(saved, 0); // no actual agent, so 0
+        assert!(!ext.has_pending().await); // pending was consumed
+    }
+
+    #[test]
+    fn notify_drain_does_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ext = MemoryExtractor::new(tmp.path().to_path_buf());
+        ext.notify_drain(); // no waiters — should not panic
+    }
+
+    #[test]
+    fn should_extract_remote_blocked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ext = MemoryExtractor::new(tmp.path().to_path_buf())
+            .with_remote(true);
+        ext.turns_since_last.store(5, Ordering::Relaxed);
+        assert!(!ext.should_extract(&[]));
     }
 }

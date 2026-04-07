@@ -13,3 +13,5 @@ pub mod message_sanitize;
 pub mod image;
 pub mod git_util;
 pub mod write_queue;
+pub mod file_history;
+pub mod concurrent_sessions;
