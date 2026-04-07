@@ -221,9 +221,10 @@ impl QueryEngineBuilder {
         };
 
         // Compute the memory directory path for behavioral prompt injection
+        // Normalize to forward slashes for consistent display in prompt
         let memory_dir_str = if self.load_memory {
             claude_core::memory::primary_memory_dir(&self.cwd)
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
         } else {
             None
         };

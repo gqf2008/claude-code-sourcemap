@@ -805,4 +805,74 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("3 synthetic tool_result"));
     }
+
+    #[test]
+    fn pairing_multiple_consecutive_orphaned_tool_uses() {
+        // Two consecutive assistant messages with orphaned tool_use, no user messages between
+        let msgs = vec![
+            user_msg("start"),
+            tool_use_msg("t1", "read"),
+            // no result for t1
+            assistant_msg("thinking..."),
+            tool_use_msg("t2", "write"),
+            // no result for t2, end of conversation
+        ];
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(msgs, &mut report);
+        // t1 has no result → synthetic inserted before "thinking..."
+        // t2 has no result → synthetic appended at end
+        assert_eq!(report.synthetic_tool_results_injected, 2);
+        // Verify all tool_use have matching tool_result
+        let mut use_ids = HashSet::new();
+        let mut result_ids = HashSet::new();
+        for msg in &result {
+            match msg {
+                Message::Assistant(a) => {
+                    for b in &a.content {
+                        if let ContentBlock::ToolUse { id, .. } = b {
+                            use_ids.insert(id.clone());
+                        }
+                    }
+                }
+                Message::User(u) => {
+                    for b in &u.content {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                            result_ids.insert(tool_use_id.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(use_ids.is_subset(&result_ids), "all tool_use should have matching result");
+    }
+
+    #[test]
+    fn pairing_multi_tool_use_in_single_assistant_no_next_user() {
+        // Single assistant message with 3 tool_uses, no following user message
+        let msgs = vec![
+            user_msg("do 3 things"),
+            Message::Assistant(AssistantMessage {
+                uuid: "a-multi".into(),
+                content: vec![
+                    ContentBlock::ToolUse { id: "t1".into(), name: "a".into(), input: serde_json::json!({}) },
+                    ContentBlock::ToolUse { id: "t2".into(), name: "b".into(), input: serde_json::json!({}) },
+                    ContentBlock::ToolUse { id: "t3".into(), name: "c".into(), input: serde_json::json!({}) },
+                ],
+                stop_reason: Some(StopReason::ToolUse),
+                usage: None,
+            }),
+        ];
+        let mut report = SanitizeReport::default();
+        let result = ensure_tool_result_pairing(msgs, &mut report);
+        assert_eq!(report.synthetic_tool_results_injected, 3);
+        // Should have: user, assistant(3 tool_use), user(3 synthetic tool_result)
+        assert_eq!(result.len(), 3);
+        if let Message::User(u) = &result[2] {
+            let tr_count = u.content.iter().filter(|b| matches!(b, ContentBlock::ToolResult { .. })).count();
+            assert_eq!(tr_count, 3);
+        } else {
+            panic!("Expected synthetic user message with 3 tool_results");
+        }
+    }
 }
