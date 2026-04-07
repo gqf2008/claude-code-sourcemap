@@ -125,13 +125,17 @@ pub fn model_capabilities(model: &str) -> ModelCapabilities {
             upper_max_output: 4_096,
             supports_thinking: false,
         },
-        _ => ModelCapabilities {
-            context_window: 200_000,
-            supports_1m: false,
-            default_max_output: 32_000,
-            upper_max_output: 64_000,
-            supports_thinking: true,
-        },
+        _ => {
+            // Third-party model: use provider-aware context window
+            let ctx = third_party_context_window(model);
+            ModelCapabilities {
+                context_window: ctx,
+                supports_1m: ctx >= 1_000_000,
+                default_max_output: 16_384,
+                upper_max_output: 32_000,
+                supports_thinking: model.starts_with("o1") || model.starts_with("o3"),
+            }
+        }
     }
 }
 
@@ -372,7 +376,7 @@ pub fn display_name(model: &str) -> &'static str {
         "claude-3-5-sonnet" => "Claude 3.5 Sonnet",
         "claude-3-5-haiku" => "Claude 3.5 Haiku",
         "claude-3-opus" => "Claude 3 Opus",
-        _ => "Claude",
+        _ => "Unknown", // use display_name_any() for non-Claude models
     }
 }
 
@@ -497,6 +501,108 @@ fn env_truthy(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+// ── Third-party provider model registry ─────────────────────────────────────
+
+/// Default model ID for a given CLI provider name.
+pub fn default_model_for_provider(provider: &str) -> &'static str {
+    match provider {
+        "openai" => "gpt-4o",
+        "deepseek" => "deepseek-chat",
+        "ollama" => "llama3.1",
+        "together" => "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        "groq" => "llama-3.1-70b-versatile",
+        "openai-compatible" => "gpt-4o",
+        _ => defaults::SONNET,
+    }
+}
+
+/// Context window for known third-party models (tokens).
+pub fn third_party_context_window(model: &str) -> u64 {
+    let m = model.to_lowercase();
+    // OpenAI models
+    if m.contains("gpt-4o") || m.contains("gpt-4-turbo") { return 128_000; }
+    if m.contains("gpt-4.1") { return 1_047_576; }
+    if m.contains("gpt-5") { return 256_000; }
+    if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") { return 200_000; }
+    if m.contains("gpt-3.5") { return 16_385; }
+    // DeepSeek
+    if m.contains("deepseek") { return 64_000; }
+    // Meta Llama
+    if m.contains("llama-3.1") || m.contains("llama-3.2") || m.contains("llama3.1") { return 128_000; }
+    if m.contains("llama") { return 8_192; }
+    // Mistral
+    if m.contains("mixtral") { return 32_768; }
+    if m.contains("mistral") { return 32_768; }
+    // Qwen
+    if m.contains("qwen") { return 32_768; }
+    // Google Gemini (if used via openai-compatible)
+    if m.contains("gemini") { return 1_048_576; }
+    // Default for unknown models
+    128_000
+}
+
+/// Pricing for known third-party models (input, output per million tokens).
+pub fn third_party_pricing(model: &str) -> Option<ModelPricing> {
+    let m = model.to_lowercase();
+    if m.contains("gpt-4o-mini") {
+        return Some(ModelPricing { input_per_mtok: 0.15, output_per_mtok: 0.60, cache_read_per_mtok: 0.075, cache_write_per_mtok: 0.15 });
+    }
+    if m.contains("gpt-4o") {
+        return Some(ModelPricing { input_per_mtok: 2.5, output_per_mtok: 10.0, cache_read_per_mtok: 1.25, cache_write_per_mtok: 2.5 });
+    }
+    if m.contains("gpt-4-turbo") {
+        return Some(ModelPricing { input_per_mtok: 10.0, output_per_mtok: 30.0, cache_read_per_mtok: 5.0, cache_write_per_mtok: 10.0 });
+    }
+    if m.starts_with("o1") {
+        return Some(ModelPricing { input_per_mtok: 15.0, output_per_mtok: 60.0, cache_read_per_mtok: 7.5, cache_write_per_mtok: 15.0 });
+    }
+    if m.contains("deepseek-chat") || m.contains("deepseek-coder") {
+        return Some(ModelPricing { input_per_mtok: 0.27, output_per_mtok: 1.10, cache_read_per_mtok: 0.07, cache_write_per_mtok: 0.27 });
+    }
+    None
+}
+
+/// Validate a model string for a specific provider. For Anthropic, applies full
+/// Claude model validation. For other providers, accepts any non-empty string.
+pub fn validate_model_for_provider(input: &str, provider: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err("Model name cannot be empty".into());
+    }
+
+    match provider {
+        "anthropic" | "bedrock" | "vertex" => validate_model(input),
+        _ => {
+            // Non-Anthropic: accept any model string, just trim it
+            Ok(input.trim().to_string())
+        }
+    }
+}
+
+/// Human-readable display name for any model (Claude or third-party).
+pub fn display_name_any(model: &str) -> String {
+    let c = canonical_name(model);
+    if c != "unknown" {
+        return display_name(model).to_string();
+    }
+    // Third-party: capitalize and clean up
+    let m = model.to_lowercase();
+    if m.contains("gpt-4o-mini") { return "GPT-4o Mini".into(); }
+    if m.contains("gpt-4o") { return "GPT-4o".into(); }
+    if m.contains("gpt-4-turbo") { return "GPT-4 Turbo".into(); }
+    if m.contains("gpt-4.1") { return "GPT-4.1".into(); }
+    if m.contains("gpt-5") { return "GPT-5".into(); }
+    if m.starts_with("o1") { return "OpenAI o1".into(); }
+    if m.starts_with("o3") { return "OpenAI o3".into(); }
+    if m.contains("deepseek-chat") { return "DeepSeek Chat".into(); }
+    if m.contains("deepseek-coder") { return "DeepSeek Coder".into(); }
+    if m.contains("llama-3.1") || m.contains("llama3.1") { return "Llama 3.1".into(); }
+    if m.contains("mixtral") { return "Mixtral".into(); }
+    if m.contains("qwen") { return "Qwen".into(); }
+    if m.contains("gemini") { return "Gemini".into(); }
+    // Fallback: return as-is
+    model.to_string()
+}
+
 // ── Cost estimation ────────────────────────────────────────────────────────
 
 /// Pricing per million tokens (input, output, cache_read) in USD.
@@ -548,7 +654,7 @@ pub fn model_pricing(model: &str) -> Option<ModelPricing> {
             cache_read_per_mtok: 0.08,
             cache_write_per_mtok: 1.0,
         }),
-        _ => None,
+        _ => third_party_pricing(model),
     }
 }
 
@@ -842,5 +948,111 @@ mod tests {
     fn test_validate_model_empty() {
         let result = validate_model("");
         assert!(result.is_err());
+    }
+
+    // ── P32 multi-provider model tests ──────────────────────────────────
+
+    #[test]
+    fn test_validate_model_for_provider_openai() {
+        // GPT models should be accepted for openai provider
+        let result = validate_model_for_provider("gpt-4o", "openai");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "gpt-4o");
+    }
+
+    #[test]
+    fn test_validate_model_for_provider_deepseek() {
+        let result = validate_model_for_provider("deepseek-chat", "deepseek");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "deepseek-chat");
+    }
+
+    #[test]
+    fn test_validate_model_for_provider_anthropic_rejects_gpt() {
+        let result = validate_model_for_provider("gpt-4o", "anthropic");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_model_for_provider_anthropic_accepts_claude() {
+        let result = validate_model_for_provider("sonnet", "anthropic");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_model_for_provider_empty() {
+        let result = validate_model_for_provider("", "openai");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_model_for_provider() {
+        assert_eq!(default_model_for_provider("openai"), "gpt-4o");
+        assert_eq!(default_model_for_provider("deepseek"), "deepseek-chat");
+        assert_eq!(default_model_for_provider("ollama"), "llama3.1");
+        assert_eq!(default_model_for_provider("anthropic"), defaults::SONNET);
+    }
+
+    #[test]
+    fn test_third_party_context_window() {
+        assert_eq!(third_party_context_window("gpt-4o"), 128_000);
+        assert_eq!(third_party_context_window("gpt-4o-mini"), 128_000);
+        assert_eq!(third_party_context_window("deepseek-chat"), 64_000);
+        assert_eq!(third_party_context_window("llama-3.1-70b"), 128_000);
+        assert_eq!(third_party_context_window("gpt-3.5-turbo"), 16_385);
+        // Unknown defaults to 128K
+        assert_eq!(third_party_context_window("custom-model"), 128_000);
+    }
+
+    #[test]
+    fn test_model_capabilities_third_party() {
+        let gpt4o = model_capabilities("gpt-4o");
+        assert_eq!(gpt4o.context_window, 128_000);
+        assert!(!gpt4o.supports_thinking);
+
+        let o1 = model_capabilities("o1-preview");
+        assert!(o1.supports_thinking);
+    }
+
+    #[test]
+    fn test_third_party_pricing() {
+        let gpt4o = third_party_pricing("gpt-4o").unwrap();
+        assert!((gpt4o.input_per_mtok - 2.5).abs() < f64::EPSILON);
+
+        let ds = third_party_pricing("deepseek-chat").unwrap();
+        assert!((ds.input_per_mtok - 0.27).abs() < f64::EPSILON);
+
+        assert!(third_party_pricing("unknown-model").is_none());
+    }
+
+    #[test]
+    fn test_model_pricing_falls_through_to_third_party() {
+        // GPT-4o should be priced via third_party_pricing fallback
+        let pricing = model_pricing("gpt-4o");
+        assert!(pricing.is_some());
+        assert!((pricing.unwrap().input_per_mtok - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_display_name_any_claude() {
+        let name = display_name_any("claude-opus-4-6");
+        assert_eq!(name, "Claude Opus 4.6");
+    }
+
+    #[test]
+    fn test_display_name_any_openai() {
+        assert_eq!(display_name_any("gpt-4o"), "GPT-4o");
+        assert_eq!(display_name_any("gpt-4o-mini"), "GPT-4o Mini");
+        assert_eq!(display_name_any("o1-preview"), "OpenAI o1");
+    }
+
+    #[test]
+    fn test_display_name_any_deepseek() {
+        assert_eq!(display_name_any("deepseek-chat"), "DeepSeek Chat");
+    }
+
+    #[test]
+    fn test_display_name_any_unknown_passthrough() {
+        assert_eq!(display_name_any("my-custom-model"), "my-custom-model");
     }
 }

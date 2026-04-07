@@ -36,7 +36,7 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
 
     // 1. Model info
     let state = engine.state().read().await;
-    let display = claude_core::model::display_name(&state.model);
+    let display = claude_core::model::display_name_any(&state.model);
     println!("\x1b[1mModel:\x1b[0m {} ({})", display, state.model);
     println!("\x1b[1mPermission mode:\x1b[0m {:?}", state.permission_mode);
     println!("\x1b[1mTurns:\x1b[0m {}", state.turn_count);

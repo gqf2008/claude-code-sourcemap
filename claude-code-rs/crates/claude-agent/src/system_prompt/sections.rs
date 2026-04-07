@@ -148,7 +148,7 @@ pub fn section_environment(cwd: &Path, model_id: &str) -> String {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-    let model_desc = model::display_name(model_id);
+    let model_desc = model::display_name_any(model_id);
     let cutoff = model::knowledge_cutoff(model_id);
 
     let mut env = format!(

@@ -53,7 +53,7 @@ pub(crate) fn handle_diff_command(cwd: &std::path::Path) {
 pub(crate) async fn handle_status_command(engine: &QueryEngine, cwd: &std::path::Path) {
     let s = engine.state().read().await;
     println!("Session:  {}", &engine.session_id()[..8]);
-    println!("Model:    {} ({})", claude_core::model::display_name(&s.model), s.model);
+    println!("Model:    {} ({})", claude_core::model::display_name_any(&s.model), s.model);
     println!("Turns:    {}", s.turn_count);
     println!("Messages: {}", s.messages.len());
     println!("Tokens:   {}↑ {}↓", format_tokens(s.total_input_tokens), format_tokens(s.total_output_tokens));

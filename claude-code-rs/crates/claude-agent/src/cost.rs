@@ -124,8 +124,8 @@ impl Default for CostTracker {
 }
 
 /// Shorten model names for display.
-fn canonical_model(model: &str) -> &'static str {
-    claude_core::model::display_name(model)
+fn canonical_model(model: &str) -> String {
+    claude_core::model::display_name_any(model)
 }
 
 fn format_usd(cost: f64) -> String {

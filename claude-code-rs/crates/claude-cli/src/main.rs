@@ -136,8 +136,15 @@ async fn main() -> anyhow::Result<()> {
 
     let api_key = resolve_api_key(&cli.provider, cli.api_key.as_deref(), settings.api_key.as_deref())?;
 
-    // Resolve model aliases and validate
-    let model = claude_core::model::validate_model(&cli.model)
+    // For non-Anthropic providers, use provider-specific default model if user didn't override
+    let model_input = if cli.model == "claude-sonnet-4-20250514" && cli.provider != "anthropic" {
+        claude_core::model::default_model_for_provider(&cli.provider).to_string()
+    } else {
+        cli.model.clone()
+    };
+
+    // Resolve model aliases and validate (provider-aware)
+    let model = claude_core::model::validate_model_for_provider(&model_input, &cli.provider)
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Build system prompt: if user specified --system-prompt, use that.

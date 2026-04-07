@@ -35,7 +35,7 @@ impl ConfigMtimes {
 
 pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::PathBuf) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
-    let display = claude_core::model::display_name(&current_model);
+    let display = claude_core::model::display_name_any(&current_model);
     println!("\x1b[1;34m╭─────────────────────────────────╮\x1b[0m");
     println!("\x1b[1;34m│      Claude Code (Rust)         │\x1b[0m");
     println!("\x1b[1;34m│  Model: {:<23} │\x1b[0m", display);
@@ -82,7 +82,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                 let state = engine.state();
                                 let mut s = state.write().await;
                                 s.model = resolved.clone();
-                                let display = claude_core::model::display_name(&resolved);
+                                let display = claude_core::model::display_name_any(&resolved);
                                 println!("Model set to: {} ({})", display, resolved);
 
                                 // Persist to user settings
