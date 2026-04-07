@@ -273,18 +273,20 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         };
 
         for text in texts {
-            if text.to_lowercase().contains(&query_lower) {
-                let lower = text.to_lowercase();
-                if let Some(pos) = lower.find(&query_lower) {
-                    let start = pos.saturating_sub(40);
-                    let end = (pos + query.len() + 40).min(text.len());
-                    // Truncate to valid char boundaries
-                    let snippet = &text[text.floor_char_boundary(start)..text.ceil_char_boundary(end)];
-                    let snippet = snippet.replace('\n', " ");
-                    let prefix = if start > 0 { "…" } else { "" };
-                    let suffix = if end < text.len() { "…" } else { "" };
-                    hits.push((idx, role, format!("{}{}{}", prefix, snippet, suffix)));
-                }
+            let lower = text.to_lowercase();
+            if let Some(pos) = lower.find(&query_lower) {
+                // Work in char offsets for Unicode safety
+                let char_pos = lower[..pos].chars().count();
+                let query_char_len = query_lower.chars().count();
+                let total_chars = text.chars().count();
+                let ctx = 40; // context chars
+                let start_char = char_pos.saturating_sub(ctx);
+                let end_char = (char_pos + query_char_len + ctx).min(total_chars);
+                let snippet: String = text.chars().skip(start_char).take(end_char - start_char).collect();
+                let snippet = snippet.replace('\n', " ");
+                let prefix = if start_char > 0 { "…" } else { "" };
+                let suffix = if end_char < total_chars { "…" } else { "" };
+                hits.push((idx, role, format!("{}{}{}", prefix, snippet, suffix)));
                 break;
             }
         }

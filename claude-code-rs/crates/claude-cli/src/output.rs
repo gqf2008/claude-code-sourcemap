@@ -42,8 +42,19 @@ impl Spinner {
 impl Drop for Spinner {
     fn drop(&mut self) {
         self.stop();
+        // Give the task a moment to print the clear sequence before aborting
         if let Some(h) = self.handle.take() {
-            h.abort();
+            // Spin-wait briefly for the task to notice the flag (max ~100ms)
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+            while !h.is_finished() && std::time::Instant::now() < deadline {
+                std::hint::spin_loop();
+            }
+            if !h.is_finished() {
+                h.abort();
+                // Ensure spinner line is cleared even if task didn't finish
+                eprint!("\r\x1b[2K");
+                std::io::stderr().flush().ok();
+            }
         }
     }
 }
@@ -155,15 +166,25 @@ fn format_tool_start(name: &str, input: &serde_json::Value) -> String {
 fn short_path(path: &str) -> &str {
     let parts: Vec<&str> = path.split(['/', '\\']).collect();
     if parts.len() <= 3 { return path; }
-    let start = parts.len() - 3;
-    let idx = path.len() - parts[start..].join("/").len();
-    &path[idx..]
+    // Find the byte offset of the Nth-from-last separator
+    let keep = 3;
+    let mut sep_count = 0;
+    for (i, b) in path.bytes().enumerate().rev() {
+        if b == b'/' || b == b'\\' {
+            sep_count += 1;
+            if sep_count == keep {
+                return &path[i + 1..];
+            }
+        }
+    }
+    path
 }
 
 /// Categorize an error message and return (icon, optional hint).
 fn categorize_error(msg: &str) -> (&'static str, Option<&'static str>) {
     let lower = msg.to_lowercase();
-    if lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid.*key") {
+    if lower.contains("401") || lower.contains("unauthorized")
+        || lower.contains("invalid key") || lower.contains("invalid api key") || lower.contains("invalid_key") {
         ("🔑", Some("Check your API key with `/login` or set ANTHROPIC_API_KEY"))
     } else if lower.contains("403") || lower.contains("forbidden") || lower.contains("permission") {
         ("🚫", Some("Your API key may lack the required permissions"))
@@ -443,6 +464,19 @@ mod tests {
         let p = r"very\deep\nested\path\to\file.rs";
         let result = short_path(p);
         assert_eq!(result, r"path\to\file.rs");
+    }
+
+    #[test]
+    fn test_short_path_mixed_separators() {
+        // C:\Users\alice/repo/src/main.rs → 6 segments, keep last 3
+        let p = r"C:\Users\alice/repo/src/main.rs";
+        let result = short_path(p);
+        assert_eq!(result, "repo/src/main.rs");
+    }
+
+    #[test]
+    fn test_short_path_single_component() {
+        assert_eq!(short_path("file.rs"), "file.rs");
     }
 
     // ── format_tool_start ────────────────────────────────────────────

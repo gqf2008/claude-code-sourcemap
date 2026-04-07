@@ -270,4 +270,31 @@ mod tests {
         assert_eq!(r.line_buf, "hello");
         r.finish();
     }
+
+    #[test]
+    fn test_find_double_closing_at_end() {
+        // "bold**" — delimiter at very end of string
+        let chars: Vec<char> = "bold**".chars().collect();
+        assert_eq!(find_double_closing(&chars, 0, '*'), Some(4));
+    }
+
+    #[test]
+    fn test_find_double_closing_not_found() {
+        let chars: Vec<char> = "no delimiters".chars().collect();
+        assert_eq!(find_double_closing(&chars, 0, '*'), None);
+    }
+
+    #[test]
+    fn test_find_closing_not_found() {
+        let chars: Vec<char> = "no backtick".chars().collect();
+        assert_eq!(find_closing(&chars, 0, '`'), None);
+    }
+
+    #[test]
+    fn test_strip_numbered_list_edge_cases() {
+        assert_eq!(strip_numbered_list("0. Zero"), Some("Zero"));
+        assert_eq!(strip_numbered_list("99. Ninety-nine"), Some("Ninety-nine"));
+        assert_eq!(strip_numbered_list("1.No space"), None);
+        assert_eq!(strip_numbered_list(". Dot"), None);
+    }
 }
