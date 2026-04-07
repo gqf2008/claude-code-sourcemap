@@ -265,11 +265,29 @@ impl Tool for BashTool {
             .map_err(|e| anyhow::anyhow!("Failed to execute: {}", e))?;
 
         let child_id = child.id();
+        let abort = context.abort_signal.clone();
 
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            child.wait_with_output(),
-        ).await {
+        // Race: child completion vs timeout vs abort signal
+        let result = tokio::select! {
+            r = tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                child.wait_with_output(),
+            ) => r,
+            _ = async {
+                loop {
+                    if abort.is_aborted() { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            } => {
+                // Abort signal fired — kill the child
+                if let Some(pid) = child_id {
+                    kill_process(pid);
+                }
+                return Ok(ToolResult::error("Interrupted by user (Ctrl+C)".to_string()));
+            }
+        };
+
+        match result {
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,15 +327,20 @@ impl Tool for BashTool {
             Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {}", e)),
             Err(_) => {
                 if let Some(pid) = child_id {
-                    #[cfg(unix)]
-                    { let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).status(); }
-                    #[cfg(windows)]
-                    { let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status(); }
+                    kill_process(pid);
                 }
                 Ok(ToolResult::error(format!("Command timed out after {}ms", timeout_ms)))
             }
         }
     }
+}
+
+/// Kill a child process by PID (platform-specific).
+fn kill_process(pid: u32) {
+    #[cfg(unix)]
+    { let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).status(); }
+    #[cfg(windows)]
+    { let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status(); }
 }
 
 #[cfg(test)]
@@ -503,5 +526,38 @@ mod tests {
         let (ok, note) = interpret_exit_code("rm foo", 1);
         assert!(!ok);
         assert!(note.is_none());
+    }
+
+    // ── abort-triggered child kill ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_bash_abort_interrupts_long_command() {
+        use claude_core::tool::{AbortSignal, Tool, ToolContext};
+        use claude_core::permissions::PermissionMode;
+
+        let tool = BashTool;
+        let abort = AbortSignal::new();
+
+        // Set abort BEFORE calling the tool
+        abort.abort();
+
+        let ctx = ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: abort,
+            permission_mode: PermissionMode::BypassAll,
+            messages: Vec::new(),
+        };
+
+        // Use a long-running command; abort should stop it immediately
+        let cmd = if cfg!(windows) { "ping 127.0.0.1 -n 60" } else { "sleep 60" };
+        let result = tool.call(
+            serde_json::json!({ "command": cmd }),
+            &ctx,
+        ).await.unwrap();
+
+        // Should be interrupted, not timed out
+        assert!(result.is_error, "Expected error result for interrupted command");
+        let text = format!("{:?}", result.content);
+        assert!(text.contains("Interrupted"), "Expected 'Interrupted', got: {}", text);
     }
 }

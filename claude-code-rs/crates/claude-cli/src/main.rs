@@ -201,7 +201,10 @@ async fn main() -> anyhow::Result<()> {
 
     let engine = engine.build();
 
-    // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
+    // ── Ctrl-C → abort signal (second press → force exit) ────────────────
+    // We use a shared counter to track Ctrl-C presses.
+    // First press: set abort signal (tools will check and exit early).
+    // Second press: force exit (session save is attempted in REPL on normal exit).
     {
         let abort = engine.abort_signal();
         tokio::spawn(async move {

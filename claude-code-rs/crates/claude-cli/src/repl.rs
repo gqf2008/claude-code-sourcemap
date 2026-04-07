@@ -263,6 +263,10 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     if engine.abort_signal().is_aborted() {
                         eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
                         engine.abort_signal().reset();
+                        // Save session immediately after interrupt to prevent data loss
+                        // if user force-exits with a second Ctrl+C
+                        let _ = engine.save_session().await;
+                        turns_since_save = 0;
                     } else {
                         eprintln!("\x1b[31mError: {}\x1b[0m", e);
                     }

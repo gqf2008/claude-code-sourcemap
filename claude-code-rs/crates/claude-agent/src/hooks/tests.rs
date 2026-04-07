@@ -189,6 +189,16 @@ fn test_interpret_injection_events_list() {
     }
 }
 
+#[test]
+fn test_interpret_modify_without_input_no_panic() {
+    // Previously this would panic with .expect("input checked above")
+    // Now it gracefully falls through when "modify" has no input
+    let json = r#"{"decision":"modify"}"#;
+    let d = interpret_output(HookEvent::PreToolUse, 0, json.into());
+    // Should NOT panic; falls through to Continue for non-injection events
+    assert!(matches!(d, HookDecision::Continue), "expected Continue, got {:?}", d);
+}
+
 // ── HookRegistry ─────────────────────────────────────────────────────
 
 fn make_rule(matcher: Option<&str>, command: &str) -> HookRule {

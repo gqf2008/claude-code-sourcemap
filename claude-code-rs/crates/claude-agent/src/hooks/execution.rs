@@ -107,8 +107,8 @@ pub(super) fn interpret_output(event: HookEvent, exit_code: i32, stdout: String)
                     Some("block") => return HookDecision::Block {
                         reason: resp.reason.unwrap_or(stdout),
                     },
-                    Some("modify") if resp.input.is_some() => return HookDecision::ModifyInput {
-                        new_input: resp.input.expect("input checked above"),
+                    Some("modify") => if let Some(new_input) = resp.input {
+                        return HookDecision::ModifyInput { new_input };
                     },
                     // Explicit "approve" or "continue" → don't treat stdout as context
                     Some("approve") | Some("continue") | Some("") => return HookDecision::Continue,
