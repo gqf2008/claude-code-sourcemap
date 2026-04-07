@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Doctor,
     Init,
     Commit { message: String },
+    CommitPushPr { message: String },
     Pr { prompt: String },
     Bug { prompt: String },
     Search { query: String },
@@ -58,6 +59,7 @@ impl SlashCommand {
             "doctor" => Self::Doctor,
             "init" => Self::Init,
             "commit" => Self::Commit { message: args },
+            "commit-push-pr" | "cpp" => Self::CommitPushPr { message: args },
             "pr" => Self::Pr { prompt: args },
             "bug" | "debug" => Self::Bug { prompt: args },
             "search" | "find" | "grep" => Self::Search { query: args },
@@ -126,6 +128,7 @@ impl SlashCommand {
             Self::Doctor => CommandResult::Doctor,
             Self::Init => CommandResult::Init,
             Self::Commit { message } => CommandResult::Commit { message: message.clone() },
+            Self::CommitPushPr { message } => CommandResult::CommitPushPr { message: message.clone() },
             Self::Pr { prompt } => CommandResult::Pr { prompt: prompt.clone() },
             Self::Bug { prompt } => CommandResult::Bug { prompt: prompt.clone() },
             Self::Search { query } => CommandResult::Search { query: query.clone() },
@@ -165,6 +168,7 @@ pub enum CommandResult {
     Doctor,
     Init,
     Commit { message: String },
+    CommitPushPr { message: String },
     Pr { prompt: String },
     Bug { prompt: String },
     Search { query: String },
@@ -203,6 +207,7 @@ const HELP_TEXT_BASE: &str = "\
   /diff              Show git diff (staged + unstaged)
   /status            Show session and git status
   /commit [msg]      Stage and commit (AI-generated message)
+  /commit-push-pr    Commit → push → create PR (alias: /cpp)
   /pr [prompt]       Create/review a pull request
   /bug [prompt]      Debug a problem with AI assistance
   /review [prompt]   AI code review on recent changes
@@ -593,5 +598,41 @@ mod tests {
     fn test_help_text_includes_mcp() {
         let text = build_help_text(&no_skills());
         assert!(text.contains("/mcp"));
+    }
+
+    // ── P40 commands ───────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_commit_push_pr() {
+        let s = no_skills();
+        match SlashCommand::parse("/commit-push-pr add feature", &s) {
+            Some(SlashCommand::CommitPushPr { message }) => assert_eq!(message, "add feature"),
+            _ => panic!("expected CommitPushPr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cpp_alias() {
+        let s = no_skills();
+        match SlashCommand::parse("/cpp", &s) {
+            Some(SlashCommand::CommitPushPr { message }) => assert!(message.is_empty()),
+            _ => panic!("expected CommitPushPr via /cpp alias"),
+        }
+    }
+
+    #[test]
+    fn test_execute_commit_push_pr() {
+        let cmd = SlashCommand::CommitPushPr { message: "new feature".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::CommitPushPr { message } => assert_eq!(message, "new feature"),
+            _ => panic!("expected CommitPushPr"),
+        }
+    }
+
+    #[test]
+    fn test_help_text_includes_cpp() {
+        let text = build_help_text(&no_skills());
+        assert!(text.contains("/commit-push-pr"));
+        assert!(text.contains("/cpp"));
     }
 }

@@ -153,6 +153,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             CommandResult::Commit { message } => {
                                 handle_commit(&engine, &cwd, &message).await;
                             }
+                            CommandResult::CommitPushPr { message } => {
+                                handle_commit_push_pr(&engine, &cwd, &message).await;
+                            }
                             CommandResult::Pr { prompt } => {
                                 handle_pr(&engine, &prompt, &cwd).await;
                             }
