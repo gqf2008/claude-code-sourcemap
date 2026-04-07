@@ -83,6 +83,18 @@ impl CostTracker {
             format_number(total_input), format_number(total_output)));
         lines.push(format!("  Turns:        {}", turn_count));
 
+        // Aggregate cache stats across all models
+        let total_cache_read: u64 = inner.by_model.values().map(|u| u.cache_read_tokens).sum();
+        let total_cache_write: u64 = inner.by_model.values().map(|u| u.cache_creation_tokens).sum();
+        if total_cache_read > 0 || total_cache_write > 0 {
+            let total_cache = total_cache_read + total_cache_write;
+            let hit_rate = if total_cache > 0 {
+                total_cache_read as f64 / total_cache as f64 * 100.0
+            } else { 0.0 };
+            lines.push(format!("  Cache:        {} read, {} write ({:.0}% hit rate)",
+                format_number(total_cache_read), format_number(total_cache_write), hit_rate));
+        }
+
         if !inner.by_model.is_empty() {
             lines.push(String::new());
             lines.push("  Usage by model:".to_string());
