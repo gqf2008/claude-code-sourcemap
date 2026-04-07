@@ -19,7 +19,7 @@ const SLASH_COMMANDS: &[&str] = &[
     "/help", "/clear", "/model", "/compact", "/cost", "/skills", "/memory",
     "/session", "/diff", "/status", "/permissions", "/config", "/undo",
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
-    "/bug", "/search", "/version", "/login", "/logout", "/context",
+    "/bug", "/search", "/history", "/version", "/login", "/logout", "/context",
     "/export", "/reload-context", "/mcp", "/plugin", "/exit",
 ];
 
@@ -273,6 +273,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             }
                             CommandResult::Search { query } => {
                                 handle_search(&engine, &query).await;
+                            }
+                            CommandResult::History { page } => {
+                                handle_history(&engine, page).await;
                             }
                             CommandResult::Login => {
                                 handle_login();

@@ -22,6 +22,7 @@ pub enum SlashCommand {
     Pr { prompt: String },
     Bug { prompt: String },
     Search { query: String },
+    History { page: usize },
     Version,
     Login,
     Logout,
@@ -66,6 +67,7 @@ impl SlashCommand {
             "pr" => Self::Pr { prompt: args },
             "bug" | "debug" => Self::Bug { prompt: args },
             "search" | "find" | "grep" => Self::Search { query: args },
+            "history" => Self::History { page: args.parse().unwrap_or(1) },
             "version" => Self::Version,
             "login" => Self::Login,
             "logout" => Self::Logout,
@@ -136,6 +138,7 @@ impl SlashCommand {
             Self::Pr { prompt } => CommandResult::Pr { prompt: prompt.clone() },
             Self::Bug { prompt } => CommandResult::Bug { prompt: prompt.clone() },
             Self::Search { query } => CommandResult::Search { query: query.clone() },
+            Self::History { page } => CommandResult::History { page: *page },
             Self::Version => CommandResult::Print(format!("claude-code-rs v{}", env!("CARGO_PKG_VERSION"))),
             Self::Login => CommandResult::Login,
             Self::Logout => CommandResult::Logout,
@@ -181,6 +184,7 @@ pub enum CommandResult {
     Pr { prompt: String },
     Bug { prompt: String },
     Search { query: String },
+    History { page: usize },
     Login,
     Logout,
     Context,
@@ -224,6 +228,7 @@ const HELP_TEXT_BASE: &str = "\
   /compact [instr]   Compact conversation to free tokens
   /undo              Undo last assistant turn
   /search <query>    Search conversation history
+  /history [page]    Browse conversation turns
   /cost              Show token usage and costs
   /exit              Exit the CLI
 
@@ -699,5 +704,40 @@ mod tests {
     fn test_help_text_no_plugin_section_when_empty() {
         let text = build_help_text(&no_skills(), &no_plugins());
         assert!(!text.contains("Plugins"));
+    }
+
+    // ── /history command ──────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_history_default() {
+        let s = no_skills();
+        match SlashCommand::parse("/history", &s) {
+            Some(SlashCommand::History { page }) => assert_eq!(page, 1),
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_with_page() {
+        let s = no_skills();
+        match SlashCommand::parse("/history 3", &s) {
+            Some(SlashCommand::History { page }) => assert_eq!(page, 3),
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn test_execute_history() {
+        let cmd = SlashCommand::History { page: 2 };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::History { page } => assert_eq!(page, 2),
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn test_help_text_includes_history() {
+        let text = build_help_text(&no_skills(), &no_plugins());
+        assert!(text.contains("/history"));
     }
 }

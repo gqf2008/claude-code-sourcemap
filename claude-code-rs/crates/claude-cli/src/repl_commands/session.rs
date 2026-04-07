@@ -331,3 +331,116 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         }
     }
 }
+
+/// Browse conversation turns with pagination.
+///
+/// Shows 10 messages per page with role labels and truncated content.
+pub(crate) async fn handle_history(engine: &QueryEngine, page: usize) {
+    let state = engine.state().read().await;
+    if state.messages.is_empty() {
+        println!("No conversation history.");
+        return;
+    }
+
+    let per_page = 10;
+    let total = state.messages.len();
+    let total_pages = total.div_ceil(per_page);
+    let page = page.clamp(1, total_pages);
+    let start = (page - 1) * per_page;
+    let end = (start + per_page).min(total);
+
+    println!(
+        "\x1b[1mConversation History\x1b[0m — page {}/{} ({} messages total)\n",
+        page, total_pages, total
+    );
+
+    for idx in start..end {
+        let msg = &state.messages[idx];
+        let (role, role_color, preview) = match msg {
+            claude_core::message::Message::User(u) => {
+                let text = u.content.iter().find_map(|b| match b {
+                    claude_core::message::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).unwrap_or("");
+                ("user", "\x1b[36m", truncate_preview(text, 80))
+            }
+            claude_core::message::Message::Assistant(a) => {
+                let text_blocks: Vec<&str> = a.content.iter().filter_map(|b| match b {
+                    claude_core::message::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect();
+                let tool_count = a.content.iter().filter(|b| matches!(b, claude_core::message::ContentBlock::ToolUse { .. })).count();
+                let preview = if text_blocks.is_empty() && tool_count > 0 {
+                    format!("[{} tool call(s)]", tool_count)
+                } else {
+                    let combined = text_blocks.join(" ");
+                    let suffix = if tool_count > 0 {
+                        format!(" [+{} tool(s)]", tool_count)
+                    } else {
+                        String::new()
+                    };
+                    format!("{}{}", truncate_preview(&combined, 70), suffix)
+                };
+                ("assistant", "\x1b[33m", preview)
+            }
+            claude_core::message::Message::System(s) => {
+                ("system", "\x1b[2m", truncate_preview(&s.message, 80))
+            }
+        };
+
+        println!(
+            "  \x1b[2m#{:<3}\x1b[0m {}[{}]\x1b[0m {}",
+            idx + 1,
+            role_color,
+            role,
+            preview,
+        );
+    }
+
+    if total_pages > 1 {
+        println!("\n\x1b[2mUse /history {} for next page\x1b[0m", if page < total_pages { page + 1 } else { 1 });
+    }
+}
+
+/// Truncate a string to `max_chars` and add ellipsis if needed.
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    let clean = text.replace('\n', " ").replace('\r', "");
+    let clean = clean.trim();
+    if clean.chars().count() <= max_chars {
+        clean.to_string()
+    } else {
+        let truncated: String = clean.chars().take(max_chars).collect();
+        format!("{}…", truncated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_preview_short() {
+        assert_eq!(truncate_preview("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_preview_exact() {
+        assert_eq!(truncate_preview("12345", 5), "12345");
+    }
+
+    #[test]
+    fn test_truncate_preview_long() {
+        let result = truncate_preview("hello world this is a long string", 10);
+        assert_eq!(result, "hello worl…");
+    }
+
+    #[test]
+    fn test_truncate_preview_newlines() {
+        assert_eq!(truncate_preview("line1\nline2\nline3", 20), "line1 line2 line3");
+    }
+
+    #[test]
+    fn test_truncate_preview_whitespace_trim() {
+        assert_eq!(truncate_preview("  hello  ", 10), "hello");
+    }
+}

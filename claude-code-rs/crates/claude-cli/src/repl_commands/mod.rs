@@ -20,7 +20,7 @@ mod mcp;
 
 // Re-export all handlers so callers can `use crate::repl_commands::*`
 pub(crate) use memory::handle_memory_command;
-pub(crate) use session::{handle_session_command, handle_undo, handle_export, handle_search};
+pub(crate) use session::{handle_session_command, handle_undo, handle_export, handle_search, handle_history};
 pub(crate) use config::{handle_config_command, handle_context, handle_login, handle_logout, handle_reload_context};
 pub(crate) use doctor::handle_doctor;
 pub(crate) use review::handle_review;
