@@ -1,4 +1,5 @@
 use claude_agent::engine::QueryEngine;
+use claude_agent::plugin::PluginLoader;
 use claude_core::skills::SkillEntry;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -74,6 +75,27 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 if trimmed.starts_with('/') {
                     let _ = rl.add_history_entry(trimmed);
                     if let Some(cmd) = SlashCommand::parse(trimmed, &skills) {
+                        // Resolve Unknown commands: check if they match a plugin command
+                        let cmd = if let SlashCommand::Unknown(ref name) = cmd {
+                            let loader = PluginLoader::discover(&cwd);
+                            let found = loader.all_commands().into_iter()
+                                .find(|(_, c)| c.name == *name);
+                            if let Some((plugin, pcmd)) = found {
+                                if let Some(prompt) = PluginLoader::command_prompt(plugin, pcmd) {
+                                    SlashCommand::RunPluginCommand {
+                                        name: name.clone(),
+                                        prompt,
+                                    }
+                                } else {
+                                    eprintln!("\x1b[33mPlugin command /{} has no prompt file\x1b[0m", name);
+                                    cmd
+                                }
+                            } else {
+                                cmd
+                            }
+                        } else {
+                            cmd
+                        };
                         match cmd.execute(&skills) {
                             CommandResult::Print(text) => println!("{}", text),
                             CommandResult::Exit => { println!("Goodbye!"); break; }
@@ -188,6 +210,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             }
                             CommandResult::RunSkill { name, prompt } => {
                                 run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
+                            }
+                            CommandResult::RunPluginCommand { name, prompt } => {
+                                handle_plugin_run(&engine, &name, &prompt).await;
                             }
                         }
                     }

@@ -55,7 +55,38 @@ fn format_tool_result_inline(name: &str, text: &str) -> Option<String> {
             };
             Some(format!("\x1b[2m  │ {}\x1b[0m", truncated))
         }
+        "Edit" | "FileEdit" | "MultiEdit" | "MultiEditTool" => {
+            // Parse "+N -N lines" from result text and colorize
+            if let Some(stats) = parse_edit_stats(text) {
+                Some(format!("  │ {}", stats))
+            } else {
+                let first_line = text.lines().next().unwrap_or(text);
+                Some(format!("\x1b[2m  │ {}\x1b[0m", first_line))
+            }
+        }
+        "Write" | "FileWrite" => {
+            let first_line = text.lines().next().unwrap_or(text);
+            Some(format!("\x1b[2m  │ {}\x1b[0m", first_line))
+        }
         _ => None,
+    }
+}
+
+/// Parse "+N -N lines" from edit result text and return a colored string.
+fn parse_edit_stats(text: &str) -> Option<String> {
+    // Match pattern: "(+N -N lines)"
+    let paren_start = text.find("(+")?;
+    let paren_end = text[paren_start..].find(')')? + paren_start;
+    let inner = &text[paren_start + 1..paren_end]; // "+N -N lines"
+    let parts: Vec<&str> = inner.split_whitespace().collect();
+    if parts.len() >= 2 {
+        let added = parts[0]; // "+N"
+        let removed = parts[1]; // "-N"
+        let path = text.split(" (+").next().unwrap_or("");
+        let path_short = short_path(path.trim_start_matches("Edited ").trim_start_matches("Wrote "));
+        Some(format!("\x1b[2m{}\x1b[0m \x1b[32m{}\x1b[0m \x1b[31m{}\x1b[0m", path_short, added, removed))
+    } else {
+        None
     }
 }
 
@@ -608,5 +639,44 @@ mod tests {
         let (icon, hint) = categorize_error("something unexpected happened");
         assert_eq!(icon, "❌");
         assert!(hint.is_none());
+    }
+
+    // ── parse_edit_stats ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_edit_stats_normal() {
+        let result = parse_edit_stats("Edited src/main.rs (+3 -1 lines)");
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!(s.contains("+3"));
+        assert!(s.contains("-1"));
+    }
+
+    #[test]
+    fn test_parse_edit_stats_no_match() {
+        let result = parse_edit_stats("Edited src/main.rs");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_format_result_inline_edit_tool() {
+        let result = format_tool_result_inline("Edit", "Edited src/main.rs (+5 -2 lines)");
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!(s.contains("+5"));
+        assert!(s.contains("-2"));
+    }
+
+    #[test]
+    fn test_format_result_inline_write_tool() {
+        let result = format_tool_result_inline("Write", "Wrote src/new.rs");
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Wrote src/new.rs"));
+    }
+
+    #[test]
+    fn test_format_result_inline_multi_edit() {
+        let result = format_tool_result_inline("MultiEdit", "Edited a.rs (+1 -1 lines), b.rs (+2 -0 lines)");
+        assert!(result.is_some());
     }
 }

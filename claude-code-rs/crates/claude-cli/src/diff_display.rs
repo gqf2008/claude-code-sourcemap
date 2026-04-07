@@ -2,8 +2,6 @@
 //!
 //! Renders unified diffs with red/green coloring and optional word-level highlighting.
 //! Used by `/review`, permission dialogs, and file edit previews.
-#![allow(dead_code)]
-
 use similar::{ChangeTag, TextDiff};
 use std::io::Write;
 
@@ -51,6 +49,7 @@ pub fn print_diff(old: &str, new: &str, file_path: Option<&str>) {
 
 /// Display a compact inline diff for short text changes.
 /// Shows old text struck through in red and new text in green on the same line.
+#[allow(dead_code)]
 pub fn print_inline_diff(old: &str, new: &str) {
     let diff = TextDiff::from_words(old, new);
     for change in diff.iter_all_changes() {

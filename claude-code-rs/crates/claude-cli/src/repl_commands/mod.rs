@@ -114,27 +114,68 @@ pub(crate) fn handle_plugin_command(sub: &str, cwd: &std::path::Path) {
     }
 }
 
-/// Show git diff (staged + unstaged).
+/// Execute a plugin command by sending its prompt to the engine.
+pub(crate) async fn handle_plugin_run(engine: &QueryEngine, name: &str, prompt: &str) {
+    eprintln!("\x1b[36m🔌 Running plugin command: /{}\x1b[0m", name);
+    let stream = engine.submit(prompt).await;
+    let cost = engine.cost_tracker();
+    let model = {
+        let s = engine.state().read().await;
+        s.model.clone()
+    };
+    if let Err(e) = crate::output::print_stream(stream, &model, Some(cost)).await {
+        eprintln!("\x1b[31mPlugin command error: {}\x1b[0m", e);
+    }
+}
+
+/// Show git diff (staged + unstaged) with structured coloring.
 pub(crate) fn handle_diff_command(cwd: &std::path::Path) {
-    let output = std::process::Command::new("git")
-        .args(["diff", "HEAD"])
+    // Get list of changed files for per-file diff
+    let files_out = std::process::Command::new("git")
+        .args(["diff", "HEAD", "--name-only"])
         .current_dir(cwd)
         .output();
 
-    match output {
-        Ok(out) => {
-            let diff = String::from_utf8_lossy(&out.stdout);
-            if diff.is_empty() {
-                println!("No changes (working tree is clean).");
-            } else {
-                println!("{}", diff);
-            }
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if !stderr.is_empty() && !out.status.success() {
-                eprintln!("\x1b[31m{}\x1b[0m", stderr.trim());
-            }
+    let files: Vec<String> = match files_out {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        Err(e) => {
+            eprintln!("\x1b[31mFailed to run git diff: {}\x1b[0m", e);
+            return;
         }
-        Err(e) => eprintln!("\x1b[31mFailed to run git diff: {}\x1b[0m", e),
+    };
+
+    if files.is_empty() {
+        println!("No changes (working tree is clean).");
+        return;
+    }
+
+    println!("\x1b[1m{} file(s) changed:\x1b[0m\n", files.len());
+
+    for file in &files {
+        // Get old (HEAD) and new (working tree) content
+        let old = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{}", file)])
+            .current_dir(cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let new_path = cwd.join(file);
+        let new = std::fs::read_to_string(&new_path).unwrap_or_default();
+
+        if old == new {
+            continue;
+        }
+
+        crate::diff_display::print_diff(&old, &new, Some(file));
+        let stats = crate::diff_display::diff_stats(&old, &new);
+        eprintln!("  {}\n", stats);
     }
 }
 

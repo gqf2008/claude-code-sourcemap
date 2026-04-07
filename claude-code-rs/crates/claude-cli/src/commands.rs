@@ -31,6 +31,8 @@ pub enum SlashCommand {
     ReloadContext,
     Mcp { sub: String },
     Plugin { sub: String },
+    /// Run a command defined by a plugin.
+    RunPluginCommand { name: String, prompt: String },
     Exit,
     Unknown(String),
 }
@@ -146,6 +148,10 @@ impl SlashCommand {
                 name: name.clone(),
                 prompt: prompt.clone(),
             },
+            Self::RunPluginCommand { name, prompt } => CommandResult::RunPluginCommand {
+                name: name.clone(),
+                prompt: prompt.clone(),
+            },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -183,6 +189,8 @@ pub enum CommandResult {
     ReloadContext,
     Mcp { sub: String },
     Plugin { sub: String },
+    /// Execute a plugin-defined command (prompt sent to engine).
+    RunPluginCommand { name: String, prompt: String },
     Exit,
 }
 
@@ -639,5 +647,27 @@ mod tests {
         let text = build_help_text(&no_skills());
         assert!(text.contains("/commit-push-pr"));
         assert!(text.contains("/cpp"));
+    }
+
+    #[test]
+    fn test_execute_run_plugin_command() {
+        let cmd = SlashCommand::RunPluginCommand {
+            name: "my-cmd".into(),
+            prompt: "Do something special".into(),
+        };
+        match cmd.execute(&no_skills()) {
+            CommandResult::RunPluginCommand { name, prompt } => {
+                assert_eq!(name, "my-cmd");
+                assert_eq!(prompt, "Do something special");
+            }
+            _ => panic!("expected RunPluginCommand"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_command_falls_through_to_unknown() {
+        // A name that is not a builtin or skill should be Unknown
+        let cmd = SlashCommand::parse("/my-custom-plugin-cmd", &no_skills());
+        assert!(matches!(cmd, Some(SlashCommand::Unknown(_))));
     }
 }
