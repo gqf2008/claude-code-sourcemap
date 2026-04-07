@@ -137,3 +137,126 @@ impl Tool for MultiEditTool {
 fn truncate(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+    use tempfile::TempDir;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> &str {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.as_str(),
+            _ => "",
+        }
+    }
+
+    #[tokio::test]
+    async fn single_edit_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "hello", "new_string": "goodbye"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "goodbye world");
+    }
+
+    #[tokio::test]
+    async fn multiple_non_overlapping_edits() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "aaa bbb ccc").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [
+                {"old_string": "aaa", "new_string": "AAA"},
+                {"old_string": "ccc", "new_string": "CCC"}
+            ]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "AAA bbb CCC");
+    }
+
+    #[tokio::test]
+    async fn old_string_not_found_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "missing", "new_string": "x"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn non_unique_old_string_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "aaa bbb aaa").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "aaa", "new_string": "x"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("2 times"));
+    }
+
+    #[tokio::test]
+    async fn empty_edits_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": []
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("No edits"));
+    }
+
+    #[tokio::test]
+    async fn empty_old_string_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "", "new_string": "x"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("empty"));
+    }
+}

@@ -674,3 +674,161 @@ async fn e2e_permission_denied_returns_error_tool_result() {
     let s = state.read().await;
     assert!(s.messages.len() >= 3, "expected at least user + tool_assistant + tool_result messages");
 }
+
+#[tokio::test]
+async fn e2e_tool_execution_error_returns_error_result() {
+    /// A tool that always fails with an error.
+    struct FailingTool;
+    #[async_trait::async_trait]
+    impl claude_core::tool::Tool for FailingTool {
+        fn name(&self) -> &str { "fail_tool" }
+        fn description(&self) -> &str { "Always fails" }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": { "reason": { "type": "string" } } })
+        }
+        async fn call(&self, _input: serde_json::Value, _ctx: &claude_core::tool::ToolContext) -> anyhow::Result<claude_core::tool::ToolResult> {
+            anyhow::bail!("Disk full: cannot write to /tmp/output")
+        }
+        fn is_read_only(&self) -> bool { true }
+        fn category(&self) -> claude_core::tool::ToolCategory { claude_core::tool::ToolCategory::Session }
+    }
+
+    let tool_response = mock_tool_response("t1", "fail_tool", serde_json::json!({"reason": "test"}));
+    let text_response = mock_text_response("The tool failed, let me try something else.");
+
+    let mock = MockBackend::new()
+        .with_stream_events(make_stream_events(tool_response))
+        .with_stream_events(make_stream_events(text_response));
+
+    let client = Arc::new(
+        claude_api::client::ApiClient::new("test-key")
+            .with_backend(Box::new(mock)),
+    );
+    let mut registry = claude_tools::ToolRegistry::new();
+    registry.register(FailingTool);
+    let registry = Arc::new(registry);
+    let perm = Arc::new(crate::permissions::PermissionChecker::new(
+        claude_core::permissions::PermissionMode::Default,
+        vec![],
+    ));
+    let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+    let state = crate::state::new_shared_state();
+    let tool_context = claude_core::tool::ToolContext {
+        cwd: std::env::temp_dir(),
+        abort_signal: claude_core::tool::AbortSignal::new(),
+        permission_mode: claude_core::permissions::PermissionMode::Default,
+        messages: vec![],
+    };
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+
+    let events = collect_events(client, executor, state.clone(), tool_context, config, user_msg("Run the tool"), hooks).await;
+
+    // Tool result with error should be emitted
+    let has_tool_result = events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. }));
+    assert!(has_tool_result, "expected tool result with error, got: {:?}", events);
+
+    // Loop should continue — model sees the error and responds
+    let has_final_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("tool failed")));
+    assert!(has_final_text, "expected model to continue after tool error");
+}
+
+#[tokio::test]
+async fn e2e_unknown_tool_returns_error_result() {
+    // Model calls a tool that isn't registered
+    let tool_response = mock_tool_response("t1", "nonexistent_tool", serde_json::json!({}));
+    let text_response = mock_text_response("That tool doesn't exist.");
+
+    let mock = MockBackend::new()
+        .with_stream_events(make_stream_events(tool_response))
+        .with_stream_events(make_stream_events(text_response));
+    let (client, executor, state, tool_context, hooks) = test_setup(mock);
+
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+    let events = collect_events(client, executor, state.clone(), tool_context, config, user_msg("Use the tool"), hooks).await;
+
+    // Should get a tool result (with error about unknown tool)
+    let has_tool_result = events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. }));
+    assert!(has_tool_result, "expected error tool result for unknown tool");
+
+    // The loop should continue with model responding
+    let s = state.read().await;
+    assert!(s.messages.len() >= 3, "expected at least 3 messages after unknown tool");
+}
+
+#[tokio::test]
+async fn e2e_text_and_tool_use_in_same_response() {
+    /// Echo tool for this test
+    struct EchoTool2;
+    #[async_trait::async_trait]
+    impl claude_core::tool::Tool for EchoTool2 {
+        fn name(&self) -> &str { "echo" }
+        fn description(&self) -> &str { "Echo input" }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": { "text": { "type": "string" } } })
+        }
+        async fn call(&self, input: serde_json::Value, _ctx: &claude_core::tool::ToolContext) -> anyhow::Result<claude_core::tool::ToolResult> {
+            Ok(claude_core::tool::ToolResult::text(format!("Echo: {}", input["text"].as_str().unwrap_or(""))))
+        }
+        fn is_read_only(&self) -> bool { true }
+        fn category(&self) -> claude_core::tool::ToolCategory { claude_core::tool::ToolCategory::Session }
+    }
+
+    // Response with both text and tool_use
+    let mixed = MessagesResponse {
+        id: "msg_mix".into(),
+        response_type: "message".into(),
+        role: "assistant".into(),
+        content: vec![
+            ResponseContentBlock::Text { text: "Let me check that for you.".into() },
+            ResponseContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "echo".into(),
+                input: serde_json::json!({"text": "hello"}),
+            },
+        ],
+        model: "claude-sonnet-4-20250514".into(),
+        stop_reason: Some("tool_use".into()),
+        usage: ApiUsage { input_tokens: 100, output_tokens: 50,
+            cache_creation_input_tokens: None, cache_read_input_tokens: None },
+    };
+    let final_text = mock_text_response("Done! The echo returned: hello");
+
+    let mock = MockBackend::new()
+        .with_stream_events(make_stream_events(mixed))
+        .with_stream_events(make_stream_events(final_text));
+
+    let client = Arc::new(
+        claude_api::client::ApiClient::new("test-key")
+            .with_backend(Box::new(mock)),
+    );
+    let mut registry = claude_tools::ToolRegistry::new();
+    registry.register(EchoTool2);
+    let registry = Arc::new(registry);
+    let perm = Arc::new(crate::permissions::PermissionChecker::new(
+        claude_core::permissions::PermissionMode::Default, vec![],
+    ));
+    let executor = Arc::new(crate::executor::ToolExecutor::new(registry, perm));
+    let state = crate::state::new_shared_state();
+    let tool_context = claude_core::tool::ToolContext {
+        cwd: std::env::temp_dir(),
+        abort_signal: claude_core::tool::AbortSignal::new(),
+        permission_mode: claude_core::permissions::PermissionMode::Default,
+        messages: vec![],
+    };
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let config = QueryConfig { max_turns: 5, ..QueryConfig::default() };
+
+    let events = collect_events(client, executor, state, tool_context, config, user_msg("Echo hello"), hooks).await;
+
+    // Should have both text and tool events
+    let has_text = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("check that")));
+    let has_tool = events.iter().any(|e| matches!(e, AgentEvent::ToolUseStart { .. }));
+    let has_result = events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. }));
+    let has_final = events.iter().any(|e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Done!")));
+
+    assert!(has_text, "expected text before tool use");
+    assert!(has_tool, "expected tool use start");
+    assert!(has_result, "expected tool result");
+    assert!(has_final, "expected final text response");
+}

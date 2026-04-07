@@ -121,3 +121,98 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     }
     pattern == name
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+    use tempfile::TempDir;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn lists_empty_directory() {
+        let tmp = TempDir::new().unwrap();
+        let tool = LsTool;
+        let input = json!({"path": tmp.path().to_str().unwrap()});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("(empty)"));
+    }
+
+    #[tokio::test]
+    async fn lists_files_and_dirs() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("readme.md"), "hello").unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main(){}").unwrap();
+
+        let tool = LsTool;
+        let input = json!({"path": tmp.path().to_str().unwrap()});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        let text = result_text(&result);
+        // Dir first
+        assert!(text.find("src/").unwrap() < text.find("main.rs").unwrap());
+        assert!(text.contains("readme.md"));
+    }
+
+    #[tokio::test]
+    async fn ignore_pattern_works() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("app.log"), "log").unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "code").unwrap();
+
+        let tool = LsTool;
+        let input = json!({"path": tmp.path().to_str().unwrap(), "ignore": ["*.log"]});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        let text = result_text(&result);
+        assert!(!text.contains("app.log"));
+        assert!(text.contains("main.rs"));
+    }
+
+    #[tokio::test]
+    async fn nonexistent_path_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let tool = LsTool;
+        let input = json!({"path": tmp.path().join("nonexistent").to_str().unwrap()});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+    }
+
+    #[test]
+    fn human_size_formats() {
+        assert_eq!(human_size(0), "0B");
+        assert_eq!(human_size(512), "512B");
+        assert_eq!(human_size(1024), "1.0KB");
+        assert_eq!(human_size(1536), "1.5KB");
+        assert_eq!(human_size(1024 * 1024), "1.0MB");
+        assert_eq!(human_size(1024 * 1024 * 1024), "1.0GB");
+    }
+
+    #[test]
+    fn glob_match_patterns() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("*.log", "test.log"));
+        assert!(!glob_match("*.log", "test.txt"));
+        assert!(glob_match("node_modules*", "node_modules"));
+        assert!(glob_match("node_modules*", "node_modules_backup"));
+        assert!(!glob_match("node_modules*", "src"));
+        assert!(glob_match("exact", "exact"));
+        assert!(!glob_match("exact", "other"));
+    }
+}
