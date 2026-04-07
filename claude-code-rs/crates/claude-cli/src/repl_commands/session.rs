@@ -242,7 +242,7 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
 /// Search conversation history for a query string (case-insensitive).
 pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
     if query.is_empty() {
-        println!("Usage: /search <query>");
+        println!("Usage: /search <query>  (prefix with r/ for regex, e.g. /search r/fn\\s+main)");
         return;
     }
     let state = engine.state().read().await;
@@ -250,6 +250,22 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         println!("No conversation to search.");
         return;
     }
+
+    // Support regex: if query starts with "r/", treat the rest as a regex pattern
+    let is_regex = query.starts_with("r/");
+    let re = if is_regex {
+        let pattern = &query[2..];
+        match regex::RegexBuilder::new(pattern).case_insensitive(true).build() {
+            Ok(r) => Some(r),
+            Err(e) => {
+                println!("\x1b[31mInvalid regex: {}\x1b[0m", e);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let query_lower = query.to_lowercase();
     let mut hits: Vec<(usize, &str, String)> = Vec::new();
 
@@ -273,15 +289,23 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         };
 
         for text in texts {
-            let lower = text.to_lowercase();
-            if let Some(pos) = lower.find(&query_lower) {
-                // Work in char offsets for Unicode safety
-                let char_pos = lower[..pos].chars().count();
-                let query_char_len = query_lower.chars().count();
+            let found = if let Some(ref re) = re {
+                re.find(text).map(|m| (m.start(), m.end()))
+            } else {
+                let lower = text.to_lowercase();
+                lower.find(&query_lower).map(|pos| {
+                    let byte_end = pos + query_lower.len();
+                    (pos, byte_end)
+                })
+            };
+
+            if let Some((byte_start, byte_end)) = found {
+                let char_pos = text[..byte_start].chars().count();
+                let match_char_len = text[byte_start..byte_end].chars().count();
                 let total_chars = text.chars().count();
-                let ctx = 40; // context chars
+                let ctx = 40;
                 let start_char = char_pos.saturating_sub(ctx);
-                let end_char = (char_pos + query_char_len + ctx).min(total_chars);
+                let end_char = (char_pos + match_char_len + ctx).min(total_chars);
                 let snippet: String = text.chars().skip(start_char).take(end_char - start_char).collect();
                 let snippet = snippet.replace('\n', " ");
                 let prefix = if start_char > 0 { "…" } else { "" };
@@ -292,10 +316,11 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         }
     }
 
+    let display_query = if is_regex { &query[2..] } else { query };
     if hits.is_empty() {
-        println!("No matches for \"{}\".", query);
+        println!("No matches for \"{}\".", display_query);
     } else {
-        println!("\x1b[1m{} match(es) for \"{}\":\x1b[0m\n", hits.len(), query);
+        println!("\x1b[1m{} match(es) for \"{}\":\x1b[0m\n", hits.len(), display_query);
         for (idx, role, snippet) in &hits {
             let role_color = match *role {
                 "user" => "\x1b[36m",

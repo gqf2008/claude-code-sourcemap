@@ -346,6 +346,7 @@ dependencies = [
  "dirs",
  "futures",
  "indicatif",
+ "regex",
  "rpassword",
  "rustyline",
  "serde",
