@@ -2,8 +2,12 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
+use std::time::Duration;
 
 use crate::bash::truncate_output;
+
+/// Default timeout for git commands (30 seconds).
+const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// GitTool — safe wrapper for common git operations.
 ///
@@ -94,14 +98,25 @@ impl Tool for GitTool {
         let mut cmd_args = vec!["--no-pager".to_string(), subcommand.to_string()];
         cmd_args.extend(args);
 
-        let output = tokio::process::Command::new("git")
-            .args(&cmd_args)
-            .current_dir(&context.cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(&cmd_args)
+                .current_dir(&context.cwd)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        ).await;
+
+        let output = match output {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return Ok(ToolResult::error(format!("Git command failed to start: {}", e))),
+            Err(_) => return Ok(ToolResult::error(format!(
+                "Git command timed out after {}s. Consider breaking the operation into smaller steps.",
+                GIT_TIMEOUT.as_secs()
+            ))),
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -156,29 +171,33 @@ impl Tool for GitStatusTool {
     fn is_concurrency_safe(&self) -> bool { true }
 
     async fn call(&self, _input: Value, context: &ToolContext) -> anyhow::Result<ToolResult> {
-        // Get branch name + status in one go
-        let branch = tokio::process::Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(&context.cwd)
-            .output()
-            .await;
+        // Get branch name + status in one go (with timeout)
+        let branch = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["branch", "--show-current"])
+                .current_dir(&context.cwd)
+                .output()
+        ).await;
 
-        let status = tokio::process::Command::new("git")
-            .args(["status", "--porcelain", "-b"])
-            .current_dir(&context.cwd)
-            .output()
-            .await;
+        let status = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["status", "--porcelain", "-b"])
+                .current_dir(&context.cwd)
+                .output()
+        ).await;
 
         let mut text = String::new();
 
-        if let Ok(b) = branch {
+        if let Ok(Ok(b)) = branch {
             let name = String::from_utf8_lossy(&b.stdout).trim().to_string();
             if !name.is_empty() {
                 text.push_str(&format!("Branch: {}\n", name));
             }
         }
 
-        if let Ok(s) = status {
+        if let Ok(Ok(s)) = status {
             let lines = String::from_utf8_lossy(&s.stdout);
             let file_lines: Vec<&str> = lines.lines().skip(1).collect(); // skip ## branch line
             if file_lines.is_empty() {

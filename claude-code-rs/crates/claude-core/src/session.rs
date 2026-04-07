@@ -106,7 +106,7 @@ fn save_manifest(manifest: &SessionManifest) {
     let path = manifest_path();
     match serde_json::to_string_pretty(manifest) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
+            if let Err(e) = atomic_write(&path, json.as_bytes()) {
                 tracing::warn!("Failed to save session manifest: {}", e);
             }
         }
@@ -114,6 +114,18 @@ fn save_manifest(manifest: &SessionManifest) {
             tracing::warn!("Failed to serialize session manifest: {}", e);
         }
     }
+}
+
+/// Write data to a file atomically: write to a `.tmp` sibling, then rename.
+///
+/// On most filesystems `rename` is atomic, so readers never see a
+/// partially-written file. If the process crashes before rename, only the
+/// `.tmp` file is left (harmless).
+fn atomic_write(target: &Path, data: &[u8]) -> anyhow::Result<()> {
+    let tmp = target.with_extension("json.tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, target)?;
+    Ok(())
 }
 
 fn update_manifest_entry(meta: &SessionMeta) {
@@ -164,12 +176,19 @@ fn session_path_inner(id: &str) -> anyhow::Result<PathBuf> {
 // ── Save ─────────────────────────────────────────────────────────────────────
 
 /// Save a session snapshot to disk and update the manifest index.
+///
+/// Uses atomic write (temp file → rename) to prevent corruption if the
+/// process crashes mid-write.
 pub fn save_session(session: &SessionSnapshot) -> anyhow::Result<()> {
     let dir = sessions_dir();
     std::fs::create_dir_all(&dir)?;
     let path = session_path(&session.id)?;
+
+    // Serialize first — fail early if JSON serialization fails
     let json = serde_json::to_string_pretty(session)?;
-    std::fs::write(&path, json)?;
+
+    // Atomic write: temp file → rename
+    atomic_write(&path, json.as_bytes())?;
 
     // Update manifest index
     let meta = SessionMeta {
@@ -560,5 +579,33 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, 0);
         assert_eq!(usage.api_calls, 0);
         assert_eq!(usage.cost_usd, 0.0);
+    }
+
+    // ── atomic_write ────────────────────────────────────────────────────
+
+    #[test]
+    fn atomic_write_creates_file() {
+        let tmp = std::env::temp_dir().join("claude_test_atomic_write.json");
+        let _ = std::fs::remove_file(&tmp);
+
+        atomic_write(&tmp, b"hello world").unwrap();
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "hello world");
+
+        // No .tmp file should remain
+        let tmp_path = tmp.with_extension("json.tmp");
+        assert!(!tmp_path.exists(), "temp file should be cleaned up");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing() {
+        let tmp = std::env::temp_dir().join("claude_test_atomic_replace.json");
+        std::fs::write(&tmp, "old content").unwrap();
+
+        atomic_write(&tmp, b"new content").unwrap();
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "new content");
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }

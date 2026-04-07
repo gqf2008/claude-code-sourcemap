@@ -11,8 +11,34 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub struct LspTool;
+
+/// Default timeout for ripgrep searches (10 seconds).
+const RG_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run ripgrep with a timeout. Returns stdout on success, or an error ToolResult.
+async fn run_rg(cwd: &Path, args: &[&str]) -> Result<String, ToolResult> {
+    let output = tokio::time::timeout(
+        RG_TIMEOUT,
+        tokio::process::Command::new("rg")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+    ).await;
+
+    match output {
+        Ok(Ok(out)) => Ok(String::from_utf8_lossy(&out.stdout).to_string()),
+        Ok(Err(_)) => Err(ToolResult::error(
+            "ripgrep (rg) not found. Install ripgrep for code intelligence."
+        )),
+        Err(_) => Err(ToolResult::error(format!(
+            "Search timed out after {}s. Try a more specific query.",
+            RG_TIMEOUT.as_secs()
+        ))),
+    }
+}
 
 #[async_trait]
 impl Tool for LspTool {
@@ -294,24 +320,15 @@ async fn search_workspace_symbols(cwd: &Path, query: &str) -> anyhow::Result<Too
     }
 
     let pattern = format!(r"(fn|function|def|class|struct|enum|trait|interface|type)\s+{}", regex::escape(query));
-    let output = tokio::process::Command::new("rg")
-        .args(["--no-heading", "--line-number", "--max-count", "30", "-e", &pattern])
-        .current_dir(cwd)
-        .output()
-        .await;
+    let result = match run_rg(cwd, &["--no-heading", "--line-number", "--max-count", "30", "-e", &pattern]).await {
+        Ok(text) => text,
+        Err(e) => return Ok(e),
+    };
 
-    match output {
-        Ok(out) => {
-            let result = String::from_utf8_lossy(&out.stdout);
-            if result.is_empty() {
-                Ok(ToolResult::text(format!("No symbols matching '{}' found.", query)))
-            } else {
-                Ok(ToolResult::text(format!("Symbols matching '{}':\n{}", query, result.trim())))
-            }
-        }
-        Err(_) => {
-            Ok(ToolResult::error("ripgrep (rg) not found. Install ripgrep for workspace symbol search."))
-        }
+    if result.is_empty() {
+        Ok(ToolResult::text(format!("No symbols matching '{}' found.", query)))
+    } else {
+        Ok(ToolResult::text(format!("Symbols matching '{}':\n{}", query, result.trim())))
     }
 }
 
@@ -324,18 +341,13 @@ async fn find_definition(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
 
     let mut results = Vec::new();
     for pattern in &patterns {
-        let output = tokio::process::Command::new("rg")
-            .args(["--no-heading", "--line-number", "--max-count", "10", "-e", pattern])
-            .current_dir(cwd)
-            .output()
-            .await;
-
-        if let Ok(out) = output {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if !line.is_empty() {
-                    results.push(line.to_string());
-                }
+        let text = match run_rg(cwd, &["--no-heading", "--line-number", "--max-count", "10", "-e", pattern]).await {
+            Ok(t) => t,
+            Err(e) => return Ok(e),
+        };
+        for line in text.lines() {
+            if !line.is_empty() {
+                results.push(line.to_string());
             }
         }
     }
@@ -350,13 +362,10 @@ async fn find_definition(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
 
 /// Find references to a symbol using ripgrep.
 async fn find_references(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
-    let output = tokio::process::Command::new("rg")
-        .args(["--no-heading", "--line-number", "--max-count", "50", "-w", word])
-        .current_dir(cwd)
-        .output()
-        .await?;
-
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = match run_rg(cwd, &["--no-heading", "--line-number", "--max-count", "50", "-w", word]).await {
+        Ok(t) => t,
+        Err(e) => return Ok(e),
+    };
     let count = text.lines().count();
 
     if count == 0 {
@@ -382,18 +391,13 @@ async fn find_implementations(cwd: &Path, word: &str) -> anyhow::Result<ToolResu
 
     let mut results = Vec::new();
     for pattern in &patterns {
-        let output = tokio::process::Command::new("rg")
-            .args(["--no-heading", "--line-number", "--max-count", "30", "-e", pattern])
-            .current_dir(cwd)
-            .output()
-            .await;
-
-        if let Ok(out) = output {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if !line.is_empty() && !results.contains(&line.to_string()) {
-                    results.push(line.to_string());
-                }
+        let text = match run_rg(cwd, &["--no-heading", "--line-number", "--max-count", "30", "-e", pattern]).await {
+            Ok(t) => t,
+            Err(e) => return Ok(e),
+        };
+        for line in text.lines() {
+            if !line.is_empty() && !results.contains(&line.to_string()) {
+                results.push(line.to_string());
             }
         }
     }
