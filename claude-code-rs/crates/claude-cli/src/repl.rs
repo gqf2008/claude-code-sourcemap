@@ -50,9 +50,39 @@ impl Completer for CommandCompleter {
 
 impl Hinter for CommandCompleter {
     type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        if !line.starts_with('/') || pos < line.len() {
+            return None;
+        }
+        // Find the first matching command and show the remaining text as a hint
+        SLASH_COMMANDS
+            .iter()
+            .find(|cmd| cmd.starts_with(line) && **cmd != line)
+            .map(|cmd| cmd[line.len()..].to_string())
+    }
 }
 
-impl Highlighter for CommandCompleter {}
+impl Highlighter for CommandCompleter {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
+        // Show hints in dim grey
+        std::borrow::Cow::Owned(format!("\x1b[2m{}\x1b[0m", hint))
+    }
+
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+        if line.starts_with('/') {
+            // Slash commands in cyan
+            std::borrow::Cow::Owned(format!("\x1b[36m{}\x1b[0m", line))
+        } else {
+            std::borrow::Cow::Borrowed(line)
+        }
+    }
+
+    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
+        // Return true to force redraw when content changes
+        true
+    }
+}
 impl Validator for CommandCompleter {}
 impl Helper for CommandCompleter {}
 

@@ -141,8 +141,41 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
     // 12. Model + token info
     {
         let s = engine.state().read().await;
-        println!("  \x1b[2m·\x1b[0m Model: {}", s.model);
+        let display = claude_core::model::display_name_any(&s.model);
+        println!("  \x1b[2m·\x1b[0m Model: {} ({})", display, s.model);
         println!("  \x1b[2m·\x1b[0m Permission mode: {:?}", s.permission_mode);
+        println!("  \x1b[2m·\x1b[0m Tools: {} registered", engine.tool_count());
+        if let Some(pct) = engine.context_usage_percent().await {
+            println!("  \x1b[2m·\x1b[0m Context usage: {}%", pct);
+        }
+    }
+
+    // 13. MCP configuration
+    let mcp_config = cwd.join(".claude").join("mcp.json");
+    if mcp_config.exists() {
+        if let Ok(content) = std::fs::read_to_string(&mcp_config) {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(val) => {
+                    let count = val.get("mcpServers")
+                        .and_then(|s| s.as_object())
+                        .map(|o| o.len())
+                        .unwrap_or(0);
+                    println!("  \x1b[32m✓\x1b[0m MCP config: {} server(s) defined", count);
+                }
+                Err(_) => {
+                    println!("  \x1b[33m⚠\x1b[0m .claude/mcp.json exists but is invalid JSON");
+                    warnings += 1;
+                }
+            }
+        }
+    }
+
+    // 14. API base URL (custom provider check)
+    if let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") {
+        println!("  \x1b[2m·\x1b[0m Custom API URL: {}", base_url);
+    }
+    if let Ok(provider) = std::env::var("CLAUDE_CODE_PROVIDER") {
+        println!("  \x1b[2m·\x1b[0m Provider: {}", provider);
     }
 
     // Summary
