@@ -674,10 +674,18 @@ impl OpenAIBackend {
     /// Create a new OpenAI-compatible backend.
     ///
     /// `base_url` should be the root URL without `/v1/chat/completions`.
+    /// If a URL ending in `/v1` is provided, the suffix is automatically stripped
+    /// to avoid double-prefixing (e.g. `https://example.com/v1` → `https://example.com`).
     pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
+        let mut url = base_url.into();
+        // Strip trailing /v1 to prevent double-path: /v1/v1/chat/completions
+        let trimmed = url.trim_end_matches('/');
+        if trimmed.ends_with("/v1") {
+            url = trimmed[..trimmed.len() - 3].to_string();
+        }
         Self {
             api_key: api_key.into(),
-            base_url: base_url.into(),
+            base_url: url,
             provider: "openai".into(),
         }
     }
@@ -900,6 +908,25 @@ impl ApiBackend for OpenAIBackend {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── Backend construction ──
+
+    #[test]
+    fn base_url_strips_trailing_v1() {
+        let b = OpenAIBackend::new("key", "https://example.com/v1");
+        assert_eq!(b.base_url(), "https://example.com");
+
+        let b2 = OpenAIBackend::new("key", "https://example.com/v1/");
+        assert_eq!(b2.base_url(), "https://example.com");
+
+        // Should NOT strip /v1 from the middle
+        let b3 = OpenAIBackend::new("key", "https://example.com/v1beta");
+        assert_eq!(b3.base_url(), "https://example.com/v1beta");
+
+        // No /v1 — unchanged
+        let b4 = OpenAIBackend::new("key", "https://example.com");
+        assert_eq!(b4.base_url(), "https://example.com");
+    }
 
     // ── Request conversion ──
 
