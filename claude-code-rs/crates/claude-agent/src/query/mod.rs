@@ -168,7 +168,7 @@ pub fn query_stream(
                         ApiErrorAction::Fatal => {}
                     }
                     state.write().await.messages = messages.clone();
-                    yield AgentEvent::Error(format!("API error: {}", e));
+                    yield AgentEvent::Error(format!("API error: {:#}", e));
                     break;
                 }
             };
@@ -218,6 +218,9 @@ pub fn query_stream(
                             }
                             DeltaBlock::ThinkingDelta { thinking } => {
                                 yield AgentEvent::ThinkingDelta(thinking);
+                            }
+                            DeltaBlock::SignatureDelta { .. } => {
+                                // Safely ignored — signature verification is not user-facing
                             }
                         },
                         StreamEvent::ContentBlockStop { .. } => {

@@ -9,20 +9,41 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Stall warning threshold — log a warning if no data received for this long.
 pub const STALL_WARNING_THRESHOLD: Duration = Duration::from_secs(30);
 
-/// Parse a single SSE data line into a StreamEvent
+/// Parse a single SSE data line into a StreamEvent.
+///
+/// Unknown event types are silently skipped (returns `None`) to ensure
+/// compatibility with Anthropic-compatible APIs that may emit extra events.
 pub fn parse_sse_line(line: &str) -> Option<Result<StreamEvent>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
         return None;
     }
-    if let Some(data) = line.strip_prefix("data: ") {
-        if data == "[DONE]" {
+    // SSE spec: "data:" may or may not be followed by a space.
+    // Standard Anthropic API uses "data: " (with space), but some compatible
+    // APIs (e.g. DashScope) use "data:" (no space).
+    let data = if let Some(d) = line.strip_prefix("data: ") {
+        Some(d)
+    } else {
+        line.strip_prefix("data:")
+    };
+    if let Some(data) = data {
+        if data.trim() == "[DONE]" {
             return None;
         }
-        Some(
-            serde_json::from_str(data)
-                .map_err(|e| anyhow::anyhow!("Failed to parse SSE: {}", e)),
-        )
+        match serde_json::from_str::<StreamEvent>(data) {
+            Ok(event) => Some(Ok(event)),
+            Err(e) => {
+                // If the event has a recognizable type field but unknown variant,
+                // skip it gracefully rather than killing the stream.
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if v.get("type").is_some() {
+                        tracing::debug!("Skipping unknown SSE event type: {}", data.chars().take(120).collect::<String>());
+                        return None;
+                    }
+                }
+                Some(Err(anyhow::anyhow!("Failed to parse SSE: {}", e)))
+            }
+        }
     } else {
         None
     }
@@ -138,11 +159,22 @@ mod tests {
     #[test]
     fn test_parse_sse_done() {
         assert!(parse_sse_line("data: [DONE]").is_none());
+        // Also without space
+        assert!(parse_sse_line("data:[DONE]").is_none());
     }
 
     #[test]
     fn test_parse_sse_valid_ping_event() {
         let result = parse_sse_line(r#"data: {"type":"ping"}"#);
+        assert!(result.is_some());
+        let event = result.unwrap().expect("should parse successfully");
+        assert!(matches!(event, StreamEvent::Ping));
+    }
+
+    #[test]
+    fn test_parse_sse_valid_ping_no_space() {
+        // Some APIs (e.g. DashScope) send "data:" without trailing space
+        let result = parse_sse_line(r#"data:{"type":"ping"}"#);
         assert!(result.is_some());
         let event = result.unwrap().expect("should parse successfully");
         assert!(matches!(event, StreamEvent::Ping));

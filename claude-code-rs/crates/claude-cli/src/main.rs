@@ -120,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let filter = if cli.verbose { EnvFilter::new("debug") } else { EnvFilter::new("warn") };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(filter).init();
 
     let settings = config::load_settings()?;
 
@@ -143,9 +143,19 @@ async fn main() -> anyhow::Result<()> {
         cli.model.clone()
     };
 
-    // Resolve model aliases and validate (provider-aware)
-    let model = claude_core::model::validate_model_for_provider(&model_input, &cli.provider)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    // Resolve model aliases and validate (provider-aware).
+    // When --base-url is specified, skip strict validation — the user is targeting
+    // a compatible API (e.g. DashScope, LiteLLM) that may use non-Claude model names.
+    let model = if cli.base_url.is_some() {
+        let trimmed = model_input.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(anyhow::anyhow!("Model name cannot be empty"));
+        }
+        trimmed
+    } else {
+        claude_core::model::validate_model_for_provider(&model_input, &cli.provider)
+            .map_err(|e| anyhow::anyhow!(e))?
+    };
 
     // Build system prompt: if user specified --system-prompt, use that.
     // Otherwise the engine will build the full modular prompt via system_prompt.rs.

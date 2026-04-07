@@ -26,8 +26,13 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(api_key: impl Into<String>) -> Self {
+        let http = reqwest::Client::builder()
+            .user_agent("Claude-Code-RS/0.1")
+            .http1_title_case_headers()
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            http: reqwest::Client::new(),
+            http,
             api_key: api_key.into(),
             base_url: DEFAULT_BASE_URL.to_string(),
             default_model: DEFAULT_MODEL.to_string(),

@@ -245,7 +245,7 @@ pub enum StreamEvent {
     Error { error: ApiError },
 }
 
-/// A delta (incremental update) within a content block: text, JSON, or thinking.
+/// A delta (incremental update) within a content block: text, JSON, thinking, or signature.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum DeltaBlock {
@@ -255,6 +255,13 @@ pub enum DeltaBlock {
     InputJsonDelta { partial_json: String },
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
+    /// Signature delta (e.g. from Anthropic-compatible APIs like DashScope).
+    /// Safely ignored — the signature has no user-facing effect.
+    #[serde(rename = "signature_delta")]
+    SignatureDelta {
+        #[serde(default)]
+        signature: String,
+    },
 }
 
 /// Stop reason sent in the `message_delta` event.
