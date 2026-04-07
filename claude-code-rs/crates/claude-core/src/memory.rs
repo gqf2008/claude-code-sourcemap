@@ -163,7 +163,10 @@ pub fn scan_memory_dir(dir: &Path) -> Vec<MemoryHeader> {
         // Read first 30 lines for frontmatter only
         let preview = match std::fs::read_to_string(&path) {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!("Skipped unreadable memory file {}: {}", path.display(), e);
+                continue;
+            }
         };
         let first_30: String = preview.lines().take(30).collect::<Vec<_>>().join("\n");
         let (fm_lines, _) = parse_frontmatter(&first_30);

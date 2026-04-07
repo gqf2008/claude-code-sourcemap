@@ -167,7 +167,9 @@ fn resolve_includes(content: &str, base_dir: &Path, depth: usize, visited: &mut 
                             }
                             continue;
                         }
-                        Err(e) => debug!("Cannot read @include {}: {}", resolved.display(), e),
+                        Err(e) => {
+                            tracing::warn!("Cannot read @include {}: {}", resolved.display(), e);
+                        }
                     }
                 }
             }

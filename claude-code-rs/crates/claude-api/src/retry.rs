@@ -147,9 +147,29 @@ impl RateLimitInfo {
     }
 }
 
+impl ApiHttpError {
+    /// Extract a human-readable error message from the response body.
+    /// Anthropic API returns `{"error":{"type":"...","message":"..."}}`.
+    /// OpenAI returns `{"error":{"message":"...","type":"...","code":"..."}}`.
+    /// Falls back to the raw body if not parseable.
+    pub fn user_message(&self) -> String {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.body) {
+            if let Some(msg) = v["error"]["message"].as_str() {
+                return msg.to_string();
+            }
+        }
+        // Truncate raw body for display (avoid dumping huge HTML error pages)
+        if self.body.len() > 200 {
+            format!("{}...", &self.body[..200])
+        } else {
+            self.body.clone()
+        }
+    }
+}
+
 impl std::fmt::Display for ApiHttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "API error ({}): {}", self.status, self.body)
+        write!(f, "API error ({}): {}", self.status, self.user_message())
     }
 }
 
@@ -378,5 +398,65 @@ mod tests {
         ];
         let info = RateLimitInfo::from_headers(&headers).unwrap();
         assert_eq!(info.remaining_requests, Some(10));
+    }
+
+    // ── ApiHttpError::user_message ──
+
+    #[test]
+    fn test_user_message_anthropic_json() {
+        let err = ApiHttpError {
+            status: 401,
+            body: r#"{"error":{"type":"authentication_error","message":"Invalid API key provided"}}"#.into(),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        assert_eq!(err.user_message(), "Invalid API key provided");
+    }
+
+    #[test]
+    fn test_user_message_openai_json() {
+        let err = ApiHttpError {
+            status: 401,
+            body: r#"{"error":{"message":"Incorrect API key","type":"invalid_request_error","code":"invalid_api_key"}}"#.into(),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        assert_eq!(err.user_message(), "Incorrect API key");
+    }
+
+    #[test]
+    fn test_user_message_plain_text() {
+        let err = ApiHttpError {
+            status: 500,
+            body: "Internal Server Error".into(),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        assert_eq!(err.user_message(), "Internal Server Error");
+    }
+
+    #[test]
+    fn test_user_message_truncates_long_body() {
+        let err = ApiHttpError {
+            status: 500,
+            body: "x".repeat(500),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        let msg = err.user_message();
+        assert!(msg.len() < 210);
+        assert!(msg.ends_with("..."));
+    }
+
+    #[test]
+    fn test_display_uses_user_message() {
+        let err = ApiHttpError {
+            status: 401,
+            body: r#"{"error":{"message":"Bad key"}}"#.into(),
+            retry_after: None,
+            rate_limit_info: None,
+        };
+        let display = format!("{}", err);
+        assert_eq!(display, "API error (401): Bad key");
     }
 }

@@ -329,7 +329,13 @@ fn resolve_api_key(
 ) -> anyhow::Result<String> {
     // Explicit CLI flag always wins
     if let Some(key) = cli_key {
-        return Ok(key.to_string());
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow::anyhow!(
+                "API key is empty. Provide a valid key via --api-key or environment variable."
+            ));
+        }
+        return Ok(trimmed.to_string());
     }
 
     match provider {
@@ -668,6 +674,18 @@ mod tests {
     #[test]
     fn test_resolve_api_key_anthropic_missing() {
         assert!(resolve_api_key("anthropic", None, None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_api_key_empty_rejected() {
+        assert!(resolve_api_key("anthropic", Some(""), None).is_err());
+        assert!(resolve_api_key("anthropic", Some("   "), None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_api_key_trimmed() {
+        let key = resolve_api_key("anthropic", Some("  sk-abc  "), None).unwrap();
+        assert_eq!(key, "sk-abc");
     }
 
     // ── generate_claude_md_template ──────────────────────────────────

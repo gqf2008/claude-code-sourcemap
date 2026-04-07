@@ -333,7 +333,11 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
             }
             Err(ReadlineError::Interrupted) => { println!("^C"); continue; }
             Err(ReadlineError::Eof) => { println!("Goodbye!"); break; }
-            Err(err) => { eprintln!("Error: {:?}", err); break; }
+            Err(ReadlineError::WindowResized) => { continue; }
+            Err(err) => {
+                eprintln!("\x1b[31mInput error: {}\x1b[0m", err);
+                break;
+            }
         }
     }
 
