@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
@@ -20,7 +21,7 @@ pub struct ApiClient {
     retry_config: RetryConfig,
     /// Optional pluggable backend. When set, `messages()` / `messages_stream()`
     /// delegate to this backend instead of the inline first-party implementation.
-    backend: Option<Box<dyn ApiBackend>>,
+    backend: Option<Arc<dyn ApiBackend>>,
 }
 
 impl ApiClient {
@@ -56,12 +57,12 @@ impl ApiClient {
         self
     }
 
-    /// Plug in a custom API backend (Bedrock, Vertex, etc.).
+    /// Plug in a custom API backend (Bedrock, Vertex, OpenAI, etc.).
     ///
     /// When set, `messages()` and `messages_stream()` delegate to this backend
     /// with retry wrapping. The backend handles auth, URL, and model ID mapping.
     pub fn with_backend(mut self, backend: Box<dyn ApiBackend>) -> Self {
-        self.backend = Some(backend);
+        self.backend = Some(Arc::from(backend));
         self
     }
 
@@ -353,6 +354,8 @@ impl ApiClient {
     }
 
     /// Create a lightweight clone for fallback requests.
+    ///
+    /// Preserves the backend so fallback uses the same provider.
     fn clone_for_fallback(&self) -> ApiClient {
         ApiClient {
             http: self.http.clone(),
@@ -361,7 +364,7 @@ impl ApiClient {
             default_model: self.default_model.clone(),
             max_tokens: self.max_tokens,
             retry_config: self.retry_config.clone(),
-            backend: None, // fallback always uses first-party endpoint
+            backend: self.backend.clone(),
         }
     }
 }
@@ -657,6 +660,19 @@ mod tests {
         assert_eq!(fallback.base_url, "https://custom.api.com");
         assert_eq!(fallback.default_model, "test-model");
         assert_eq!(fallback.max_tokens, 1024);
-        assert!(fallback.backend.is_none());
+        assert!(fallback.backend.is_none()); // no backend set → None preserved
+    }
+
+    #[test]
+    fn clone_for_fallback_preserves_backend() {
+        use crate::provider::MockBackend;
+        let backend = Box::new(MockBackend::new());
+        let c = ApiClient::new("test-key").with_backend(backend);
+        let fallback = c.clone_for_fallback();
+        assert!(fallback.backend.is_some());
+        assert_eq!(
+            fallback.backend.as_ref().unwrap().provider_name(),
+            "mock"
+        );
     }
 }

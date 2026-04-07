@@ -335,11 +335,13 @@ impl ApiBackend for VertexBackend {
 
 /// Detect the API backend from environment variables (mirrors TS `getAPIProvider`).
 ///
-/// Priority: explicit `--provider` flag → env vars → FirstParty.
+/// Priority: Bedrock → Vertex → FirstParty.
 /// - `CLAUDE_CODE_USE_BEDROCK=1` → Bedrock
 /// - `CLAUDE_CODE_USE_VERTEX=1` → Vertex
-/// - `OPENAI_API_KEY` set (without Anthropic key) → OpenAI
 /// - Otherwise → FirstParty (requires `ANTHROPIC_API_KEY`)
+///
+/// For OpenAI-compatible providers, use [`create_backend`] with explicit provider name
+/// via `--provider` CLI flag.
 pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
     let is_truthy = |var: &str| -> bool {
         std::env::var(var)

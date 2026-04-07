@@ -463,104 +463,183 @@ fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResponse {
     }
 }
 
-/// Convert an OpenAI streaming chunk into zero or more Anthropic `StreamEvent`s.
-fn from_openai_chunk(
-    chunk: &ChatCompletionChunk,
-    is_first: bool,
-    model: &str,
-) -> Vec<StreamEvent> {
-    let mut events = Vec::new();
+/// Tracks streaming state across multiple OpenAI chunks.
+///
+/// OpenAI streams are stateless chunks, but Anthropic's event model requires
+/// matching `ContentBlockStart` / `ContentBlockStop` pairs. This struct tracks
+/// which content blocks have been started so we can emit the right events.
+struct OpenAIStreamState {
+    /// Whether `MessageStart` has been emitted.
+    message_started: bool,
+    /// Whether text `ContentBlockStart` (index 0) has been emitted.
+    text_block_started: bool,
+    /// Set of tool call indices that have received `ContentBlockStart`.
+    tool_blocks_started: std::collections::HashSet<usize>,
+    /// Model name for the MessageStart event.
+    model: String,
+}
 
-    // First chunk → MessageStart
-    if is_first {
-        events.push(StreamEvent::MessageStart {
-            message: MessagesResponse {
-                id: chunk.id.clone(),
-                response_type: "message".into(),
-                role: "assistant".into(),
-                content: Vec::new(),
-                model: model.to_string(),
-                stop_reason: None,
-                usage: ApiUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_creation_input_tokens: None,
-                    cache_read_input_tokens: None,
-                },
-            },
-        });
+impl OpenAIStreamState {
+    fn new(model: impl Into<String>) -> Self {
+        Self {
+            message_started: false,
+            text_block_started: false,
+            tool_blocks_started: std::collections::HashSet::new(),
+            model: model.into(),
+        }
     }
 
-    for choice in &chunk.choices {
-        // Text delta
-        if let Some(ref text) = choice.delta.content {
-            if !text.is_empty() {
-                events.push(StreamEvent::ContentBlockDelta {
-                    index: 0,
-                    delta: DeltaBlock::TextDelta {
-                        text: text.clone(),
+    /// Process one OpenAI streaming chunk, returning Anthropic `StreamEvent`s.
+    fn process_chunk(&mut self, chunk: &ChatCompletionChunk) -> Vec<StreamEvent> {
+        let mut events = Vec::new();
+
+        // First chunk → MessageStart
+        if !self.message_started {
+            self.message_started = true;
+            events.push(StreamEvent::MessageStart {
+                message: MessagesResponse {
+                    id: chunk.id.clone(),
+                    response_type: "message".into(),
+                    role: "assistant".into(),
+                    content: Vec::new(),
+                    model: self.model.clone(),
+                    stop_reason: None,
+                    usage: ApiUsage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_creation_input_tokens: None,
+                        cache_read_input_tokens: None,
                     },
-                });
-            }
+                },
+            });
         }
 
-        // Tool call deltas
-        if let Some(ref tool_calls) = choice.delta.tool_calls {
-            for tc in tool_calls {
-                if let Some(ref func) = tc.function {
-                    // New tool call start → ContentBlockStart
-                    if tc.id.is_some() {
-                        let name = func.name.clone().unwrap_or_default();
+        for choice in &chunk.choices {
+            // Text delta — ensure ContentBlockStart is emitted first
+            if let Some(ref text) = choice.delta.content {
+                if !text.is_empty() {
+                    if !self.text_block_started {
+                        self.text_block_started = true;
                         events.push(StreamEvent::ContentBlockStart {
-                            index: tc.index + 1, // offset by 1 (0 is text)
-                            content_block: ResponseContentBlock::ToolUse {
-                                id: tc.id.clone().unwrap_or_default(),
-                                name,
-                                input: serde_json::Value::Object(serde_json::Map::new()),
+                            index: 0,
+                            content_block: ResponseContentBlock::Text {
+                                text: String::new(),
                             },
                         });
                     }
+                    events.push(StreamEvent::ContentBlockDelta {
+                        index: 0,
+                        delta: DeltaBlock::TextDelta {
+                            text: text.clone(),
+                        },
+                    });
+                }
+            }
 
-                    // Argument delta
-                    if let Some(ref args) = func.arguments {
-                        if !args.is_empty() {
-                            events.push(StreamEvent::ContentBlockDelta {
-                                index: tc.index + 1,
-                                delta: DeltaBlock::InputJsonDelta {
-                                    partial_json: args.clone(),
+            // Tool call deltas
+            if let Some(ref tool_calls) = choice.delta.tool_calls {
+                for tc in tool_calls {
+                    if let Some(ref func) = tc.function {
+                        let block_index = tc.index + 1; // offset by 1 (0 is text)
+
+                        // New tool call start → ContentBlockStart (only once per index)
+                        if tc.id.is_some() && !self.tool_blocks_started.contains(&tc.index) {
+                            self.tool_blocks_started.insert(tc.index);
+                            let name = func.name.clone().unwrap_or_default();
+                            events.push(StreamEvent::ContentBlockStart {
+                                index: block_index,
+                                content_block: ResponseContentBlock::ToolUse {
+                                    id: tc.id.clone().unwrap_or_default(),
+                                    name,
+                                    input: serde_json::Value::Object(serde_json::Map::new()),
                                 },
                             });
+                        }
+
+                        // Argument delta
+                        if let Some(ref args) = func.arguments {
+                            if !args.is_empty() {
+                                events.push(StreamEvent::ContentBlockDelta {
+                                    index: block_index,
+                                    delta: DeltaBlock::InputJsonDelta {
+                                        partial_json: args.clone(),
+                                    },
+                                });
+                            }
                         }
                     }
                 }
             }
+
+            // Finish reason → close open blocks, then MessageDelta + MessageStop
+            if let Some(ref reason) = choice.finish_reason {
+                // Emit ContentBlockStop for all open content blocks
+                if self.text_block_started {
+                    events.push(StreamEvent::ContentBlockStop { index: 0 });
+                }
+                let mut tool_indices: Vec<usize> =
+                    self.tool_blocks_started.iter().copied().collect();
+                tool_indices.sort();
+                for idx in tool_indices {
+                    events.push(StreamEvent::ContentBlockStop { index: idx + 1 });
+                }
+
+                let stop_reason = match reason.as_str() {
+                    "stop" => "end_turn",
+                    "tool_calls" | "function_call" => "tool_use",
+                    "length" => "max_tokens",
+                    _ => reason.as_str(),
+                };
+
+                // Include usage if available
+                let usage = chunk.usage.as_ref().map(|u| DeltaUsage {
+                    output_tokens: u.completion_tokens,
+                });
+
+                events.push(StreamEvent::MessageDelta {
+                    delta: MessageDeltaData {
+                        stop_reason: Some(stop_reason.to_string()),
+                    },
+                    usage,
+                });
+                events.push(StreamEvent::MessageStop);
+            }
         }
 
-        // Finish reason → MessageDelta + MessageStop
-        if let Some(ref reason) = choice.finish_reason {
-            let stop_reason = match reason.as_str() {
-                "stop" => "end_turn",
-                "tool_calls" | "function_call" => "tool_use",
-                "length" => "max_tokens",
-                _ => reason.as_str(),
-            };
-
-            // Include usage if available
-            let usage = chunk.usage.as_ref().map(|u| DeltaUsage {
-                output_tokens: u.completion_tokens,
-            });
-
-            events.push(StreamEvent::MessageDelta {
-                delta: MessageDeltaData {
-                    stop_reason: Some(stop_reason.to_string()),
-                },
-                usage,
-            });
-            events.push(StreamEvent::MessageStop);
-        }
+        events
     }
 
-    events
+    /// Synthesize closing events if the stream ended without a finish_reason.
+    fn finalize(&mut self) -> Vec<StreamEvent> {
+        if !self.message_started {
+            return Vec::new();
+        }
+
+        let mut events = Vec::new();
+
+        // Close any open content blocks
+        if self.text_block_started {
+            events.push(StreamEvent::ContentBlockStop { index: 0 });
+            self.text_block_started = false;
+        }
+        let mut tool_indices: Vec<usize> =
+            self.tool_blocks_started.iter().copied().collect();
+        tool_indices.sort();
+        for idx in tool_indices {
+            events.push(StreamEvent::ContentBlockStop { index: idx + 1 });
+        }
+        self.tool_blocks_started.clear();
+
+        events.push(StreamEvent::MessageDelta {
+            delta: MessageDeltaData {
+                stop_reason: Some("end_turn".to_string()),
+            },
+            usage: None,
+        });
+        events.push(StreamEvent::MessageStop);
+
+        events
+    }
 }
 
 // ── OpenAI-Compatible Backend ────────────────────────────────────────────────
@@ -660,14 +739,17 @@ impl ApiBackend for OpenAIBackend {
     }
 
     fn map_model_id(&self, canonical: &str) -> String {
-        // Map Anthropic canonical model names to common OpenAI-compatible names
-        match canonical {
-            "claude-sonnet-4-20250514" | "claude-sonnet-4-6" => {
-                // Keep as-is — provider should handle unknown models gracefully
-                canonical.to_string()
-            }
-            _ => canonical.to_string(),
+        // Map Anthropic canonical model names to common defaults per provider.
+        // Users should override with --model for specific provider models.
+        if canonical.starts_with("claude-") {
+            warn!(
+                provider = %self.provider,
+                model = canonical,
+                "Anthropic model name passed to {} provider; override with --model",
+                self.provider
+            );
         }
+        canonical.to_string()
     }
 
     async fn send_messages(
@@ -743,7 +825,8 @@ impl ApiBackend for OpenAIBackend {
             use futures::StreamExt;
             let mut byte_stream = response.bytes_stream();
             let mut buffer = String::new();
-            let mut is_first = true;
+            let mut state = OpenAIStreamState::new(&model);
+            let mut got_done = false;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 match chunk_result {
@@ -769,13 +852,13 @@ impl ApiBackend for OpenAIBackend {
 
                             // "[DONE]" signals end of stream
                             if data.trim() == "[DONE]" {
+                                got_done = true;
                                 break;
                             }
 
                             match serde_json::from_str::<ChatCompletionChunk>(data) {
                                 Ok(chunk) => {
-                                    let events = from_openai_chunk(&chunk, is_first, &model);
-                                    is_first = false;
+                                    let events = state.process_chunk(&chunk);
                                     for event in events {
                                         yield Ok(event);
                                     }
@@ -787,7 +870,6 @@ impl ApiBackend for OpenAIBackend {
                                         line = %data,
                                         "Failed to parse streaming chunk"
                                     );
-                                    // Skip unparseable chunks rather than failing
                                 }
                             }
                         }
@@ -799,9 +881,12 @@ impl ApiBackend for OpenAIBackend {
                 }
             }
 
-            // If we never got a MessageStop, synthesize one
-            if !is_first {
-                // Ensure clean termination
+            // If the stream ended without a proper finish_reason, synthesize closing events
+            if state.message_started && !got_done {
+                let closing = state.finalize();
+                for event in closing {
+                    yield Ok(event);
+                }
             }
         };
 
@@ -1074,10 +1159,10 @@ mod tests {
         assert_eq!(resp.stop_reason.as_deref(), Some("max_tokens"));
     }
 
-    // ── Streaming conversion ──
+    // ── Streaming conversion (OpenAIStreamState) ──
 
     #[test]
-    fn first_chunk_emits_message_start() {
+    fn first_chunk_emits_message_start_and_content_block_start() {
         let chunk = ChatCompletionChunk {
             id: "chatcmpl-stream".into(),
             choices: vec![ChunkChoice {
@@ -1093,10 +1178,13 @@ mod tests {
             usage: None,
         };
 
-        let events = from_openai_chunk(&chunk, true, "gpt-4o");
-        assert!(events.len() >= 2); // MessageStart + TextDelta
+        let mut state = OpenAIStreamState::new("gpt-4o");
+        let events = state.process_chunk(&chunk);
+        // MessageStart + ContentBlockStart(text) + TextDelta
+        assert_eq!(events.len(), 3);
         assert!(matches!(events[0], StreamEvent::MessageStart { .. }));
-        match &events[1] {
+        assert!(matches!(events[1], StreamEvent::ContentBlockStart { index: 0, .. }));
+        match &events[2] {
             StreamEvent::ContentBlockDelta {
                 delta: DeltaBlock::TextDelta { text },
                 ..
@@ -1106,14 +1194,29 @@ mod tests {
     }
 
     #[test]
-    fn subsequent_chunk_no_message_start() {
-        let chunk = ChatCompletionChunk {
+    fn subsequent_chunk_no_duplicate_block_start() {
+        let chunk1 = ChatCompletionChunk {
+            id: "chatcmpl-stream".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: Some("assistant".into()),
+                    content: Some("Hello".into()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            model: Some("gpt-4o".into()),
+            usage: None,
+        };
+
+        let chunk2 = ChatCompletionChunk {
             id: "chatcmpl-stream".into(),
             choices: vec![ChunkChoice {
                 index: 0,
                 delta: ChunkDelta {
                     role: None,
-                    content: Some("world".into()),
+                    content: Some(" world".into()),
                     tool_calls: None,
                 },
                 finish_reason: None,
@@ -1122,20 +1225,38 @@ mod tests {
             usage: None,
         };
 
-        let events = from_openai_chunk(&chunk, false, "gpt-4o");
+        let mut state = OpenAIStreamState::new("gpt-4o");
+        let _ = state.process_chunk(&chunk1);
+        let events = state.process_chunk(&chunk2);
+        // Second chunk: only TextDelta (no MessageStart or ContentBlockStart)
         assert_eq!(events.len(), 1);
         match &events[0] {
             StreamEvent::ContentBlockDelta {
                 delta: DeltaBlock::TextDelta { text },
                 ..
-            } => assert_eq!(text, "world"),
+            } => assert_eq!(text, " world"),
             _ => panic!("Expected TextDelta"),
         }
     }
 
     #[test]
-    fn finish_reason_emits_message_delta_and_stop() {
-        let chunk = ChatCompletionChunk {
+    fn finish_reason_emits_block_stop_and_message_stop() {
+        let chunk1 = ChatCompletionChunk {
+            id: "chatcmpl-stream".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: Some("assistant".into()),
+                    content: Some("Hi".into()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            model: Some("gpt-4o".into()),
+            usage: None,
+        };
+
+        let chunk2 = ChatCompletionChunk {
             id: "chatcmpl-stream".into(),
             choices: vec![ChunkChoice {
                 index: 0,
@@ -1150,20 +1271,24 @@ mod tests {
             usage: None,
         };
 
-        let events = from_openai_chunk(&chunk, false, "gpt-4o");
-        assert_eq!(events.len(), 2);
-        match &events[0] {
+        let mut state = OpenAIStreamState::new("gpt-4o");
+        let _ = state.process_chunk(&chunk1);
+        let events = state.process_chunk(&chunk2);
+        // ContentBlockStop(0) + MessageDelta + MessageStop
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], StreamEvent::ContentBlockStop { index: 0 }));
+        match &events[1] {
             StreamEvent::MessageDelta { delta, .. } => {
                 assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
             }
             _ => panic!("Expected MessageDelta"),
         }
-        assert!(matches!(events[1], StreamEvent::MessageStop));
+        assert!(matches!(events[2], StreamEvent::MessageStop));
     }
 
     #[test]
-    fn tool_call_chunk_emits_content_block_start_and_delta() {
-        let chunk = ChatCompletionChunk {
+    fn tool_call_stream_emits_start_delta_stop() {
+        let chunk1 = ChatCompletionChunk {
             id: "chatcmpl-stream".into(),
             choices: vec![ChunkChoice {
                 index: 0,
@@ -1186,16 +1311,146 @@ mod tests {
             usage: None,
         };
 
-        let events = from_openai_chunk(&chunk, false, "gpt-4o");
-        assert_eq!(events.len(), 2); // ContentBlockStart + InputJsonDelta
-        assert!(matches!(events[0], StreamEvent::ContentBlockStart { .. }));
-        match &events[1] {
+        let chunk2 = ChatCompletionChunk {
+            id: "chatcmpl-stream".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            model: None,
+            usage: None,
+        };
+
+        let mut state = OpenAIStreamState::new("gpt-4o");
+        let events1 = state.process_chunk(&chunk1);
+        assert_eq!(events1.len(), 3); // MessageStart + ContentBlockStart + InputJsonDelta
+        assert!(matches!(events1[0], StreamEvent::MessageStart { .. }));
+        assert!(matches!(events1[1], StreamEvent::ContentBlockStart { index: 1, .. }));
+        match &events1[2] {
             StreamEvent::ContentBlockDelta {
                 delta: DeltaBlock::InputJsonDelta { partial_json },
                 ..
             } => assert_eq!(partial_json, r#"{"com"#),
             _ => panic!("Expected InputJsonDelta"),
         }
+
+        let events2 = state.process_chunk(&chunk2);
+        // ContentBlockStop(1) + MessageDelta + MessageStop
+        assert_eq!(events2.len(), 3);
+        assert!(matches!(events2[0], StreamEvent::ContentBlockStop { index: 1 }));
+        match &events2[1] {
+            StreamEvent::MessageDelta { delta, .. } => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("tool_use"));
+            }
+            _ => panic!("Expected MessageDelta"),
+        }
+        assert!(matches!(events2[2], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn finalize_synthesizes_closing_events() {
+        let chunk = ChatCompletionChunk {
+            id: "chatcmpl-stream".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: Some("assistant".into()),
+                    content: Some("partial".into()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            model: Some("gpt-4o".into()),
+            usage: None,
+        };
+
+        let mut state = OpenAIStreamState::new("gpt-4o");
+        let _ = state.process_chunk(&chunk);
+
+        // Stream ends abruptly (no finish_reason)
+        let closing = state.finalize();
+        // ContentBlockStop(0) + MessageDelta(end_turn) + MessageStop
+        assert_eq!(closing.len(), 3);
+        assert!(matches!(closing[0], StreamEvent::ContentBlockStop { index: 0 }));
+        assert!(matches!(closing[1], StreamEvent::MessageDelta { .. }));
+        assert!(matches!(closing[2], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn mixed_text_and_tools_stream() {
+        let mut state = OpenAIStreamState::new("gpt-4o");
+
+        // Chunk 1: text content
+        let c1 = ChatCompletionChunk {
+            id: "chatcmpl-mix".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: Some("assistant".into()),
+                    content: Some("Let me read that.".into()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            model: Some("gpt-4o".into()),
+            usage: None,
+        };
+        let events = state.process_chunk(&c1);
+        assert_eq!(events.len(), 3); // MessageStart + ContentBlockStart + TextDelta
+
+        // Chunk 2: tool call start
+        let c2 = ChatCompletionChunk {
+            id: "chatcmpl-mix".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: Some(vec![ChunkToolCall {
+                        index: 0,
+                        id: Some("call_001".into()),
+                        call_type: Some("function".into()),
+                        function: Some(ChunkFunctionCall {
+                            name: Some("read_file".into()),
+                            arguments: Some(r#"{"path":"test.txt"}"#.into()),
+                        }),
+                    }]),
+                },
+                finish_reason: None,
+            }],
+            model: None,
+            usage: None,
+        };
+        let events = state.process_chunk(&c2);
+        assert_eq!(events.len(), 2); // ContentBlockStart(1) + InputJsonDelta
+
+        // Chunk 3: finish
+        let c3 = ChatCompletionChunk {
+            id: "chatcmpl-mix".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            model: None,
+            usage: None,
+        };
+        let events = state.process_chunk(&c3);
+        // ContentBlockStop(0) + ContentBlockStop(1) + MessageDelta + MessageStop
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], StreamEvent::ContentBlockStop { index: 0 }));
+        assert!(matches!(events[1], StreamEvent::ContentBlockStop { index: 1 }));
+        assert!(matches!(events[2], StreamEvent::MessageDelta { .. }));
+        assert!(matches!(events[3], StreamEvent::MessageStop));
     }
 
     // ── Backend construction ──
