@@ -14,6 +14,7 @@ mod config;
 mod doctor;
 mod prompt;
 mod skill;
+mod mcp;
 
 // Re-export all handlers so callers can `use crate::repl_commands::*`
 pub(crate) use memory::handle_memory_command;
@@ -22,6 +23,7 @@ pub(crate) use config::{handle_config_command, handle_context, handle_login, han
 pub(crate) use doctor::handle_doctor;
 pub(crate) use prompt::{handle_review, handle_init, handle_commit, handle_pr, handle_bug};
 pub(crate) use skill::run_skill;
+pub(crate) use mcp::handle_mcp_command;
 
 use claude_agent::engine::QueryEngine;
 

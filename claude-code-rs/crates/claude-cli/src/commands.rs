@@ -28,6 +28,7 @@ pub enum SlashCommand {
     Export { format: String },
     RunSkill { name: String, prompt: String },
     ReloadContext,
+    Mcp { sub: String },
     Exit,
     Unknown(String),
 }
@@ -66,6 +67,7 @@ impl SlashCommand {
             "context" | "ctx" => Self::Context,
             "export" => Self::Export { format: if args.is_empty() { "markdown".into() } else { args } },
             "reload-context" | "reload" => Self::ReloadContext,
+            "mcp" => Self::Mcp { sub: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -133,6 +135,7 @@ impl SlashCommand {
             Self::Context => CommandResult::Context,
             Self::Export { format } => CommandResult::Export { format: format.clone() },
             Self::ReloadContext => CommandResult::ReloadContext,
+            Self::Mcp { sub } => CommandResult::Mcp { sub: sub.clone() },
             Self::RunSkill { name, prompt } => CommandResult::RunSkill {
                 name: name.clone(),
                 prompt: prompt.clone(),
@@ -171,6 +174,7 @@ pub enum CommandResult {
     Export { format: String },
     RunSkill { name: String, prompt: String },
     ReloadContext,
+    Mcp { sub: String },
     Exit,
 }
 
@@ -212,6 +216,7 @@ const HELP_TEXT_BASE: &str = "\
   /permissions       Show permission mode and rules
   /context           Show loaded context (CLAUDE.md, memory, model)
   /reload-context    Reload CLAUDE.md, memory, and settings
+  /mcp               Show discovered MCP servers
 
 \x1b[1mSession & Memory\x1b[0m
   /session save      Save current session
@@ -554,5 +559,39 @@ mod tests {
             CommandResult::Search { query } => assert_eq!(query, "token"),
             _ => panic!("expected Search"),
         }
+    }
+
+    // ── P34: /mcp command ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_mcp() {
+        let s = no_skills();
+        match SlashCommand::parse("/mcp", &s) {
+            Some(SlashCommand::Mcp { sub }) => assert!(sub.is_empty()),
+            _ => panic!("expected Mcp"),
+        }
+        match SlashCommand::parse("/mcp list", &s) {
+            Some(SlashCommand::Mcp { sub }) => assert_eq!(sub, "list"),
+            _ => panic!("expected Mcp list"),
+        }
+        match SlashCommand::parse("/mcp status", &s) {
+            Some(SlashCommand::Mcp { sub }) => assert_eq!(sub, "status"),
+            _ => panic!("expected Mcp status"),
+        }
+    }
+
+    #[test]
+    fn test_execute_mcp() {
+        let cmd = SlashCommand::Mcp { sub: "list".into() };
+        match cmd.execute(&no_skills()) {
+            CommandResult::Mcp { sub } => assert_eq!(sub, "list"),
+            _ => panic!("expected Mcp"),
+        }
+    }
+
+    #[test]
+    fn test_help_text_includes_mcp() {
+        let text = build_help_text(&no_skills());
+        assert!(text.contains("/mcp"));
     }
 }
