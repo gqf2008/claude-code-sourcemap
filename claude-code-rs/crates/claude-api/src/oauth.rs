@@ -54,9 +54,7 @@ impl OAuthToken {
 
 /// Generate a random code verifier (43-128 chars, URL-safe).
 fn generate_code_verifier() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 

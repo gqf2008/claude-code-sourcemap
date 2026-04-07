@@ -17,6 +17,8 @@ mod review;
 mod prompt;
 mod skill;
 mod mcp;
+mod pr_comments;
+mod branch;
 
 // Re-export all handlers so callers can `use crate::repl_commands::*`
 pub(crate) use memory::handle_memory_command;
@@ -27,6 +29,8 @@ pub(crate) use review::handle_review;
 pub(crate) use prompt::{handle_init, handle_commit, handle_pr, handle_bug, handle_commit_push_pr};
 pub(crate) use skill::run_skill;
 pub(crate) use mcp::handle_mcp_command;
+pub(crate) use pr_comments::handle_pr_comments;
+pub(crate) use branch::handle_branch;
 
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;

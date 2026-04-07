@@ -12,6 +12,7 @@
 pub mod client;
 pub mod server;
 pub mod transport;
+pub mod sse_transport;
 
 use std::sync::Arc;
 

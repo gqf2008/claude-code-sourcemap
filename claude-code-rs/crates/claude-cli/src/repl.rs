@@ -142,8 +142,7 @@ impl Highlighter for CommandCompleter {
         }
     }
 
-    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
-        // Return true to force redraw when content changes
+    fn highlight_char(&self, _line: &str, _pos: usize, _forced: rustyline::highlight::CmdKind) -> bool {
         true
     }
 }
@@ -316,6 +315,12 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                             }
                             CommandResult::Review { prompt } => {
                                 handle_review(&engine, &prompt, &cwd).await;
+                            }
+                            CommandResult::PrComments { pr_number } => {
+                                handle_pr_comments(&engine, pr_number, &cwd).await;
+                            }
+                            CommandResult::Branch { name } => {
+                                handle_branch(&engine, &name).await;
                             }
                             CommandResult::Doctor => {
                                 handle_doctor(&engine, &cwd).await;
@@ -532,7 +537,6 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
             }
             Err(ReadlineError::Interrupted) => { println!("^C"); continue; }
             Err(ReadlineError::Eof) => { println!("Goodbye!"); break; }
-            Err(ReadlineError::WindowResized) => { continue; }
             Err(err) => {
                 eprintln!("\x1b[31mInput error: {}\x1b[0m", err);
                 break;

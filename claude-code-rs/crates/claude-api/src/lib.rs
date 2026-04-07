@@ -5,3 +5,5 @@ pub mod types;
 pub mod stream;
 pub mod retry;
 pub mod oauth;
+pub mod model;
+pub mod usage;

@@ -15,6 +15,8 @@ pub enum SlashCommand {
     Config,
     Undo,
     Review { prompt: String },
+    PrComments { pr_number: u64 },
+    Branch { name: String },
     Doctor,
     Init,
     Commit { message: String },
@@ -61,6 +63,11 @@ impl SlashCommand {
             "config" | "settings" => Self::Config,
             "undo" => Self::Undo,
             "review" => Self::Review { prompt: args },
+            "pr-comments" | "prc" => {
+                let num = args.trim_start_matches('#').parse::<u64>().unwrap_or(0);
+                Self::PrComments { pr_number: num }
+            }
+            "branch" | "fork" => Self::Branch { name: args },
             "doctor" => Self::Doctor,
             "init" => Self::Init,
             "commit" => Self::Commit { message: args },
@@ -133,6 +140,8 @@ impl SlashCommand {
             Self::Config => CommandResult::Config,
             Self::Undo => CommandResult::Undo,
             Self::Review { prompt } => CommandResult::Review { prompt: prompt.clone() },
+            Self::PrComments { pr_number } => CommandResult::PrComments { pr_number: *pr_number },
+            Self::Branch { name } => CommandResult::Branch { name: name.clone() },
             Self::Doctor => CommandResult::Doctor,
             Self::Init => CommandResult::Init,
             Self::Commit { message } => CommandResult::Commit { message: message.clone() },
@@ -180,6 +189,8 @@ pub enum CommandResult {
     Config,
     Undo,
     Review { prompt: String },
+    PrComments { pr_number: u64 },
+    Branch { name: String },
     Doctor,
     Init,
     Commit { message: String },
@@ -245,6 +256,8 @@ const HELP_TEXT_BASE: &str = "\
   /pr [prompt]       Create/review a pull request
   /bug [prompt]      Debug a problem with AI assistance
   /review [prompt]   AI code review on recent changes
+  /pr-comments <#>   Fetch and analyze PR review comments (alias: /prc)
+  /branch [name]     Fork conversation into a new branch (alias: /fork)
   /init              Initialize CLAUDE.md for the project
 
 \x1b[1mConfiguration\x1b[0m

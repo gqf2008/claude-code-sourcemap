@@ -119,11 +119,15 @@ async fn do_search(
     }
 
     let client = reqwest::Client::new();
+    let url = format!("{}?q={}&count={}",
+        base_url,
+        urlencoding::encode(&search_query),
+        MAX_RESULTS
+    );
     let resp = client
-        .get(base_url)
+        .get(&url)
         .header("Accept", "application/json")
         .header("X-Subscription-Token", api_key)
-        .query(&[("q", &search_query), ("count", &MAX_RESULTS.to_string())])
         .send()
         .await?;
 

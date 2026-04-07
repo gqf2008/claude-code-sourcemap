@@ -721,6 +721,391 @@ pub fn format_age(dt: &DateTime<Utc>) -> String {
     }
 }
 
+// ── parentUuid DAG chain ─────────────────────────────────────────────────────
+
+/// A node in the conversation DAG — uuid + optional parent link.
+#[derive(Debug, Clone)]
+pub struct ConversationNode {
+    pub uuid: String,
+    pub parent_uuid: Option<String>,
+    /// Logical parent preserved across compact boundaries.
+    pub logical_parent_uuid: Option<String>,
+    pub role: String,
+    pub is_compact_boundary: bool,
+}
+
+/// Build a conversation chain from transcript entries.
+///
+/// Returns nodes in order, with `parent_uuid` linking each message to its
+/// predecessor. Compact boundaries break the chain but preserve
+/// `logical_parent_uuid` for resume recovery.
+pub fn build_conversation_chain(entries: &[TranscriptEntry]) -> Vec<ConversationNode> {
+    let mut chain = Vec::new();
+    let mut prev_uuid: Option<String> = None;
+
+    for entry in entries {
+        match entry {
+            TranscriptEntry::User { uuid, parent_uuid, .. } => {
+                let is_boundary = parent_uuid.is_none() && prev_uuid.is_some();
+                chain.push(ConversationNode {
+                    uuid: uuid.clone(),
+                    parent_uuid: if is_boundary { None } else { prev_uuid.clone() },
+                    logical_parent_uuid: if is_boundary { prev_uuid.clone() } else { None },
+                    role: "user".into(),
+                    is_compact_boundary: is_boundary,
+                });
+                prev_uuid = Some(uuid.clone());
+            }
+            TranscriptEntry::Assistant { uuid, parent_uuid, .. } => {
+                let is_boundary = parent_uuid.is_none() && prev_uuid.is_some();
+                chain.push(ConversationNode {
+                    uuid: uuid.clone(),
+                    parent_uuid: if is_boundary { None } else { prev_uuid.clone() },
+                    logical_parent_uuid: if is_boundary { prev_uuid.clone() } else { None },
+                    role: "assistant".into(),
+                    is_compact_boundary: is_boundary,
+                });
+                prev_uuid = Some(uuid.clone());
+            }
+            TranscriptEntry::System { uuid, .. } => {
+                chain.push(ConversationNode {
+                    uuid: uuid.clone(),
+                    parent_uuid: prev_uuid.clone(),
+                    logical_parent_uuid: None,
+                    role: "system".into(),
+                    is_compact_boundary: false,
+                });
+                prev_uuid = Some(uuid.clone());
+            }
+            _ => {} // metadata entries don't participate in the chain
+        }
+    }
+    chain
+}
+
+/// Extract all message UUIDs from transcript entries (for dedup guard).
+pub fn extract_uuids(entries: &[TranscriptEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|e| match e {
+            TranscriptEntry::User { uuid, .. }
+            | TranscriptEntry::Assistant { uuid, .. }
+            | TranscriptEntry::System { uuid, .. } => Some(uuid.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// ── Conversation forking ─────────────────────────────────────────────────────
+
+/// Metadata attached to forked sessions — traces lineage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkedFrom {
+    pub session_id: String,
+    pub message_uuid: String,
+}
+
+/// Fork a session by cloning its JSONL transcript.
+///
+/// Creates a new session with a new ID, copying only main-chain messages
+/// (user/assistant/system). Metadata entries (titles, summaries) are
+/// preserved. Each forked entry gets a `forked_from` marker for audit trail.
+///
+/// Returns the new session ID.
+pub fn fork_session(
+    original_id: &str,
+    fork_name: Option<&str>,
+) -> anyhow::Result<String> {
+    let entries = load_transcript(original_id)?;
+    if entries.is_empty() {
+        anyhow::bail!("Cannot fork empty session '{}'", original_id);
+    }
+
+    let fork_id = uuid::Uuid::new_v4().to_string();
+    let fork_path = transcript_path(&fork_id)?;
+
+    // Determine fork title with collision avoidance
+    let base_title = fork_name
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| {
+            // Use original session's title
+            let msgs: Vec<Message> = entries.iter().filter_map(|e| match e {
+                TranscriptEntry::User { message, .. } => Some(message.clone()),
+                _ => None,
+            }).collect();
+            title_from_messages(&msgs)
+        });
+    let fork_title = generate_unique_fork_name(&base_title);
+
+    use std::io::Write;
+    let dir = sessions_dir();
+    std::fs::create_dir_all(&dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&fork_path)?;
+
+    let mut count = 0usize;
+
+    for entry in &entries {
+        // Clone the entry with the new session_id
+        let forked = remap_entry_session_id(entry, &fork_id);
+        let mut line = serde_json::to_string(&forked)?;
+        line.push('\n');
+        file.write_all(line.as_bytes())?;
+        count += 1;
+    }
+
+    // Append custom title for the fork
+    let title_entry = TranscriptEntry::CustomTitle {
+        session_id: fork_id.clone(),
+        custom_title: fork_title,
+    };
+    let mut line = serde_json::to_string(&title_entry)?;
+    line.push('\n');
+    file.write_all(line.as_bytes())?;
+
+    tracing::info!("Forked session '{}' → '{}' ({} entries)", original_id, fork_id, count);
+    Ok(fork_id)
+}
+
+/// Generate a unique fork name with collision avoidance.
+/// "My Session" → "My Session (Branch)" → "My Session (Branch 2)" etc.
+fn generate_unique_fork_name(base: &str) -> String {
+    let sessions = list_sessions();
+    let candidate = format!("{} (Branch)", base);
+    if !sessions.iter().any(|s| s.title == candidate || s.custom_title.as_deref() == Some(&candidate)) {
+        return candidate;
+    }
+    for i in 2..100 {
+        let candidate = format!("{} (Branch {})", base, i);
+        if !sessions.iter().any(|s| s.title == candidate || s.custom_title.as_deref() == Some(&candidate)) {
+            return candidate;
+        }
+    }
+    format!("{} (Branch {})", base, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"))
+}
+
+/// Remap a transcript entry's session_id to a new value.
+fn remap_entry_session_id(entry: &TranscriptEntry, new_id: &str) -> TranscriptEntry {
+    match entry {
+        TranscriptEntry::User { uuid, parent_uuid, message, timestamp, cwd, git_branch, .. } => {
+            TranscriptEntry::User {
+                uuid: uuid.clone(),
+                parent_uuid: parent_uuid.clone(),
+                message: message.clone(),
+                timestamp: *timestamp,
+                session_id: new_id.to_string(),
+                cwd: cwd.clone(),
+                git_branch: git_branch.clone(),
+            }
+        }
+        TranscriptEntry::Assistant { uuid, parent_uuid, message, timestamp, .. } => {
+            TranscriptEntry::Assistant {
+                uuid: uuid.clone(),
+                parent_uuid: parent_uuid.clone(),
+                message: message.clone(),
+                timestamp: *timestamp,
+                session_id: new_id.to_string(),
+            }
+        }
+        TranscriptEntry::System { uuid, parent_uuid, subtype, message, timestamp, .. } => {
+            TranscriptEntry::System {
+                uuid: uuid.clone(),
+                parent_uuid: parent_uuid.clone(),
+                subtype: subtype.clone(),
+                message: message.clone(),
+                timestamp: *timestamp,
+                session_id: new_id.to_string(),
+            }
+        }
+        TranscriptEntry::CustomTitle { custom_title, .. } => {
+            TranscriptEntry::CustomTitle {
+                session_id: new_id.to_string(),
+                custom_title: custom_title.clone(),
+            }
+        }
+        TranscriptEntry::AiTitle { ai_title, .. } => {
+            TranscriptEntry::AiTitle {
+                session_id: new_id.to_string(),
+                ai_title: ai_title.clone(),
+            }
+        }
+        TranscriptEntry::LastPrompt { last_prompt, .. } => {
+            TranscriptEntry::LastPrompt {
+                session_id: new_id.to_string(),
+                last_prompt: last_prompt.clone(),
+            }
+        }
+        TranscriptEntry::TurnDuration { turn_index, duration_ms, message_count, timestamp, .. } => {
+            TranscriptEntry::TurnDuration {
+                session_id: new_id.to_string(),
+                turn_index: *turn_index,
+                duration_ms: *duration_ms,
+                message_count: *message_count,
+                timestamp: *timestamp,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+// ── Metadata tail rewrite ────────────────────────────────────────────────────
+
+/// Re-append session metadata to the end of a JSONL transcript.
+///
+/// This ensures metadata (title, summary, last prompt) is within the tail
+/// of the file for fast extraction without reading the entire file.
+/// Aligned with TS `reAppendSessionMetadata()`.
+pub fn reappend_metadata(id: &str) -> anyhow::Result<()> {
+    let entries = load_transcript(id)?;
+
+    // Collect latest metadata values
+    let mut custom_title = None;
+    let mut ai_title = None;
+    let mut summary = None;
+    let mut last_prompt = None;
+
+    for entry in &entries {
+        match entry {
+            TranscriptEntry::CustomTitle { custom_title: t, .. } => custom_title = Some(t.clone()),
+            TranscriptEntry::AiTitle { ai_title: t, .. } => ai_title = Some(t.clone()),
+            TranscriptEntry::Summary { summary: s, .. } => summary = Some(s.clone()),
+            TranscriptEntry::LastPrompt { last_prompt: p, .. } => last_prompt = Some(p.clone()),
+            _ => {}
+        }
+    }
+
+    // Append fresh metadata entries
+    if let Some(t) = custom_title {
+        append_transcript_entry(id, &TranscriptEntry::CustomTitle {
+            session_id: id.to_string(),
+            custom_title: t,
+        })?;
+    }
+    if let Some(t) = ai_title {
+        append_transcript_entry(id, &TranscriptEntry::AiTitle {
+            session_id: id.to_string(),
+            ai_title: t,
+        })?;
+    }
+    if let Some(s) = summary {
+        append_transcript_entry(id, &TranscriptEntry::Summary {
+            leaf_uuid: String::new(),
+            summary: s,
+        })?;
+    }
+    if let Some(p) = last_prompt {
+        append_transcript_entry(id, &TranscriptEntry::LastPrompt {
+            session_id: id.to_string(),
+            last_prompt: p,
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Read metadata from the tail of a JSONL file (last 64KB).
+///
+/// Efficient: only reads the end of the file, not the entire transcript.
+pub fn read_tail_metadata(id: &str) -> anyhow::Result<SessionMeta> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let path = transcript_path(id)?;
+    if !path.exists() {
+        anyhow::bail!("Transcript not found for session '{}'", id);
+    }
+
+    let mut file = std::fs::File::open(&path)?;
+    let file_len = file.metadata()?.len();
+
+    // Read last 64KB (or whole file if smaller)
+    let tail_size = 65_536u64;
+    let start = file_len.saturating_sub(tail_size);
+    file.seek(SeekFrom::Start(start))?;
+
+    let mut tail = String::new();
+    file.read_to_string(&mut tail)?;
+
+    // If we started mid-file, skip the first (potentially partial) line
+    let tail = if start > 0 {
+        tail.split_once('\n').map(|(_, rest)| rest).unwrap_or(&tail)
+    } else {
+        &tail
+    };
+
+    // Parse metadata from tail lines
+    let mut meta = SessionMeta {
+        id: id.to_string(),
+        title: String::new(),
+        model: String::new(),
+        cwd: String::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        turn_count: 0,
+        total_cost_usd: 0.0,
+        message_count: 0,
+        git_branch: None,
+        custom_title: None,
+        summary: None,
+        last_prompt: None,
+    };
+
+    for line in tail.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) {
+            match entry {
+                TranscriptEntry::CustomTitle { custom_title: t, .. } => {
+                    meta.custom_title = Some(t.clone());
+                    meta.title = t;
+                }
+                TranscriptEntry::AiTitle { ai_title: t, .. } => {
+                    if meta.custom_title.is_none() {
+                        meta.title = t;
+                    }
+                }
+                TranscriptEntry::Summary { summary: s, .. } => meta.summary = Some(s),
+                TranscriptEntry::LastPrompt { last_prompt: p, .. } => meta.last_prompt = Some(p),
+                TranscriptEntry::User { timestamp, cwd, git_branch, .. } => {
+                    meta.updated_at = timestamp;
+                    if let Some(c) = cwd { meta.cwd = c; }
+                    if git_branch.is_some() { meta.git_branch = git_branch; }
+                    meta.message_count += 1;
+                }
+                TranscriptEntry::Assistant { timestamp, .. } => {
+                    meta.updated_at = timestamp;
+                    meta.turn_count += 1;
+                    meta.message_count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(meta)
+}
+
+// ── Cross-project resume ─────────────────────────────────────────────────────
+
+/// Check if a session was created in a different project directory.
+///
+/// Returns `Some(original_cwd)` if the session's working directory differs
+/// from `current_cwd`, indicating a cross-project resume.
+pub fn check_cross_project_resume(session_id: &str, current_cwd: &str) -> Option<String> {
+    let entries = load_transcript(session_id).ok()?;
+    for entry in &entries {
+        if let TranscriptEntry::User { cwd: Some(cwd), .. } = entry {
+            if !cwd.is_empty() && cwd != current_cwd {
+                return Some(cwd.clone());
+            }
+            return None; // same project
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1262,5 +1647,158 @@ mod tests {
         assert!(snap.git_branch.is_none());
         assert!(snap.custom_title.is_none());
         assert!(snap.summary.is_none());
+    }
+
+    // ── parentUuid DAG chain ─────────────────────────────────────────────
+
+    #[test]
+    fn build_chain_linear() {
+        let entries = vec![
+            TranscriptEntry::User {
+                uuid: "u1".into(), parent_uuid: None,
+                message: user_msg("hi"), timestamp: Utc::now(),
+                session_id: "s".into(), cwd: None, git_branch: None,
+            },
+            TranscriptEntry::Assistant {
+                uuid: "a1".into(), parent_uuid: Some("u1".into()),
+                message: assistant_msg("hello"), timestamp: Utc::now(),
+                session_id: "s".into(),
+            },
+            TranscriptEntry::User {
+                uuid: "u2".into(), parent_uuid: Some("a1".into()),
+                message: user_msg("more"), timestamp: Utc::now(),
+                session_id: "s".into(), cwd: None, git_branch: None,
+            },
+        ];
+
+        let chain = build_conversation_chain(&entries);
+        assert_eq!(chain.len(), 3);
+        assert!(chain[0].parent_uuid.is_none());
+        assert_eq!(chain[1].parent_uuid.as_deref(), Some("u1"));
+        assert_eq!(chain[2].parent_uuid.as_deref(), Some("a1"));
+        assert!(!chain[0].is_compact_boundary);
+    }
+
+    #[test]
+    fn build_chain_compact_boundary() {
+        let entries = vec![
+            TranscriptEntry::User {
+                uuid: "u1".into(), parent_uuid: None,
+                message: user_msg("before"), timestamp: Utc::now(),
+                session_id: "s".into(), cwd: None, git_branch: None,
+            },
+            TranscriptEntry::Assistant {
+                uuid: "a1".into(), parent_uuid: Some("u1".into()),
+                message: assistant_msg("response"), timestamp: Utc::now(),
+                session_id: "s".into(),
+            },
+            // Compact boundary — parent_uuid is None despite having previous messages
+            TranscriptEntry::User {
+                uuid: "u2".into(), parent_uuid: None,
+                message: user_msg("after compact"), timestamp: Utc::now(),
+                session_id: "s".into(), cwd: None, git_branch: None,
+            },
+        ];
+
+        let chain = build_conversation_chain(&entries);
+        assert_eq!(chain.len(), 3);
+        // u2 is a compact boundary
+        assert!(chain[2].is_compact_boundary);
+        assert!(chain[2].parent_uuid.is_none());
+        assert_eq!(chain[2].logical_parent_uuid.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn extract_uuids_from_entries() {
+        let entries = vec![
+            TranscriptEntry::User {
+                uuid: "u1".into(), parent_uuid: None,
+                message: user_msg("hi"), timestamp: Utc::now(),
+                session_id: "s".into(), cwd: None, git_branch: None,
+            },
+            TranscriptEntry::CustomTitle {
+                session_id: "s".into(), custom_title: "title".into(),
+            },
+            TranscriptEntry::Assistant {
+                uuid: "a1".into(), parent_uuid: Some("u1".into()),
+                message: assistant_msg("bye"), timestamp: Utc::now(),
+                session_id: "s".into(),
+            },
+        ];
+
+        let uuids = extract_uuids(&entries);
+        assert_eq!(uuids, vec!["u1", "a1"]); // metadata excluded
+    }
+
+    // ── Conversation forking ─────────────────────────────────────────────
+
+    #[test]
+    fn fork_session_creates_new_transcript() {
+        let orig_id = format!("test-fork-orig-{}", uuid::Uuid::new_v4().simple());
+        let now = Utc::now();
+
+        append_transcript_entry(&orig_id, &TranscriptEntry::User {
+            uuid: "u1".into(), parent_uuid: None,
+            message: user_msg("original msg"), timestamp: now,
+            session_id: orig_id.clone(), cwd: Some("/proj".into()), git_branch: None,
+        }).unwrap();
+        append_transcript_entry(&orig_id, &TranscriptEntry::Assistant {
+            uuid: "a1".into(), parent_uuid: Some("u1".into()),
+            message: assistant_msg("reply"), timestamp: now,
+            session_id: orig_id.clone(),
+        }).unwrap();
+
+        let fork_id = fork_session(&orig_id, Some("My Fork")).unwrap();
+        assert_ne!(fork_id, orig_id);
+
+        let fork_entries = load_transcript(&fork_id).unwrap();
+        // 2 messages + 1 custom title
+        assert_eq!(fork_entries.len(), 3);
+
+        // Verify session_id is remapped
+        match &fork_entries[0] {
+            TranscriptEntry::User { session_id, .. } => assert_eq!(session_id, &fork_id),
+            _ => panic!("Expected User"),
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(transcript_path(&orig_id).unwrap());
+        let _ = std::fs::remove_file(transcript_path(&fork_id).unwrap());
+    }
+
+    #[test]
+    fn fork_empty_session_fails() {
+        assert!(fork_session("nonexistent-fork-test", None).is_err());
+    }
+
+    // ── Cross-project resume ─────────────────────────────────────────────
+
+    #[test]
+    fn cross_project_resume_same_dir() {
+        let id = format!("test-cross-{}", uuid::Uuid::new_v4().simple());
+        append_transcript_entry(&id, &TranscriptEntry::User {
+            uuid: "u1".into(), parent_uuid: None,
+            message: user_msg("hi"), timestamp: Utc::now(),
+            session_id: id.clone(), cwd: Some("/my/project".into()), git_branch: None,
+        }).unwrap();
+
+        assert!(check_cross_project_resume(&id, "/my/project").is_none());
+
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    #[test]
+    fn cross_project_resume_different_dir() {
+        let id = format!("test-cross2-{}", uuid::Uuid::new_v4().simple());
+        append_transcript_entry(&id, &TranscriptEntry::User {
+            uuid: "u1".into(), parent_uuid: None,
+            message: user_msg("hi"), timestamp: Utc::now(),
+            session_id: id.clone(), cwd: Some("/other/project".into()), git_branch: None,
+        }).unwrap();
+
+        let result = check_cross_project_resume(&id, "/my/project");
+        assert_eq!(result.as_deref(), Some("/other/project"));
+
+        let _ = std::fs::remove_file(transcript_path(&id).unwrap());
     }
 }
