@@ -204,6 +204,31 @@ pub fn memory_dirs(cwd: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Returns the primary memory directory path for behavioral prompt injection.
+///
+/// Prefers the project-scoped directory (`<cwd>/.claude/memory/`), falling back
+/// to the user-global directory.  Creates the project directory if it doesn't
+/// exist yet (so the model can write immediately without `mkdir`).
+pub fn primary_memory_dir(cwd: &Path) -> Option<PathBuf> {
+    let project = cwd.join(".claude").join("memory");
+    if !project.exists() {
+        if let Err(e) = std::fs::create_dir_all(&project) {
+            warn!("Failed to create memory dir {:?}: {}", project, e);
+        }
+    }
+    if project.exists() {
+        return Some(project);
+    }
+    // Fall back to user-global
+    if let Some(home) = dirs::home_dir() {
+        let user_dir = home.join(".claude").join("memory");
+        if user_dir.exists() {
+            return Some(user_dir);
+        }
+    }
+    None
+}
+
 // ── Reading memory content ───────────────────────────────────────────────────
 
 /// Read the body of a memory file (after frontmatter), truncated to limit.
@@ -591,5 +616,29 @@ mod tests {
         let result = load_memories_for_prompt(tmp.path()).unwrap();
         assert!(result.contains("truncated"));
         assert!(result.contains(">10000 bytes"));
+    }
+
+    // ── primary_memory_dir ─────────────────────────────────────────────
+
+    #[test]
+    fn primary_memory_dir_creates_project_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem_dir = tmp.path().join(".claude").join("memory");
+        assert!(!mem_dir.exists());
+
+        let result = primary_memory_dir(tmp.path());
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), mem_dir);
+        assert!(mem_dir.exists());
+    }
+
+    #[test]
+    fn primary_memory_dir_returns_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem_dir = tmp.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+
+        let result = primary_memory_dir(tmp.path());
+        assert_eq!(result.unwrap(), mem_dir);
     }
 }

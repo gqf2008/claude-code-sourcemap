@@ -48,7 +48,7 @@ impl SystemPrompt {
 }
 
 /// Optional dynamic sections for the system prompt.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DynamicSections<'a> {
     /// Language preference (e.g. "中文", "English")
     pub language: Option<&'a str>,
@@ -62,14 +62,34 @@ pub struct DynamicSections<'a> {
     pub token_budget: u64,
     /// Enable proactive/autonomous mode section
     pub proactive_mode: bool,
-    /// Include file editing best practices
+    /// Include file editing best practices (default: true)
     pub include_editing_guidance: bool,
-    /// Include git operations guidance
+    /// Include git operations guidance (default: true)
     pub include_git_guidance: bool,
-    /// Include testing guidance
+    /// Include testing guidance (default: true)
     pub include_testing_guidance: bool,
-    /// Include debugging guidance
+    /// Include debugging guidance (default: true)
     pub include_debugging_guidance: bool,
+    /// Memory directory path (for behavioral prompt injection)
+    pub memory_dir: Option<&'a str>,
+}
+
+impl<'a> Default for DynamicSections<'a> {
+    fn default() -> Self {
+        Self {
+            language: None,
+            output_style: None,
+            mcp_instructions: Vec::new(),
+            scratchpad_dir: None,
+            token_budget: 0,
+            proactive_mode: false,
+            include_editing_guidance: true,
+            include_git_guidance: true,
+            include_testing_guidance: true,
+            include_debugging_guidance: true,
+            memory_dir: None,
+        }
+    }
 }
 
 // ── Build functions ─────────────────────────────────────────────────────────
@@ -142,10 +162,13 @@ pub fn build_system_prompt_ext(
         dynamic_parts.push(mcp);
     }
 
-    // Memory files
+    // Memory system: behavioral instructions + file contents
+    if let Some(mem_dir) = dynamic.memory_dir {
+        dynamic_parts.push(section_memory_behavioral(mem_dir));
+    }
     if !memory_content.is_empty() {
         dynamic_parts.push(format!(
-            "\n## Agent Memory\n\n<memory>\n{}\n</memory>",
+            "\n## Memory Contents\n\n<memory>\n{}\n</memory>",
             memory_content
         ));
     }
@@ -369,7 +392,7 @@ mod tests {
             "Remember: user prefers Python 3.12",
         );
 
-        assert!(prompt.text.contains("Agent Memory"));
+        assert!(prompt.text.contains("Memory Contents"));
         assert!(prompt.text.contains("Remember: user prefers Python 3.12"));
     }
 
@@ -437,5 +460,71 @@ mod tests {
             Some("agent"),
         );
         assert_eq!(result, "agent");
+    }
+
+    #[test]
+    fn test_memory_behavioral_prompt_with_dir() {
+        let cwd = PathBuf::from(".");
+        let dynamic = DynamicSections {
+            memory_dir: Some("/home/user/.claude/memory"),
+            ..Default::default()
+        };
+        let prompt = build_system_prompt_ext(
+            &cwd,
+            "claude-sonnet-4-20250514",
+            &[],
+            "",
+            "",
+            &dynamic,
+        );
+        // Behavioral prompt is injected even without memory content
+        assert!(prompt.text.contains("# Auto Memory"));
+        assert!(prompt.text.contains("Types of memory"));
+        assert!(prompt.text.contains("<name>user</name>"));
+        assert!(prompt.text.contains("<name>feedback</name>"));
+        assert!(prompt.text.contains("<name>project</name>"));
+        assert!(prompt.text.contains("<name>reference</name>"));
+        assert!(prompt.text.contains("What NOT to save"));
+        assert!(prompt.text.contains("How to save memories"));
+        assert!(prompt.text.contains("frontmatter"));
+        assert!(prompt.text.contains("Before recommending from memory"));
+        assert!(prompt.text.contains("/home/user/.claude/memory"));
+    }
+
+    #[test]
+    fn test_memory_behavioral_not_injected_without_dir() {
+        let cwd = PathBuf::from(".");
+        let dynamic = DynamicSections {
+            memory_dir: None,
+            ..Default::default()
+        };
+        let prompt = build_system_prompt_ext(
+            &cwd,
+            "claude-sonnet-4-20250514",
+            &[],
+            "",
+            "",
+            &dynamic,
+        );
+        assert!(!prompt.text.contains("# Auto Memory"));
+    }
+
+    #[test]
+    fn test_guidance_defaults_are_true() {
+        let d = DynamicSections::default();
+        assert!(d.include_editing_guidance);
+        assert!(d.include_git_guidance);
+        assert!(d.include_testing_guidance);
+        assert!(d.include_debugging_guidance);
+    }
+
+    #[test]
+    fn test_guidance_sections_included_by_default() {
+        let cwd = PathBuf::from(".");
+        let prompt = build_system_prompt(&cwd, "claude-sonnet-4-20250514", &[], "", "");
+        assert!(prompt.text.contains("File editing best practices"));
+        assert!(prompt.text.contains("Git operations"));
+        assert!(prompt.text.contains("Testing"));
+        assert!(prompt.text.contains("Debugging"));
     }
 }

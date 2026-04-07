@@ -308,6 +308,121 @@ When working on tasks autonomously:
 - If a task is taking too long, report progress and ask if the user wants to continue."#
 }
 
+/// Dynamic: memory behavioral instructions — teaches the model how to use
+/// the persistent memory system (4-type taxonomy, what to save/not save,
+/// frontmatter format, recall trust caveats).
+///
+/// Aligned with TS `memdir.ts:buildMemoryLines()` + `memoryTypes.ts`.
+pub fn section_memory_behavioral(memory_dir: &str) -> String {
+    format!(r#"
+# Auto Memory
+
+You have a persistent, file-based memory system at `{memory_dir}`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).
+
+You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.
+
+If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.
+
+## Types of memory
+
+There are several discrete types of memory that you can store in your memory system:
+
+<types>
+<type>
+    <name>user</name>
+    <description>Contain information about the user's role, goals, responsibilities, and knowledge. Great user memories help you tailor your future behavior to the user's preferences and perspective. Your goal in reading and writing these memories is to build up an understanding of who the user is and how you can be most helpful to them specifically. For example, you should collaborate with a senior software engineer differently than a student who is coding for the very first time. Avoid writing memories about the user that could be viewed as a negative judgement or that are not relevant to the work you're trying to accomplish together.</description>
+    <when_to_save>When you learn any details about the user's role, preferences, responsibilities, or knowledge</when_to_save>
+    <how_to_use>When your work should be informed by the user's profile or perspective.</how_to_use>
+    <examples>
+    user: I'm a data scientist investigating what logging we have in place
+    assistant: [saves user memory: user is a data scientist, currently focused on observability/logging]
+    </examples>
+</type>
+<type>
+    <name>feedback</name>
+    <description>Guidance the user has given you about how to approach work — both what to avoid and what to keep doing. Record from failure AND success: if you only save corrections, you will avoid past mistakes but drift away from approaches the user has already validated, and may grow overly cautious.</description>
+    <when_to_save>Any time the user corrects your approach ("no not that", "don't", "stop doing X") OR confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that"). Include *why* so you can judge edge cases later.</when_to_save>
+    <how_to_use>Let these memories guide your behavior so that the user does not need to offer the same guidance twice.</how_to_use>
+    <body_structure>Lead with the rule itself, then a **Why:** line and a **How to apply:** line.</body_structure>
+    <examples>
+    user: don't mock the database in these tests — we got burned last quarter
+    assistant: [saves feedback memory: integration tests must hit a real database, not mocks]
+    </examples>
+</type>
+<type>
+    <name>project</name>
+    <description>Information about ongoing work, goals, initiatives, bugs, or incidents within the project that is not derivable from the code or git history.</description>
+    <when_to_save>When you learn who is doing what, why, or by when. Always convert relative dates to absolute dates when saving.</when_to_save>
+    <how_to_use>Use these memories to understand the details and nuance behind the user's request.</how_to_use>
+    <body_structure>Lead with the fact or decision, then a **Why:** line and a **How to apply:** line.</body_structure>
+    <examples>
+    user: we're freezing all non-critical merges after Thursday
+    assistant: [saves project memory: merge freeze begins 2026-03-05 for mobile release cut]
+    </examples>
+</type>
+<type>
+    <name>reference</name>
+    <description>Stores pointers to where information can be found in external systems. These memories allow you to remember where to look to find up-to-date information outside of the project directory.</description>
+    <when_to_save>When you learn about resources in external systems and their purpose.</when_to_save>
+    <how_to_use>When the user references an external system or information that may be in an external system.</how_to_use>
+    <examples>
+    user: check the Linear project "INGEST" for pipeline bugs
+    assistant: [saves reference memory: pipeline bugs are tracked in Linear project "INGEST"]
+    </examples>
+</type>
+</types>
+
+## What NOT to save in memory
+
+- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.
+- Git history, recent changes, or who-changed-what — `git log` / `git blame` are authoritative.
+- Debugging solutions or fix recipes — the fix is in the code; the commit message has the context.
+- Anything already documented in CLAUDE.md files.
+- Ephemeral task details: in-progress work, temporary state, current conversation context.
+
+These exclusions apply even when the user explicitly asks you to save. If they ask you to save a PR list or activity summary, ask what was *surprising* or *non-obvious* about it — that is the part worth keeping.
+
+## How to save memories
+
+Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:
+
+```markdown
+---
+name: {{{{memory name}}}}
+description: {{{{one-line description — used to decide relevance in future conversations, so be specific}}}}
+type: {{{{user, feedback, project, reference}}}}
+---
+
+{{{{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}}}}
+```
+
+- Keep the name, description, and type fields in memory files up-to-date with the content
+- Organize memory semantically by topic, not chronologically
+- Update or remove memories that turn out to be wrong or outdated
+- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.
+
+## When to access memories
+- When memories seem relevant, or the user references prior-conversation work.
+- You MUST access memory when the user explicitly asks you to check, recall, or remember.
+- If the user says to *ignore* or *not use* memory: proceed as if the memory were empty. Do not apply remembered facts, cite, compare against, or mention memory content.
+- Memory records can become stale over time. Before answering based solely on memory, verify that the memory is still correct by reading the current state. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory.
+
+## Before recommending from memory
+
+A memory that names a specific function, file, or flag is a claim that it existed *when the memory was written*. It may have been renamed, removed, or never merged. Before recommending it:
+
+- If the memory names a file path: check the file exists.
+- If the memory names a function or flag: grep for it.
+- If the user is about to act on your recommendation, verify first.
+
+"The memory says X exists" is not the same as "X exists now."
+
+## Memory and other forms of persistence
+Memory is one of several persistence mechanisms available to you. The distinction is that memory can be recalled in future conversations and should not be used for persisting information only useful within the current conversation.
+- When to use or update a plan instead of memory: If you are about to start a non-trivial implementation task and would like to reach alignment with the user, use a Plan rather than saving to memory.
+- When to use tasks instead of memory: When you need to break your work into discrete steps or keep track of your progress, use tasks instead of saving to memory."#)
+}
+
 /// Dynamic: file editing best practices.
 pub fn section_file_editing() -> &'static str {
     r#"
@@ -551,5 +666,27 @@ mod tests {
     #[test]
     fn summarize_tool_results_instruction() {
         assert!(SUMMARIZE_TOOL_RESULTS.contains("important information"));
+    }
+
+    #[test]
+    fn section_memory_behavioral_contains_taxonomy() {
+        let s = section_memory_behavioral("/home/user/.claude/memory");
+        assert!(s.contains("# Auto Memory"));
+        assert!(s.contains("/home/user/.claude/memory"));
+        assert!(s.contains("<name>user</name>"));
+        assert!(s.contains("<name>feedback</name>"));
+        assert!(s.contains("<name>project</name>"));
+        assert!(s.contains("<name>reference</name>"));
+        assert!(s.contains("What NOT to save"));
+        assert!(s.contains("How to save memories"));
+        assert!(s.contains("When to access memories"));
+        assert!(s.contains("Before recommending from memory"));
+    }
+
+    #[test]
+    fn section_memory_behavioral_embeds_dir_path() {
+        let s = section_memory_behavioral("C:\\Users\\test\\.claude\\memory");
+        assert!(s.contains("C:\\Users\\test\\.claude\\memory"));
+        assert!(s.contains("write to it directly"));
     }
 }

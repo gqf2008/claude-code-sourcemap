@@ -22,7 +22,7 @@ use crate::hooks::HookRegistry;
 use crate::permissions::PermissionChecker;
 use crate::query::QueryConfig;
 use crate::state::new_shared_state_with_model;
-use crate::system_prompt::{build_system_prompt_ext, coordinator_system_prompt, DynamicSections};
+use crate::system_prompt::{build_system_prompt_ext, coordinator_system_prompt, sections, DynamicSections};
 
 use super::QueryEngine;
 
@@ -220,6 +220,14 @@ impl QueryEngineBuilder {
             String::new()
         };
 
+        // Compute the memory directory path for behavioral prompt injection
+        let memory_dir_str = if self.load_memory {
+            claude_core::memory::primary_memory_dir(&self.cwd)
+                .map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
         let enabled_tool_names: Vec<String> = registry
             .all()
             .iter()
@@ -235,6 +243,7 @@ impl QueryEngineBuilder {
                 output_style: self.output_style.as_ref().map(|(n, p)| (n.as_str(), p.as_str())),
                 mcp_instructions: self.mcp_instructions.clone(),
                 scratchpad_dir: self.scratchpad_dir.as_deref(),
+                memory_dir: memory_dir_str.as_deref(),
                 ..Default::default()
             };
             build_system_prompt_ext(
@@ -255,9 +264,12 @@ impl QueryEngineBuilder {
                     claude_md_content
                 ));
             }
+            if let Some(ref dir) = memory_dir_str {
+                parts.push(sections::section_memory_behavioral(dir));
+            }
             if !memory_content.is_empty() {
                 parts.push(format!(
-                    "\n## Agent Memory\n\n<memory>\n{}\n</memory>",
+                    "\n## Memory Contents\n\n<memory>\n{}\n</memory>",
                     memory_content
                 ));
             }
