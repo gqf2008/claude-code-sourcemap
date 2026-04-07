@@ -86,3 +86,60 @@ impl Tool for ExitPlanModeTool {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx() -> ToolContext {
+        ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn enter_plan_mode() {
+        let tool = EnterPlanModeTool;
+        let result = tool.call(json!({}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        assert!(text.contains("Plan mode activated"));
+        assert!(text.contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn exit_plan_mode_with_summary() {
+        let tool = ExitPlanModeTool;
+        let result = tool.call(json!({"plan_summary": "Refactor auth module"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        assert!(text.contains("deactivated"));
+        assert!(text.contains("Refactor auth module"));
+    }
+
+    #[tokio::test]
+    async fn exit_plan_mode_no_summary() {
+        let tool = ExitPlanModeTool;
+        let result = tool.call(json!({}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("no summary provided"));
+    }
+
+    #[test]
+    fn tool_names() {
+        assert_eq!(EnterPlanModeTool.name(), "EnterPlanMode");
+        assert_eq!(ExitPlanModeTool.name(), "ExitPlanMode");
+    }
+}
