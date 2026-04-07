@@ -87,9 +87,9 @@ impl SlashCommand {
     }
 
     /// Execute built-in commands that don't need an engine.
-    pub fn execute(&self, known_skills: &[SkillEntry]) -> CommandResult {
+    pub fn execute(&self, known_skills: &[SkillEntry], plugin_commands: &[PluginCommandEntry]) -> CommandResult {
         match self {
-            Self::Help => CommandResult::Print(build_help_text(known_skills)),
+            Self::Help => CommandResult::Print(build_help_text(known_skills, plugin_commands)),
             Self::Clear => CommandResult::ClearHistory,
             Self::Model(name) if name.is_empty() => {
                 let aliases = claude_core::model::list_aliases();
@@ -194,12 +194,24 @@ pub enum CommandResult {
     Exit,
 }
 
-fn build_help_text(skills: &[SkillEntry]) -> String {
+/// A plugin command entry for help display.
+pub struct PluginCommandEntry {
+    pub plugin_name: String,
+    pub command_name: String,
+}
+
+fn build_help_text(skills: &[SkillEntry], plugin_commands: &[PluginCommandEntry]) -> String {
     let mut text = HELP_TEXT_BASE.to_string();
     if !skills.is_empty() {
-        text.push_str("\n\nSkills (sub-agents with specialised prompts):");
+        text.push_str("\n\n\x1b[1mSkills\x1b[0m (sub-agents with specialised prompts):");
         for s in skills {
             text.push_str(&format!("\n  /{:<20} {}", s.name, s.description));
+        }
+    }
+    if !plugin_commands.is_empty() {
+        text.push_str("\n\n\x1b[1mPlugins\x1b[0m:");
+        for pc in plugin_commands {
+            text.push_str(&format!("\n  /{:<20} (from {})", pc.command_name, pc.plugin_name));
         }
     }
     text
@@ -262,6 +274,7 @@ mod tests {
     use super::*;
 
     fn no_skills() -> Vec<SkillEntry> { Vec::new() }
+    fn no_plugins() -> Vec<PluginCommandEntry> { Vec::new() }
 
     fn test_skills() -> Vec<SkillEntry> {
         vec![SkillEntry {
@@ -404,7 +417,7 @@ mod tests {
     #[test]
     fn test_execute_help() {
         let cmd = SlashCommand::Help;
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Print(text) => assert!(text.contains("/help")),
             _ => panic!("expected Print"),
         }
@@ -414,7 +427,7 @@ mod tests {
     fn test_execute_help_with_skills() {
         let cmd = SlashCommand::Help;
         let skills = test_skills();
-        match cmd.execute(&skills) {
+        match cmd.execute(&skills, &no_plugins()) {
             CommandResult::Print(text) => {
                 assert!(text.contains("/help"));
                 assert!(text.contains("review"));
@@ -427,13 +440,13 @@ mod tests {
     #[test]
     fn test_execute_clear() {
         let cmd = SlashCommand::Clear;
-        assert!(matches!(cmd.execute(&no_skills()), CommandResult::ClearHistory));
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::ClearHistory));
     }
 
     #[test]
     fn test_execute_model_empty() {
         let cmd = SlashCommand::Model(String::new());
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Print(text) => assert!(text.contains("Usage")),
             _ => panic!("expected Print"),
         }
@@ -442,7 +455,7 @@ mod tests {
     #[test]
     fn test_execute_model_set() {
         let cmd = SlashCommand::Model("opus".into());
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::SetModel(name) => assert_eq!(name, "opus"),
             _ => panic!("expected SetModel"),
         }
@@ -451,7 +464,7 @@ mod tests {
     #[test]
     fn test_execute_version() {
         let cmd = SlashCommand::Version;
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Print(text) => assert!(text.contains("claude-code-rs")),
             _ => panic!("expected Print"),
         }
@@ -460,7 +473,7 @@ mod tests {
     #[test]
     fn test_execute_skills_empty() {
         let cmd = SlashCommand::Skills;
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Print(text) => assert!(text.contains("No skills")),
             _ => panic!("expected Print"),
         }
@@ -470,7 +483,7 @@ mod tests {
     fn test_execute_skills_list() {
         let cmd = SlashCommand::Skills;
         let skills = test_skills();
-        match cmd.execute(&skills) {
+        match cmd.execute(&skills, &no_plugins()) {
             CommandResult::Print(text) => {
                 assert!(text.contains("/review"));
                 assert!(text.contains("Code review skill"));
@@ -482,7 +495,7 @@ mod tests {
     #[test]
     fn test_execute_compact_with_instructions() {
         let cmd = SlashCommand::Compact { instructions: "focus on code".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Compact { instructions } => {
                 assert_eq!(instructions.as_deref(), Some("focus on code"));
             }
@@ -493,7 +506,7 @@ mod tests {
     #[test]
     fn test_execute_compact_empty() {
         let cmd = SlashCommand::Compact { instructions: String::new() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Compact { instructions } => assert!(instructions.is_none()),
             _ => panic!("expected Compact"),
         }
@@ -502,7 +515,7 @@ mod tests {
     #[test]
     fn test_execute_unknown() {
         let cmd = SlashCommand::Unknown("xyz".into());
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Print(text) => assert!(text.contains("Unknown")),
             _ => panic!("expected Print"),
         }
@@ -511,7 +524,7 @@ mod tests {
     #[test]
     fn test_execute_exit() {
         let cmd = SlashCommand::Exit;
-        assert!(matches!(cmd.execute(&no_skills()), CommandResult::Exit));
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Exit));
     }
 
     // ── new P27 commands ─────────────────────────────────────────────
@@ -535,7 +548,7 @@ mod tests {
     #[test]
     fn test_execute_pr() {
         let cmd = SlashCommand::Pr { prompt: "review security".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Pr { prompt } => assert_eq!(prompt, "review security"),
             _ => panic!("expected Pr"),
         }
@@ -544,7 +557,7 @@ mod tests {
     #[test]
     fn test_execute_bug() {
         let cmd = SlashCommand::Bug { prompt: "OOM crash".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Bug { prompt } => assert_eq!(prompt, "OOM crash"),
             _ => panic!("expected Bug"),
         }
@@ -552,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_help_text_includes_new_commands() {
-        let text = build_help_text(&no_skills());
+        let text = build_help_text(&no_skills(), &no_plugins());
         assert!(text.contains("/pr"));
         assert!(text.contains("/bug"));
         assert!(text.contains("/search"));
@@ -573,7 +586,7 @@ mod tests {
     #[test]
     fn test_execute_search() {
         let cmd = SlashCommand::Search { query: "token".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Search { query } => assert_eq!(query, "token"),
             _ => panic!("expected Search"),
         }
@@ -601,7 +614,7 @@ mod tests {
     #[test]
     fn test_execute_mcp() {
         let cmd = SlashCommand::Mcp { sub: "list".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Mcp { sub } => assert_eq!(sub, "list"),
             _ => panic!("expected Mcp"),
         }
@@ -609,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_help_text_includes_mcp() {
-        let text = build_help_text(&no_skills());
+        let text = build_help_text(&no_skills(), &no_plugins());
         assert!(text.contains("/mcp"));
     }
 
@@ -636,7 +649,7 @@ mod tests {
     #[test]
     fn test_execute_commit_push_pr() {
         let cmd = SlashCommand::CommitPushPr { message: "new feature".into() };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::CommitPushPr { message } => assert_eq!(message, "new feature"),
             _ => panic!("expected CommitPushPr"),
         }
@@ -644,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_help_text_includes_cpp() {
-        let text = build_help_text(&no_skills());
+        let text = build_help_text(&no_skills(), &no_plugins());
         assert!(text.contains("/commit-push-pr"));
         assert!(text.contains("/cpp"));
     }
@@ -655,7 +668,7 @@ mod tests {
             name: "my-cmd".into(),
             prompt: "Do something special".into(),
         };
-        match cmd.execute(&no_skills()) {
+        match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::RunPluginCommand { name, prompt } => {
                 assert_eq!(name, "my-cmd");
                 assert_eq!(prompt, "Do something special");
@@ -669,5 +682,22 @@ mod tests {
         // A name that is not a builtin or skill should be Unknown
         let cmd = SlashCommand::parse("/my-custom-plugin-cmd", &no_skills());
         assert!(matches!(cmd, Some(SlashCommand::Unknown(_))));
+    }
+
+    #[test]
+    fn test_help_text_includes_plugin_commands() {
+        let plugins = vec![
+            PluginCommandEntry { plugin_name: "my-plugin".into(), command_name: "deploy".into() },
+        ];
+        let text = build_help_text(&no_skills(), &plugins);
+        assert!(text.contains("Plugins"));
+        assert!(text.contains("/deploy"));
+        assert!(text.contains("my-plugin"));
+    }
+
+    #[test]
+    fn test_help_text_no_plugin_section_when_empty() {
+        let text = build_help_text(&no_skills(), &no_plugins());
+        assert!(!text.contains("Plugins"));
     }
 }

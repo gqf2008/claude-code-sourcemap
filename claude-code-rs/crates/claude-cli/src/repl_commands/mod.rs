@@ -243,6 +243,16 @@ pub(crate) async fn handle_status_command(engine: &QueryEngine, cwd: &std::path:
         }
     }
 
+    // Plugins
+    {
+        let loader = claude_agent::plugin::PluginLoader::discover(cwd);
+        let plugins = loader.plugins();
+        if !plugins.is_empty() {
+            let cmd_count: usize = plugins.iter().map(|p| p.manifest.commands.len()).sum();
+            println!("Plugins:  {} loaded ({} commands)", plugins.len(), cmd_count);
+        }
+    }
+
     // Context usage
     if let Some(pct) = engine.context_usage_percent().await {
         let color = if pct >= 90 { "\x1b[31m" } else if pct >= 80 { "\x1b[33m" } else { "" };

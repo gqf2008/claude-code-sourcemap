@@ -75,9 +75,9 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 if trimmed.starts_with('/') {
                     let _ = rl.add_history_entry(trimmed);
                     if let Some(cmd) = SlashCommand::parse(trimmed, &skills) {
+                        let loader = PluginLoader::discover(&cwd);
                         // Resolve Unknown commands: check if they match a plugin command
                         let cmd = if let SlashCommand::Unknown(ref name) = cmd {
-                            let loader = PluginLoader::discover(&cwd);
                             let found = loader.all_commands().into_iter()
                                 .find(|(_, c)| c.name == *name);
                             if let Some((plugin, pcmd)) = found {
@@ -96,7 +96,15 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                         } else {
                             cmd
                         };
-                        match cmd.execute(&skills) {
+                        // Build plugin command list for help display
+                        let plugin_cmds: Vec<crate::commands::PluginCommandEntry> =
+                            loader.all_commands().into_iter()
+                                .map(|(p, c)| crate::commands::PluginCommandEntry {
+                                    plugin_name: p.manifest.name.clone(),
+                                    command_name: c.name.clone(),
+                                })
+                                .collect();
+                        match cmd.execute(&skills, &plugin_cmds) {
                             CommandResult::Print(text) => println!("{}", text),
                             CommandResult::Exit => { println!("Goodbye!"); break; }
                             CommandResult::ClearHistory => {

@@ -323,7 +323,9 @@ pub async fn print_stream(
                     }
                 }
                 if total_input_tokens > 0 || total_output_tokens > 0 {
-                    parts.push(format!("{}↓ {}↑", total_input_tokens, total_output_tokens));
+                    parts.push(format!("{}↓ {}↑",
+                        crate::repl_commands::format_tokens(total_input_tokens),
+                        crate::repl_commands::format_tokens(total_output_tokens)));
                 }
                 if !parts.is_empty() {
                     eprintln!("\x1b[2m  [{}]\x1b[0m", parts.join(" · "));
