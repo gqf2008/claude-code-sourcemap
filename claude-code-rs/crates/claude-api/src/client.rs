@@ -28,6 +28,7 @@ impl ApiClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         let http = reqwest::Client::builder()
             .user_agent("Claude-Code-RS/0.1")
+            // Title-case headers (e.g. Content-Type) for maximum proxy compatibility
             .http1_title_case_headers()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());

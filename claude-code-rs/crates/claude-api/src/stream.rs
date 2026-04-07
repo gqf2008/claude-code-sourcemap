@@ -37,7 +37,7 @@ pub fn parse_sse_line(line: &str) -> Option<Result<StreamEvent>> {
                 // skip it gracefully rather than killing the stream.
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
                     if v.get("type").is_some() {
-                        tracing::debug!("Skipping unknown SSE event type: {}", data.chars().take(120).collect::<String>());
+                        tracing::debug!("Skipping unknown SSE event type: {}", &data[..data.len().min(120)]);
                         return None;
                     }
                 }
