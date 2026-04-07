@@ -140,11 +140,13 @@ struct ChatChoice {
 }
 
 /// The message in a choice (assistant's reply).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[allow(dead_code)]
 struct ChatChoiceMessage {
     role: String,
     content: Option<String>,
+    /// Reasoning/thinking content (DashScope/Qwen extension).
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<ChatToolCall>>,
 }
 
@@ -178,11 +180,14 @@ struct ChunkChoice {
 }
 
 /// Delta content in a streaming chunk.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[allow(dead_code)]
 struct ChunkDelta {
     role: Option<String>,
     content: Option<String>,
+    /// Reasoning/thinking content (DashScope/Qwen extension to OpenAI format).
+    /// Maps to Anthropic's `ThinkingDelta` event.
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<ChunkToolCall>>,
 }
 
@@ -407,6 +412,13 @@ fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResponse {
         Some(c) => {
             let mut blocks = Vec::new();
 
+            // Reasoning/thinking content (DashScope/Qwen extension)
+            if let Some(reasoning) = c.message.reasoning_content {
+                if !reasoning.is_empty() {
+                    blocks.push(ResponseContentBlock::Thinking { thinking: reasoning });
+                }
+            }
+
             // Text content
             if let Some(text) = c.message.content {
                 if !text.is_empty() {
@@ -471,8 +483,14 @@ fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResponse {
 struct OpenAIStreamState {
     /// Whether `MessageStart` has been emitted.
     message_started: bool,
-    /// Whether text `ContentBlockStart` (index 0) has been emitted.
+    /// Whether thinking `ContentBlockStart` (index 0) has been emitted.
+    thinking_block_started: bool,
+    /// Whether text `ContentBlockStart` has been emitted.
     text_block_started: bool,
+    /// Index for the next content block (thinking takes 0 if present, text follows).
+    next_block_index: usize,
+    /// The index used for the text content block.
+    text_block_index: usize,
     /// Set of tool call indices that have received `ContentBlockStart`.
     tool_blocks_started: std::collections::HashSet<usize>,
     /// Model name for the MessageStart event.
@@ -483,7 +501,10 @@ impl OpenAIStreamState {
     fn new(model: impl Into<String>) -> Self {
         Self {
             message_started: false,
+            thinking_block_started: false,
             text_block_started: false,
+            next_block_index: 0,
+            text_block_index: 0,
             tool_blocks_started: std::collections::HashSet::new(),
             model: model.into(),
         }
@@ -515,20 +536,49 @@ impl OpenAIStreamState {
         }
 
         for choice in &chunk.choices {
+            // Reasoning/thinking delta (DashScope/Qwen extension)
+            if let Some(ref reasoning) = choice.delta.reasoning_content {
+                if !reasoning.is_empty() {
+                    if !self.thinking_block_started {
+                        self.thinking_block_started = true;
+                        let idx = self.next_block_index;
+                        self.next_block_index += 1;
+                        events.push(StreamEvent::ContentBlockStart {
+                            index: idx,
+                            content_block: ResponseContentBlock::Thinking {
+                                thinking: String::new(),
+                            },
+                        });
+                    }
+                    events.push(StreamEvent::ContentBlockDelta {
+                        index: 0, // thinking is always block 0
+                        delta: DeltaBlock::ThinkingDelta {
+                            thinking: reasoning.clone(),
+                        },
+                    });
+                }
+            }
+
             // Text delta — ensure ContentBlockStart is emitted first
             if let Some(ref text) = choice.delta.content {
                 if !text.is_empty() {
+                    // Close thinking block before starting text block
+                    if self.thinking_block_started && !self.text_block_started {
+                        events.push(StreamEvent::ContentBlockStop { index: 0 });
+                    }
                     if !self.text_block_started {
                         self.text_block_started = true;
+                        self.text_block_index = self.next_block_index;
+                        self.next_block_index += 1;
                         events.push(StreamEvent::ContentBlockStart {
-                            index: 0,
+                            index: self.text_block_index,
                             content_block: ResponseContentBlock::Text {
                                 text: String::new(),
                             },
                         });
                     }
                     events.push(StreamEvent::ContentBlockDelta {
-                        index: 0,
+                        index: self.text_block_index,
                         delta: DeltaBlock::TextDelta {
                             text: text.clone(),
                         },
@@ -540,7 +590,7 @@ impl OpenAIStreamState {
             if let Some(ref tool_calls) = choice.delta.tool_calls {
                 for tc in tool_calls {
                     if let Some(ref func) = tc.function {
-                        let block_index = tc.index + 1; // offset by 1 (0 is text)
+                        let block_index = self.next_block_index + tc.index;
 
                         // New tool call start → ContentBlockStart (only once per index)
                         if tc.id.is_some() && !self.tool_blocks_started.contains(&tc.index) {
@@ -573,15 +623,19 @@ impl OpenAIStreamState {
 
             // Finish reason → close open blocks, then MessageDelta + MessageStop
             if let Some(ref reason) = choice.finish_reason {
-                // Emit ContentBlockStop for all open content blocks
-                if self.text_block_started {
+                // Close thinking block if still open (not already closed by text start)
+                if self.thinking_block_started && !self.text_block_started {
                     events.push(StreamEvent::ContentBlockStop { index: 0 });
+                }
+                // Emit ContentBlockStop for text block
+                if self.text_block_started {
+                    events.push(StreamEvent::ContentBlockStop { index: self.text_block_index });
                 }
                 let mut tool_indices: Vec<usize> =
                     self.tool_blocks_started.iter().copied().collect();
                 tool_indices.sort();
                 for idx in tool_indices {
-                    events.push(StreamEvent::ContentBlockStop { index: idx + 1 });
+                    events.push(StreamEvent::ContentBlockStop { index: self.next_block_index + idx });
                 }
 
                 let stop_reason = match reason.as_str() {
@@ -618,15 +672,19 @@ impl OpenAIStreamState {
         let mut events = Vec::new();
 
         // Close any open content blocks
-        if self.text_block_started {
+        if self.thinking_block_started && !self.text_block_started {
             events.push(StreamEvent::ContentBlockStop { index: 0 });
+            self.thinking_block_started = false;
+        }
+        if self.text_block_started {
+            events.push(StreamEvent::ContentBlockStop { index: self.text_block_index });
             self.text_block_started = false;
         }
         let mut tool_indices: Vec<usize> =
             self.tool_blocks_started.iter().copied().collect();
         tool_indices.sort();
         for idx in tool_indices {
-            events.push(StreamEvent::ContentBlockStop { index: idx + 1 });
+            events.push(StreamEvent::ContentBlockStop { index: self.next_block_index + idx });
         }
         self.tool_blocks_started.clear();
 
@@ -680,8 +738,8 @@ impl OpenAIBackend {
         let mut url = base_url.into();
         // Strip trailing /v1 to prevent double-path: /v1/v1/chat/completions
         let trimmed = url.trim_end_matches('/');
-        if trimmed.ends_with("/v1") {
-            url = trimmed[..trimmed.len() - 3].to_string();
+        if let Some(prefix) = trimmed.strip_suffix("/v1") {
+            url = prefix.to_string();
         }
         Self {
             api_key: api_key.into(),
@@ -1104,6 +1162,7 @@ mod tests {
                     role: "assistant".into(),
                     content: Some("Hello there!".into()),
                     tool_calls: None,
+                    ..Default::default()
                 },
                 finish_reason: Some("stop".into()),
             }],
@@ -1145,6 +1204,7 @@ mod tests {
                             arguments: r#"{"path":"test.txt"}"#.into(),
                         },
                     }]),
+                    ..Default::default()
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -1175,6 +1235,7 @@ mod tests {
                     role: "assistant".into(),
                     content: Some("truncated...".into()),
                     tool_calls: None,
+                    ..Default::default()
                 },
                 finish_reason: Some("length".into()),
             }],
@@ -1198,7 +1259,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: Some("Hi".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: Some("gpt-4o".into()),
@@ -1230,7 +1291,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: Some("Hello".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: Some("gpt-4o".into()),
@@ -1245,7 +1306,7 @@ mod tests {
                     role: None,
                     content: Some(" world".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: None,
@@ -1276,7 +1337,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: Some("Hi".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: Some("gpt-4o".into()),
@@ -1291,7 +1352,7 @@ mod tests {
                     role: None,
                     content: None,
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: Some("stop".into()),
             }],
             model: None,
@@ -1331,6 +1392,7 @@ mod tests {
                             arguments: Some(r#"{"com"#.into()),
                         }),
                     }]),
+                    ..Default::default()
                 },
                 finish_reason: None,
             }],
@@ -1346,7 +1408,7 @@ mod tests {
                     role: None,
                     content: None,
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: Some("tool_calls".into()),
             }],
             model: None,
@@ -1357,7 +1419,7 @@ mod tests {
         let events1 = state.process_chunk(&chunk1);
         assert_eq!(events1.len(), 3); // MessageStart + ContentBlockStart + InputJsonDelta
         assert!(matches!(events1[0], StreamEvent::MessageStart { .. }));
-        assert!(matches!(events1[1], StreamEvent::ContentBlockStart { index: 1, .. }));
+        assert!(matches!(events1[1], StreamEvent::ContentBlockStart { index: 0, .. }));
         match &events1[2] {
             StreamEvent::ContentBlockDelta {
                 delta: DeltaBlock::InputJsonDelta { partial_json },
@@ -1367,9 +1429,9 @@ mod tests {
         }
 
         let events2 = state.process_chunk(&chunk2);
-        // ContentBlockStop(1) + MessageDelta + MessageStop
+        // ContentBlockStop(0) + MessageDelta + MessageStop
         assert_eq!(events2.len(), 3);
-        assert!(matches!(events2[0], StreamEvent::ContentBlockStop { index: 1 }));
+        assert!(matches!(events2[0], StreamEvent::ContentBlockStop { index: 0 }));
         match &events2[1] {
             StreamEvent::MessageDelta { delta, .. } => {
                 assert_eq!(delta.stop_reason.as_deref(), Some("tool_use"));
@@ -1389,7 +1451,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: Some("partial".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: Some("gpt-4o".into()),
@@ -1421,7 +1483,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: Some("Let me read that.".into()),
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: None,
             }],
             model: Some("gpt-4o".into()),
@@ -1447,13 +1509,13 @@ mod tests {
                             arguments: Some(r#"{"path":"test.txt"}"#.into()),
                         }),
                     }]),
+                    ..Default::default()
                 },
                 finish_reason: None,
             }],
             model: None,
             usage: None,
-        };
-        let events = state.process_chunk(&c2);
+        };        let events = state.process_chunk(&c2);
         assert_eq!(events.len(), 2); // ContentBlockStart(1) + InputJsonDelta
 
         // Chunk 3: finish
@@ -1465,7 +1527,7 @@ mod tests {
                     role: None,
                     content: None,
                     tool_calls: None,
-                },
+                ..Default::default() },
                 finish_reason: Some("tool_calls".into()),
             }],
             model: None,
@@ -1478,6 +1540,128 @@ mod tests {
         assert!(matches!(events[1], StreamEvent::ContentBlockStop { index: 1 }));
         assert!(matches!(events[2], StreamEvent::MessageDelta { .. }));
         assert!(matches!(events[3], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn reasoning_content_emits_thinking_events() {
+        // Chunk 1: reasoning/thinking delta
+        let chunk1 = ChatCompletionChunk {
+            id: "chatcmpl-reason".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    role: Some("assistant".into()),
+                    reasoning_content: Some("Let me think...".into()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            model: Some("qwen3.6-plus".into()),
+            usage: None,
+        };
+
+        let mut state = OpenAIStreamState::new("qwen3.6-plus");
+        let events = state.process_chunk(&chunk1);
+        // MessageStart + ContentBlockStart(thinking) + ThinkingDelta
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], StreamEvent::MessageStart { .. }));
+        assert!(matches!(events[1], StreamEvent::ContentBlockStart {
+            index: 0,
+            content_block: ResponseContentBlock::Thinking { .. },
+        }));
+        match &events[2] {
+            StreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: DeltaBlock::ThinkingDelta { thinking },
+            } => assert_eq!(thinking, "Let me think..."),
+            _ => panic!("Expected ThinkingDelta"),
+        }
+
+        // Chunk 2: text content (should close thinking, start text at index 1)
+        let chunk2 = ChatCompletionChunk {
+            id: "chatcmpl-reason".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta {
+                    content: Some("The answer is 42.".into()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            model: None,
+            usage: None,
+        };
+
+        let events = state.process_chunk(&chunk2);
+        // ContentBlockStop(0) + ContentBlockStart(1, text) + TextDelta
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], StreamEvent::ContentBlockStop { index: 0 }));
+        assert!(matches!(events[1], StreamEvent::ContentBlockStart {
+            index: 1,
+            content_block: ResponseContentBlock::Text { .. },
+        }));
+        match &events[2] {
+            StreamEvent::ContentBlockDelta {
+                index: 1,
+                delta: DeltaBlock::TextDelta { text },
+            } => assert_eq!(text, "The answer is 42."),
+            _ => panic!("Expected TextDelta at index 1"),
+        }
+
+        // Chunk 3: finish
+        let chunk3 = ChatCompletionChunk {
+            id: "chatcmpl-reason".into(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: ChunkDelta::default(),
+                finish_reason: Some("stop".into()),
+            }],
+            model: None,
+            usage: None,
+        };
+
+        let events = state.process_chunk(&chunk3);
+        // ContentBlockStop(1) + MessageDelta + MessageStop
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], StreamEvent::ContentBlockStop { index: 1 }));
+        assert!(matches!(events[1], StreamEvent::MessageDelta { .. }));
+        assert!(matches!(events[2], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn from_openai_response_with_reasoning_content() {
+        let openai_resp = ChatCompletionResponse {
+            id: "chatcmpl-reason".into(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatChoiceMessage {
+                    role: "assistant".into(),
+                    content: Some("42".into()),
+                    reasoning_content: Some("I need to calculate...".into()),
+                    ..Default::default()
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            model: "qwen3.6-plus".into(),
+            usage: None,
+        };
+
+        let resp = from_openai_response(openai_resp);
+        assert_eq!(resp.content.len(), 2);
+        // Thinking block comes first
+        match &resp.content[0] {
+            ResponseContentBlock::Thinking { thinking } => {
+                assert_eq!(thinking, "I need to calculate...");
+            }
+            _ => panic!("Expected Thinking block"),
+        }
+        // Then text block
+        match &resp.content[1] {
+            ResponseContentBlock::Text { text } => {
+                assert_eq!(text, "42");
+            }
+            _ => panic!("Expected Text block"),
+        }
     }
 
     // ── Backend construction ──
