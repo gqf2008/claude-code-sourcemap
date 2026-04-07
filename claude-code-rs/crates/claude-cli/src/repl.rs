@@ -1,12 +1,60 @@
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
 use claude_core::skills::SkillEntry;
+use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::validate::Validator;
+use rustyline::{Editor, Helper};
 
 use crate::commands::{CommandResult, SlashCommand};
 use crate::output::print_stream;
 use crate::repl_commands::*;
+
+/// Tab-completion helper for slash commands.
+pub struct CommandCompleter;
+
+const SLASH_COMMANDS: &[&str] = &[
+    "/help", "/clear", "/model", "/compact", "/cost", "/skills", "/memory",
+    "/session", "/diff", "/status", "/permissions", "/config", "/undo",
+    "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
+    "/bug", "/search", "/version", "/login", "/logout", "/context",
+    "/export", "/reload-context", "/mcp", "/plugin", "/exit",
+];
+
+impl Completer for CommandCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        if !line.starts_with('/') {
+            return Ok((0, vec![]));
+        }
+        let prefix = &line[..pos];
+        let matches: Vec<Pair> = SLASH_COMMANDS
+            .iter()
+            .filter(|cmd| cmd.starts_with(prefix))
+            .map(|cmd| Pair {
+                display: cmd.to_string(),
+                replacement: cmd.to_string(),
+            })
+            .collect();
+        Ok((0, matches))
+    }
+}
+
+impl Hinter for CommandCompleter {
+    type Hint = String;
+}
+
+impl Highlighter for CommandCompleter {}
+impl Validator for CommandCompleter {}
+impl Helper for CommandCompleter {}
 
 /// Snapshot of config file modification times for auto-reload detection.
 struct ConfigMtimes {
@@ -49,7 +97,8 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
         println!("\x1b[33mSkills loaded: {}\x1b[0m\n", names.join(", "));
     }
 
-    let mut rl = DefaultEditor::new()?;
+    let mut rl = Editor::new()?;
+    rl.set_helper(Some(CommandCompleter));
 
     // Load persistent history
     let history_path = history_file_path();

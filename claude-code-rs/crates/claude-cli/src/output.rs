@@ -201,13 +201,20 @@ fn categorize_error(msg: &str) -> (&'static str, Option<&'static str>) {
         ("🔑", Some("Check your API key with `/login` or set ANTHROPIC_API_KEY"))
     } else if lower.contains("403") || lower.contains("forbidden") || lower.contains("permission") {
         ("🚫", Some("Your API key may lack the required permissions"))
-    } else if lower.contains("429") || lower.contains("rate limit") {
+    } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("too many requests") {
         ("⏳", Some("Rate limited — the request will be retried automatically"))
+    } else if lower.contains("quota") || lower.contains("billing") || lower.contains("credit") {
+        ("💳", Some("Quota exceeded — check your billing at console.anthropic.com"))
     } else if lower.contains("529") || lower.contains("overloaded") {
         ("🔥", Some("API is overloaded — try again in a moment"))
+    } else if lower.contains("model not found") || lower.contains("invalid_model") || lower.contains("does not exist") {
+        ("🔍", Some("Model not found — check the model name with `/model`"))
+    } else if lower.contains("context_length") || lower.contains("too many tokens") || lower.contains("max_tokens") {
+        ("📏", Some("Input too long — try `/compact` to reduce context size"))
     } else if lower.contains("timeout") || lower.contains("timed out") {
         ("⏱", Some("Connection timed out — check your network"))
-    } else if lower.contains("connection") || lower.contains("dns") || lower.contains("network") {
+    } else if lower.contains("connection") || lower.contains("dns") || lower.contains("network")
+        || lower.contains("connect error") {
         ("🌐", Some("Network error — check your internet connection"))
     } else if lower.contains("500") || lower.contains("502") || lower.contains("503") {
         ("💥", Some("Server error — this is usually temporary"))
@@ -641,6 +648,27 @@ mod tests {
         let (icon, hint) = categorize_error("something unexpected happened");
         assert_eq!(icon, "❌");
         assert!(hint.is_none());
+    }
+
+    #[test]
+    fn test_categorize_error_quota() {
+        let (icon, hint) = categorize_error("quota exceeded for this billing period");
+        assert_eq!(icon, "💳");
+        assert!(hint.unwrap().contains("billing"));
+    }
+
+    #[test]
+    fn test_categorize_error_model_not_found() {
+        let (icon, hint) = categorize_error("model not found: claude-nonexistent");
+        assert_eq!(icon, "🔍");
+        assert!(hint.unwrap().contains("model"));
+    }
+
+    #[test]
+    fn test_categorize_error_context_length() {
+        let (icon, hint) = categorize_error("context_length_exceeded: too many tokens");
+        assert_eq!(icon, "📏");
+        assert!(hint.unwrap().contains("compact"));
     }
 
     // ── parse_edit_stats ─────────────────────────────────────────────
