@@ -12,3 +12,4 @@ pub mod coordinator;
 pub mod cost;
 pub mod system_prompt;
 pub mod plugin;
+pub mod memory_extractor;

@@ -42,6 +42,10 @@ pub enum AgentType {
     Plan,
     /// Code review agent — read-only tools, focused on analysis.
     CodeReview,
+    /// Verification agent — runs tests, checks correctness (read-only bias).
+    Verification,
+    /// Worker agent — spawned by coordinator, full tool access.
+    Worker,
 }
 
 impl AgentType {
@@ -50,13 +54,37 @@ impl AgentType {
             "explore" => Self::Explore,
             "plan" => Self::Plan,
             "code-review" | "code_review" | "review" => Self::CodeReview,
+            "verification" | "verify" => Self::Verification,
+            "worker" => Self::Worker,
             _ => Self::General,
         }
     }
 
+    /// Human-readable description of when to use this agent type.
+    pub fn when_to_use(&self) -> &'static str {
+        match self {
+            Self::General => "For implementation tasks requiring full tool access",
+            Self::Explore => "For fast codebase investigation — read-only, lower cost",
+            Self::Plan => "For task decomposition and planning without implementation",
+            Self::CodeReview => "For analyzing code quality, bugs, and security concerns",
+            Self::Verification => "For running tests and checking correctness of changes",
+            Self::Worker => "Spawned by coordinator for delegated subtasks",
+        }
+    }
+
+    /// Whether this agent should default to background execution.
+    pub fn default_background(&self) -> bool {
+        matches!(self, Self::Worker)
+    }
+
+    /// Whether this agent should run in isolated mode (reduced tool access).
+    pub fn is_isolated(&self) -> bool {
+        matches!(self, Self::Explore | Self::CodeReview | Self::Verification)
+    }
+
     fn system_prompt(&self, base: &str) -> String {
         match self {
-            Self::General => base.to_string(),
+            Self::General | Self::Worker => base.to_string(),
             Self::Explore => format!(
                 "{}\n\nYou are an exploration agent. Your job is to investigate the codebase \
                  and gather information. You should ONLY read files and search — do not modify \
@@ -75,21 +103,28 @@ impl AgentType {
                  and line numbers. Do not modify any files.",
                 base
             ),
+            Self::Verification => format!(
+                "{}\n\nYou are a verification agent. Your job is to run tests, check builds, \
+                 and verify correctness of changes. Report pass/fail status clearly. \
+                 Do not modify source code — only run diagnostics.",
+                base
+            ),
         }
     }
 
     fn max_turns(&self, configured: u32) -> u32 {
         match self {
-            Self::General => configured.min(20),
+            Self::General | Self::Worker => configured.min(20),
             Self::Explore => configured.min(10),
             Self::Plan => configured.min(15),
             Self::CodeReview => configured.min(15),
+            Self::Verification => configured.min(10),
         }
     }
 
     /// Returns true if this agent type should be restricted to read-only tools.
     fn read_only(&self) -> bool {
-        matches!(self, Self::Explore | Self::CodeReview)
+        matches!(self, Self::Explore | Self::CodeReview | Self::Verification)
     }
 
     /// Preferred model alias for this agent type.
@@ -147,7 +182,9 @@ impl Tool for DispatchAgentTool {
          - \"general\" (default): Full tool access, up to 20 turns\n\
          - \"explore\": Read-only, fast investigation, up to 10 turns\n\
          - \"plan\": Read + task management, up to 15 turns\n\
-         - \"code-review\": Read-only code analysis, up to 15 turns"
+         - \"code-review\": Read-only code analysis, up to 15 turns\n\
+         - \"verification\": Run tests and check correctness, up to 10 turns\n\
+         - \"worker\": Full tool access, spawned by coordinator"
     }
 
     fn input_schema(&self) -> Value {
@@ -160,7 +197,7 @@ impl Tool for DispatchAgentTool {
                 },
                 "agent_type": {
                     "type": "string",
-                    "enum": ["general", "explore", "plan", "code-review"],
+                    "enum": ["general", "explore", "plan", "code-review", "verification", "worker"],
                     "description": "The type of agent to launch. Determines available tools \
                                     and system prompt. Default: general."
                 },
