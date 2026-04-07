@@ -8,7 +8,7 @@ pub use builder::QueryEngineBuilder;
 
 use std::sync::Arc;
 
-use claude_api::client::AnthropicClient;
+use claude_api::client::ApiClient;
 use claude_api::types::{CacheControl, ToolDefinition};
 use claude_core::message::{ContentBlock, Message, UserMessage};
 use claude_core::tool::{AbortSignal, ToolContext};
@@ -25,7 +25,7 @@ use crate::state::SharedState;
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
 pub struct QueryEngine {
-    client: Arc<AnthropicClient>,
+    client: Arc<ApiClient>,
     executor: Arc<ToolExecutor>,
     registry: Arc<ToolRegistry>,
     state: SharedState,

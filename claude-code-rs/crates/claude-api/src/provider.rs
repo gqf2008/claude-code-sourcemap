@@ -5,8 +5,8 @@
 //! - Map canonical model IDs to provider-specific format
 //! - Send messages (streaming and non-streaming)
 //!
-//! The [`AnthropicClient`](crate::client::AnthropicClient) accepts any backend
-//! via [`with_backend`](crate::client::AnthropicClient::with_backend).
+//! The [`ApiClient`](crate::client::ApiClient) accepts any backend
+//! via [`with_backend`](crate::client::ApiClient::with_backend).
 
 use std::pin::Pin;
 
@@ -335,9 +335,10 @@ impl ApiBackend for VertexBackend {
 
 /// Detect the API backend from environment variables (mirrors TS `getAPIProvider`).
 ///
-/// Priority: Bedrock → Vertex → FirstParty.
+/// Priority: explicit `--provider` flag → env vars → FirstParty.
 /// - `CLAUDE_CODE_USE_BEDROCK=1` → Bedrock
 /// - `CLAUDE_CODE_USE_VERTEX=1` → Vertex
+/// - `OPENAI_API_KEY` set (without Anthropic key) → OpenAI
 /// - Otherwise → FirstParty (requires `ANTHROPIC_API_KEY`)
 pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
     let is_truthy = |var: &str| -> bool {
@@ -367,6 +368,88 @@ pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
             backend = backend.with_base_url(url);
         }
         Box::new(backend)
+    }
+}
+
+/// Create a backend by explicit provider name.
+///
+/// Supports: "anthropic" (default), "openai", "deepseek", "ollama", "bedrock", "vertex".
+/// For OpenAI-compatible providers, `api_key` is used for Bearer auth and `base_url`
+/// overrides the default endpoint.
+pub fn create_backend(
+    provider: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+) -> Box<dyn ApiBackend> {
+    use crate::openai::OpenAIBackend;
+
+    match provider {
+        "openai" => {
+            let url = base_url.unwrap_or("https://api.openai.com");
+            Box::new(
+                OpenAIBackend::new(api_key, url)
+                    .with_provider_name("openai"),
+            )
+        }
+        "deepseek" => {
+            let url = base_url.unwrap_or("https://api.deepseek.com");
+            Box::new(
+                OpenAIBackend::new(api_key, url)
+                    .with_provider_name("deepseek"),
+            )
+        }
+        "ollama" => {
+            let url = base_url.unwrap_or("http://localhost:11434");
+            Box::new(
+                OpenAIBackend::new("ollama", url)
+                    .with_provider_name("ollama"),
+            )
+        }
+        "together" => {
+            let url = base_url.unwrap_or("https://api.together.xyz");
+            Box::new(
+                OpenAIBackend::new(api_key, url)
+                    .with_provider_name("together"),
+            )
+        }
+        "groq" => {
+            let url = base_url.unwrap_or("https://api.groq.com/openai");
+            Box::new(
+                OpenAIBackend::new(api_key, url)
+                    .with_provider_name("groq"),
+            )
+        }
+        "openai-compatible" => {
+            let url = base_url.unwrap_or("http://localhost:8000");
+            Box::new(
+                OpenAIBackend::new(api_key, url)
+                    .auto_detect_provider(),
+            )
+        }
+        "bedrock" => {
+            let region = std::env::var("AWS_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string());
+            let mut backend = BedrockBackend::new(region);
+            if let Some(url) = base_url {
+                backend = backend.with_base_url(url);
+            }
+            Box::new(backend)
+        }
+        "vertex" => {
+            let project = std::env::var("ANTHROPIC_VERTEX_PROJECT_ID")
+                .unwrap_or_else(|_| "unknown-project".to_string());
+            let region = std::env::var("CLOUD_ML_REGION")
+                .unwrap_or_else(|_| "us-central1".to_string());
+            Box::new(VertexBackend::new(project, region))
+        }
+        _ => {
+            // Default: Anthropic first-party
+            let mut backend = FirstPartyBackend::new(api_key);
+            if let Some(url) = base_url {
+                backend = backend.with_base_url(url);
+            }
+            Box::new(backend)
+        }
     }
 }
 
@@ -658,10 +741,10 @@ mod tests {
 
     #[test]
     fn mock_backend_with_client_integration() {
-        use crate::client::AnthropicClient;
+        use crate::client::ApiClient;
 
         let mock = MockBackend::new().with_response(sample_response());
-        let client = AnthropicClient::new("test-key")
+        let client = ApiClient::new("test-key")
             .with_backend(Box::new(mock));
 
         assert_eq!(client.provider_name(), "mock");

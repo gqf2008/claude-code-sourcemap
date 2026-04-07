@@ -6,7 +6,7 @@ use futures::Stream;
 use tracing::warn;
 use uuid::Uuid;
 
-use claude_api::client::AnthropicClient;
+use claude_api::client::ApiClient;
 use claude_api::types::*;
 use claude_core::message::{
     AssistantMessage, ContentBlock, Message, StopReason, Usage, UserMessage,
@@ -68,7 +68,7 @@ impl Default for QueryConfig {
 /// Core agent loop: send messages → process stream → execute tools → repeat
 #[allow(clippy::too_many_arguments)]
 pub fn query_stream(
-    client: Arc<AnthropicClient>,
+    client: Arc<ApiClient>,
     executor: Arc<ToolExecutor>,
     state: SharedState,
     tool_context: ToolContext,

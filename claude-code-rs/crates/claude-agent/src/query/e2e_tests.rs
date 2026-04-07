@@ -117,14 +117,14 @@ fn make_stream_events(response: MessagesResponse) -> Vec<anyhow::Result<claude_a
 
 /// Common test setup: client + executor + state + tool_context + hooks
 fn test_setup(mock: MockBackend) -> (
-    Arc<claude_api::client::AnthropicClient>,
+    Arc<claude_api::client::ApiClient>,
     Arc<crate::executor::ToolExecutor>,
     crate::state::SharedState,
     claude_core::tool::ToolContext,
     Arc<crate::hooks::HookRegistry>,
 ) {
     let client = Arc::new(
-        claude_api::client::AnthropicClient::new("test-key")
+        claude_api::client::ApiClient::new("test-key")
             .with_backend(Box::new(mock)),
     );
     let registry = Arc::new(claude_tools::ToolRegistry::new());
@@ -152,7 +152,7 @@ fn user_msg(text: &str) -> Vec<Message> {
 }
 
 async fn collect_events(
-    client: Arc<claude_api::client::AnthropicClient>,
+    client: Arc<claude_api::client::ApiClient>,
     executor: Arc<crate::executor::ToolExecutor>,
     state: crate::state::SharedState,
     tool_context: claude_core::tool::ToolContext,
@@ -404,7 +404,7 @@ async fn e2e_full_tool_round_trip_with_registered_tool() {
         .with_stream_events(make_stream_events(text_response));
 
     let client = Arc::new(
-        claude_api::client::AnthropicClient::new("test-key")
+        claude_api::client::ApiClient::new("test-key")
             .with_backend(Box::new(mock)),
     );
     let mut registry = claude_tools::ToolRegistry::new();
@@ -642,7 +642,7 @@ async fn e2e_permission_denied_returns_error_tool_result() {
         .with_stream_events(make_stream_events(text_response));
 
     let client = Arc::new(
-        claude_api::client::AnthropicClient::new("test-key")
+        claude_api::client::ApiClient::new("test-key")
             .with_backend(Box::new(mock)),
     );
     let mut registry = claude_tools::ToolRegistry::new();

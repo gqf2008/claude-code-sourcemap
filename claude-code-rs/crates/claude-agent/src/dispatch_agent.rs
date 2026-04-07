@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use claude_api::client::AnthropicClient;
+use claude_api::client::ApiClient;
 use claude_api::types::ToolDefinition;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
@@ -123,7 +123,7 @@ pub fn resolve_agent_model(alias: Option<&str>, parent_model: &str) -> String {
 /// via `tokio::spawn` and the tool returns immediately with an `agent_id`.
 /// Results are delivered as `<task-notification>` XML via the `AgentTracker`.
 pub struct DispatchAgentTool {
-    pub client: Arc<AnthropicClient>,
+    pub client: Arc<ApiClient>,
     pub registry: Arc<ToolRegistry>,
     pub permission_checker: Arc<PermissionChecker>,
     pub config: SubAgentConfig,
@@ -556,7 +556,7 @@ mod tests {
 
     fn make_tool() -> DispatchAgentTool {
         DispatchAgentTool {
-            client: Arc::new(AnthropicClient::new("test-key")),
+            client: Arc::new(ApiClient::new("test-key")),
             registry: Arc::new(ToolRegistry::with_defaults()),
             permission_checker: Arc::new(PermissionChecker::new(
                 claude_core::permissions::PermissionMode::BypassAll,

@@ -98,6 +98,14 @@ struct Cli {
     /// Generate shell completions and exit (bash, zsh, fish, powershell)
     #[arg(long, value_name = "SHELL")]
     completions: Option<clap_complete::Shell>,
+
+    /// API provider: anthropic (default), openai, deepseek, ollama, together, groq, bedrock, vertex
+    #[arg(long, default_value = "anthropic")]
+    provider: String,
+
+    /// Override API base URL (provider-specific)
+    #[arg(long)]
+    base_url: Option<String>,
 }
 
 #[tokio::main]
@@ -126,9 +134,7 @@ async fn main() -> anyhow::Result<()> {
         return run_init(&cwd);
     }
 
-    let api_key = cli.api_key.or(settings.api_key).ok_or_else(|| {
-        anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key.")
-    })?;
+    let api_key = resolve_api_key(&cli.provider, cli.api_key.as_deref(), settings.api_key.as_deref())?;
 
     // Resolve model aliases and validate
     let model = claude_core::model::validate_model(&cli.model)
@@ -157,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
         .coordinator_mode(cli.coordinator)
         .max_tokens(cli.max_tokens)
         .allowed_tools(cli.allowed_tools)
+        .provider(&cli.provider)
         .thinking(if cli.thinking {
             Some(claude_api::types::ThinkingConfig {
                 thinking_type: "enabled".into(),
@@ -165,8 +172,16 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         })
-        .append_system_prompt(cli.append_system_prompt)
-        .build();
+        .append_system_prompt(cli.append_system_prompt);
+
+    // Apply base URL override if specified
+    let engine = if let Some(ref url) = cli.base_url {
+        engine.base_url(url)
+    } else {
+        engine
+    };
+
+    let engine = engine.build();
 
     // ── Ctrl-C → abort signal (second press → force exit) ──────────────────
     {
@@ -277,6 +292,82 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve API key based on provider.
+///
+/// - `anthropic`: uses `ANTHROPIC_API_KEY` (default)
+/// - `openai`: uses `OPENAI_API_KEY`
+/// - `deepseek`: uses `DEEPSEEK_API_KEY`
+/// - `ollama` / `local`: no key required
+/// - Others: try explicit flag, then `OPENAI_API_KEY`
+fn resolve_api_key(
+    provider: &str,
+    cli_key: Option<&str>,
+    settings_key: Option<&str>,
+) -> anyhow::Result<String> {
+    // Explicit CLI flag always wins
+    if let Some(key) = cli_key {
+        return Ok(key.to_string());
+    }
+
+    match provider {
+        "anthropic" => {
+            if let Some(key) = settings_key {
+                return Ok(key.to_string());
+            }
+            // ANTHROPIC_API_KEY is already captured by clap's env attribute
+            Err(anyhow::anyhow!(
+                "API key required. Set ANTHROPIC_API_KEY or use --api-key."
+            ))
+        }
+        "openai" | "together" | "groq" => {
+            let env_var = match provider {
+                "openai" => "OPENAI_API_KEY",
+                "together" => "TOGETHER_API_KEY",
+                "groq" => "GROQ_API_KEY",
+                _ => "OPENAI_API_KEY",
+            };
+            std::env::var(env_var).or_else(|_| {
+                settings_key.map(|k| k.to_string()).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "API key required for {} provider. Set {} or use --api-key.",
+                        provider,
+                        env_var
+                    )
+                })
+            })
+        }
+        "deepseek" => std::env::var("DEEPSEEK_API_KEY").or_else(|_| {
+            settings_key.map(|k| k.to_string()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "API key required for DeepSeek. Set DEEPSEEK_API_KEY or use --api-key."
+                )
+            })
+        }),
+        "ollama" | "local" => {
+            // No key needed
+            Ok("ollama".to_string())
+        }
+        "openai-compatible" => {
+            // Try OPENAI_API_KEY, fallback to settings, then allow empty
+            std::env::var("OPENAI_API_KEY")
+                .or_else(|_| Ok(settings_key.unwrap_or("").to_string()))
+        }
+        _ => {
+            // Unknown provider — try settings key, then OPENAI_API_KEY
+            if let Some(key) = settings_key {
+                Ok(key.to_string())
+            } else {
+                std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    anyhow::anyhow!(
+                        "API key required for {} provider. Use --api-key.",
+                        provider
+                    )
+                })
+            }
+        }
+    }
 }
 
 /// Resume the most recent session.
@@ -476,6 +567,56 @@ mod tests {
     fn test_cli_init_flag() {
         let cli = Cli::try_parse_from(["claude", "--init"]).unwrap();
         assert!(cli.init);
+    }
+
+    #[test]
+    fn test_cli_provider_flag() {
+        let cli = Cli::try_parse_from(["claude", "--provider", "openai", "--api-key", "sk-test"]).unwrap();
+        assert_eq!(cli.provider, "openai");
+    }
+
+    #[test]
+    fn test_cli_provider_default() {
+        let cli = Cli::try_parse_from(["claude"]).unwrap();
+        assert_eq!(cli.provider, "anthropic");
+        assert!(cli.base_url.is_none());
+    }
+
+    #[test]
+    fn test_cli_base_url_flag() {
+        let cli = Cli::try_parse_from(["claude", "--base-url", "http://localhost:11434"]).unwrap();
+        assert_eq!(cli.base_url.as_deref(), Some("http://localhost:11434"));
+    }
+
+    // ── resolve_api_key ──────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_api_key_explicit() {
+        assert_eq!(
+            resolve_api_key("anthropic", Some("explicit-key"), None).unwrap(),
+            "explicit-key"
+        );
+    }
+
+    #[test]
+    fn test_resolve_api_key_ollama_no_key() {
+        assert_eq!(
+            resolve_api_key("ollama", None, None).unwrap(),
+            "ollama"
+        );
+    }
+
+    #[test]
+    fn test_resolve_api_key_anthropic_settings() {
+        assert_eq!(
+            resolve_api_key("anthropic", None, Some("settings-key")).unwrap(),
+            "settings-key"
+        );
+    }
+
+    #[test]
+    fn test_resolve_api_key_anthropic_missing() {
+        assert!(resolve_api_key("anthropic", None, None).is_err());
     }
 
     // ── generate_claude_md_template ──────────────────────────────────

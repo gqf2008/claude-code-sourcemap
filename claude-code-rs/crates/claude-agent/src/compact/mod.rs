@@ -29,7 +29,7 @@ pub use memory::{
     save_extracted_memories,
 };
 
-use claude_api::client::AnthropicClient;
+use claude_api::client::ApiClient;
 use claude_api::types::{ApiContentBlock, ApiMessage, MessagesRequest, SystemBlock};
 use claude_core::message::{Message, ToolResultContent};
 
@@ -199,7 +199,7 @@ fn messages_for_compact(messages: &[Message]) -> Vec<ApiMessage> {
 /// Returns the formatted summary string.  The caller is responsible for
 /// replacing the old `messages` slice with a compact boundary + this summary.
 pub async fn compact_conversation(
-    client: &AnthropicClient,
+    client: &ApiClient,
     messages: &[Message],
     model: &str,
     custom_instructions: Option<&str>,

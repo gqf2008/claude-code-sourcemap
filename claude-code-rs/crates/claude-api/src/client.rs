@@ -11,7 +11,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
-pub struct AnthropicClient {
+pub struct ApiClient {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
@@ -23,7 +23,7 @@ pub struct AnthropicClient {
     backend: Option<Box<dyn ApiBackend>>,
 }
 
-impl AnthropicClient {
+impl ApiClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -353,8 +353,8 @@ impl AnthropicClient {
     }
 
     /// Create a lightweight clone for fallback requests.
-    fn clone_for_fallback(&self) -> AnthropicClient {
-        AnthropicClient {
+    fn clone_for_fallback(&self) -> ApiClient {
+        ApiClient {
             http: self.http.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn client_default_constructor() {
-        let c = AnthropicClient::new("sk-test-key");
+        let c = ApiClient::new("sk-test-key");
         assert_eq!(c.api_key, "sk-test-key");
         assert_eq!(c.base_url, DEFAULT_BASE_URL);
         assert_eq!(c.default_model, DEFAULT_MODEL);
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn client_builder_chain() {
-        let c = AnthropicClient::new("key123")
+        let c = ApiClient::new("key123")
             .with_base_url("https://custom.api.com")
             .with_model("claude-haiku-4-5")
             .with_max_tokens(4096)
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn client_headers() {
-        let c = AnthropicClient::new("sk-ant-test");
+        let c = ApiClient::new("sk-ant-test");
         let headers = c.headers().unwrap();
         assert_eq!(headers.get("x-api-key").unwrap(), "sk-ant-test");
         assert_eq!(headers.get("anthropic-version").unwrap(), API_VERSION);
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn client_build_request() {
-        let c = AnthropicClient::new("key")
+        let c = ApiClient::new("key")
             .with_model("test-model")
             .with_max_tokens(8192);
 
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn client_build_request_with_system() {
-        let c = AnthropicClient::new("key");
+        let c = ApiClient::new("key");
         let system = vec![SystemBlock {
             block_type: "text".into(),
             text: "You are helpful.".into(),
@@ -508,20 +508,20 @@ mod tests {
     fn parse_retry_after_valid() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("30"));
-        assert_eq!(AnthropicClient::parse_retry_after(&headers), Some(30));
+        assert_eq!(ApiClient::parse_retry_after(&headers), Some(30));
     }
 
     #[test]
     fn parse_retry_after_missing() {
         let headers = reqwest::header::HeaderMap::new();
-        assert_eq!(AnthropicClient::parse_retry_after(&headers), None);
+        assert_eq!(ApiClient::parse_retry_after(&headers), None);
     }
 
     #[test]
     fn parse_retry_after_invalid() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("not-a-number"));
-        assert_eq!(AnthropicClient::parse_retry_after(&headers), None);
+        assert_eq!(ApiClient::parse_retry_after(&headers), None);
     }
 
     // ── synthesize_stream_events ─────────────────────────────────────────
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn clone_for_fallback_copies_fields() {
-        let c = AnthropicClient::new("test-key")
+        let c = ApiClient::new("test-key")
             .with_base_url("https://custom.api.com")
             .with_model("test-model")
             .with_max_tokens(1024);

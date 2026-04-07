@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use claude_api::client::AnthropicClient;
+use claude_api::client::ApiClient;
 use claude_core::claude_md::load_claude_md;
 use claude_core::config::HooksConfig;
 use claude_core::memory::load_memories_for_prompt;
@@ -46,6 +46,10 @@ pub struct QueryEngineBuilder {
     pub(crate) output_style: Option<(String, String)>,
     pub(crate) mcp_instructions: Vec<(String, String)>,
     pub(crate) scratchpad_dir: Option<String>,
+    /// API provider name (anthropic, openai, deepseek, ollama, etc.)
+    pub(crate) provider: Option<String>,
+    /// Override API base URL
+    pub(crate) base_url: Option<String>,
 }
 
 impl QueryEngineBuilder {
@@ -70,6 +74,8 @@ impl QueryEngineBuilder {
             output_style: None,
             mcp_instructions: Vec::new(),
             scratchpad_dir: None,
+            provider: None,
+            base_url: None,
         }
     }
 
@@ -159,12 +165,40 @@ impl QueryEngineBuilder {
         self
     }
 
+    /// Set the API provider (anthropic, openai, deepseek, ollama, etc.)
+    pub fn provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
+    }
+
+    /// Override the API base URL
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into());
+        self
+    }
+
     pub fn build(self) -> QueryEngine {
-        let mut client = AnthropicClient::new(self.api_key);
+        let mut client = ApiClient::new(&self.api_key);
         if let Some(ref model) = self.model {
             client = client.with_model(model);
         }
         client = client.with_max_tokens(self.max_tokens);
+
+        // Apply provider backend if not default Anthropic
+        if let Some(ref provider) = self.provider {
+            if provider != "anthropic" {
+                let backend = claude_api::provider::create_backend(
+                    provider,
+                    &self.api_key,
+                    self.base_url.as_deref(),
+                );
+                client = client.with_backend(backend);
+            } else if let Some(ref url) = self.base_url {
+                client = client.with_base_url(url);
+            }
+        } else if let Some(ref url) = self.base_url {
+            client = client.with_base_url(url);
+        }
 
         let client = Arc::new(client);
         let mut registry = ToolRegistry::with_defaults();
