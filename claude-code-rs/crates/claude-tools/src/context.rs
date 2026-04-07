@@ -144,3 +144,99 @@ impl Tool for VerifyTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    // --- ContextInspectTool tests ---
+
+    #[tokio::test]
+    async fn context_inspect_returns_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = ContextInspectTool;
+        let result = tool.call(json!({}), &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["messages"], 0);
+        assert!(parsed["cwd"].as_str().is_some());
+        assert_eq!(parsed["aborted"], false);
+    }
+
+    // --- VerifyTool tests ---
+
+    #[tokio::test]
+    async fn verify_expected_snippets_found() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello world foo bar").unwrap();
+        let tool = VerifyTool;
+        let input = json!({
+            "path": "test.txt",
+            "expected_snippets": ["hello", "foo bar"]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("Verified"));
+    }
+
+    #[tokio::test]
+    async fn verify_missing_snippet_returns_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello world").unwrap();
+        let tool = VerifyTool;
+        let input = json!({
+            "path": "test.txt",
+            "expected_snippets": ["missing"]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("MISSING"));
+    }
+
+    #[tokio::test]
+    async fn verify_unexpected_snippet_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "should not have password").unwrap();
+        let tool = VerifyTool;
+        let input = json!({
+            "path": "test.txt",
+            "expected_snippets": ["should"],
+            "unexpected_snippets": ["password"]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("UNEXPECTED"));
+    }
+
+    #[tokio::test]
+    async fn verify_nonexistent_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = VerifyTool;
+        let input = json!({
+            "path": "nonexistent.txt",
+            "expected_snippets": ["anything"]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("Cannot read file"));
+    }
+}

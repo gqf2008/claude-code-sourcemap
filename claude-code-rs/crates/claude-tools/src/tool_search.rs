@@ -101,3 +101,68 @@ fn built_in_tool_catalog() -> Vec<(&'static str, &'static str)> {
         ("ExitPlanMode", "Exit plan mode and begin execution"),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx() -> ToolContext {
+        ToolContext {
+            cwd: std::env::temp_dir(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_finds_by_name() {
+        let tool = ToolSearchTool;
+        let result = tool.call(json!({"query": "Bash"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        assert!(text.contains("Bash"));
+        assert!(text.contains("shell commands"));
+    }
+
+    #[tokio::test]
+    async fn search_finds_by_description() {
+        let tool = ToolSearchTool;
+        let result = tool.call(json!({"query": "regex"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        assert!(text.contains("Grep"));
+    }
+
+    #[tokio::test]
+    async fn search_case_insensitive() {
+        let tool = ToolSearchTool;
+        let result = tool.call(json!({"query": "GLOB"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("Glob"));
+    }
+
+    #[tokio::test]
+    async fn search_no_match() {
+        let tool = ToolSearchTool;
+        let result = tool.call(json!({"query": "zznonexistent"}), &ctx()).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result_text(&result).contains("No tools found"));
+    }
+
+    #[tokio::test]
+    async fn search_missing_query_returns_error() {
+        let tool = ToolSearchTool;
+        let result = tool.call(json!({}), &ctx()).await;
+        assert!(result.is_err());
+    }
+}

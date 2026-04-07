@@ -69,3 +69,69 @@ impl Tool for GlobTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claude_core::tool::AbortSignal;
+    use claude_core::permissions::PermissionMode;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(r: &ToolResult) -> String {
+        match &r.content[0] {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn glob_finds_matching_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main(){}").unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "pub mod lib;").unwrap();
+        std::fs::write(tmp.path().join("readme.md"), "# hello").unwrap();
+
+        let tool = GlobTool;
+        let input = json!({"pattern": "*.rs"});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        assert!(text.contains("main.rs"));
+        assert!(text.contains("lib.rs"));
+        assert!(!text.contains("readme.md"));
+    }
+
+    #[tokio::test]
+    async fn glob_no_matches() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GlobTool;
+        let input = json!({"pattern": "*.xyz"});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result_text(&result).contains("No files matched"));
+    }
+
+    #[tokio::test]
+    async fn glob_rejects_dotdot_traversal() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GlobTool;
+        let input = json!({"pattern": "../*.rs"});
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+    }
+
+    #[tokio::test]
+    async fn glob_missing_pattern_returns_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GlobTool;
+        let result = tool.call(json!({}), &ctx(tmp.path())).await;
+        assert!(result.is_err());
+    }
+}
