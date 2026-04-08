@@ -35,9 +35,15 @@ use claude_core::message::{Message, ToolResultContent};
 
 // ── Token threshold ──────────────────────────────────────────────────────────
 
-/// Auto-compact when accumulated input tokens exceed this threshold.
-/// Matches the original (~90 % of claude-sonnet-4's 200k context window).
+/// Legacy constant — prefer `get_auto_compact_threshold(context_window)`.
 pub const AUTO_COMPACT_THRESHOLD: u64 = 80_000;
+
+/// Calculate the auto-compact threshold dynamically from the model's context window.
+/// Matches TS: `effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS`.
+pub fn get_auto_compact_threshold(context_window: u64) -> u64 {
+    let effective = context_window.saturating_sub(20_000); // reserve for output
+    effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS)
+}
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 

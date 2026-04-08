@@ -361,6 +361,7 @@ impl QueryEngineBuilder {
                 temperature: None,
                 thinking: self.thinking.clone(),
                 token_budget: 0,
+                context_window: caps.context_window,
             },
             hooks,
             cwd: self.cwd,

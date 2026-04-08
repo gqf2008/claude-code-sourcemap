@@ -124,15 +124,18 @@ pub(super) fn error_category(err_str: &str) -> &'static str {
 // ── Context & recovery ───────────────────────────────────────────────────────
 
 /// Build a context warning event if token usage is elevated.
-pub(super) fn build_context_warning(total_input: u64) -> Option<AgentEvent> {
-    let warning = crate::compact::calculate_token_warning(
-        total_input,
-        crate::compact::AUTO_COMPACT_THRESHOLD,
-    );
+pub(super) fn build_context_warning(total_input: u64, context_window: u64) -> Option<AgentEvent> {
+    let threshold = crate::compact::get_auto_compact_threshold(context_window);
+    let warning = crate::compact::calculate_token_warning(total_input, threshold);
     if warning == crate::compact::TokenWarningState::Normal {
         return None;
     }
-    let pct = total_input as f64 / crate::compact::AUTO_COMPACT_THRESHOLD as f64;
+    // Display percentage relative to the actual context window (clamped 0-100%)
+    let pct = if context_window > 0 {
+        (total_input as f64 / context_window as f64).min(1.0)
+    } else {
+        0.0
+    };
     let msg = match warning {
         crate::compact::TokenWarningState::Warning =>
             "Approaching context limit — consider saving progress".to_string(),

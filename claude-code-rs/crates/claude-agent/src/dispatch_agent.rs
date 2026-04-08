@@ -321,6 +321,7 @@ impl Tool for DispatchAgentTool {
             temperature: None,
             thinking: None,
             token_budget: 0,
+            context_window: 200_000, // sub-agents inherit default context window
         };
 
         // Sub-agents run without user-defined hooks to avoid re-entrant side effects

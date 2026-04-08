@@ -50,6 +50,8 @@ pub struct QueryConfig {
     pub thinking: Option<claude_api::types::ThinkingConfig>,
     /// Token budget for this query (0 = unlimited).
     pub token_budget: u64,
+    /// Model context window size (for accurate percentage display).
+    pub context_window: u64,
 }
 
 impl Default for QueryConfig {
@@ -61,6 +63,7 @@ impl Default for QueryConfig {
             temperature: None,
             thinking: None,
             token_budget: 0,
+            context_window: 200_000,
         }
     }
 }
@@ -385,7 +388,7 @@ pub fn query_stream(
 
                 // Context usage warning
                 let total_input = { state.read().await.total_input_tokens };
-                if let Some(warning_event) = build_context_warning(total_input) {
+                if let Some(warning_event) = build_context_warning(total_input, config.context_window) {
                     yield warning_event;
                 }
 

@@ -102,32 +102,35 @@ fn test_error_category_generic() {
 
 // ── build_context_warning ────────────────────────────────────────────
 
+const TEST_CONTEXT_WINDOW: u64 = 200_000;
+
 #[test]
 fn test_build_context_warning_normal() {
-    let threshold = crate::compact::AUTO_COMPACT_THRESHOLD;
-    let low = (threshold as f64 * 0.4) as u64;
-    assert!(build_context_warning(low).is_none());
+    // 40% of dynamic threshold (~167K * 0.4 = ~67K) should be normal
+    assert!(build_context_warning(60_000, TEST_CONTEXT_WINDOW).is_none());
 }
 
 #[test]
 fn test_build_context_warning_warning_level() {
-    let threshold = crate::compact::AUTO_COMPACT_THRESHOLD;
+    let threshold = crate::compact::get_auto_compact_threshold(TEST_CONTEXT_WINDOW);
     let at_60 = (threshold as f64 * 0.60) as u64;
-    let event = build_context_warning(at_60);
+    let event = build_context_warning(at_60, TEST_CONTEXT_WINDOW);
     assert!(event.is_some());
-    if let Some(AgentEvent::ContextWarning { message, .. }) = event {
+    if let Some(AgentEvent::ContextWarning { message, usage_pct, .. }) = event {
         assert!(message.contains("Approaching"));
+        assert!(usage_pct <= 1.0, "pct should be ≤ 100%, got {:.0}%", usage_pct * 100.0);
     }
 }
 
 #[test]
 fn test_build_context_warning_critical() {
-    let threshold = crate::compact::AUTO_COMPACT_THRESHOLD;
+    let threshold = crate::compact::get_auto_compact_threshold(TEST_CONTEXT_WINDOW);
     let at_80 = (threshold as f64 * 0.80) as u64;
-    let event = build_context_warning(at_80);
+    let event = build_context_warning(at_80, TEST_CONTEXT_WINDOW);
     assert!(event.is_some());
-    if let Some(AgentEvent::ContextWarning { message, .. }) = event {
+    if let Some(AgentEvent::ContextWarning { message, usage_pct, .. }) = event {
         assert!(message.contains("nearly full"));
+        assert!(usage_pct <= 1.0, "pct should be ≤ 100%, got {:.0}%", usage_pct * 100.0);
     }
 }
 
