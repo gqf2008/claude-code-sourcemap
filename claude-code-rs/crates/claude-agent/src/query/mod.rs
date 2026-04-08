@@ -81,11 +81,33 @@ pub fn query_stream(
     tools: Vec<ToolDefinition>,
     hooks: Arc<HookRegistry>,
 ) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
+    query_stream_with_injection(
+        client, executor, state, tool_context, config,
+        initial_messages, tools, hooks, None,
+    )
+}
+
+/// Like [`query_stream`] but accepts an optional channel for mid-stream message
+/// injection. Messages received on `inject_rx` are appended as user-role
+/// messages at the start of each turn, enabling SendMessage follow-ups.
+#[allow(clippy::too_many_arguments)]
+pub fn query_stream_with_injection(
+    client: Arc<ApiClient>,
+    executor: Arc<ToolExecutor>,
+    state: SharedState,
+    tool_context: ToolContext,
+    config: QueryConfig,
+    initial_messages: Vec<Message>,
+    tools: Vec<ToolDefinition>,
+    hooks: Arc<HookRegistry>,
+    inject_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
     let stream = async_stream::stream! {
         let mut messages = initial_messages;
         let mut turn_count: u32 = 0;
         let mut stop_hook_retries: u32 = 0;
         const MAX_STOP_HOOK_RETRIES: u32 = 3;
+        let mut inject_rx = inject_rx;
 
         // ── Recovery state (aligned with TS query.ts) ────────────────────────
         let mut max_tokens_recovery_count: u32 = 0;
@@ -101,6 +123,18 @@ pub fn query_stream(
         let escalated_max_tokens = caps.upper_max_output;
 
         loop {
+            // Drain any externally injected messages (from SendMessage)
+            if let Some(ref mut rx) = inject_rx {
+                while let Ok(msg_text) = rx.try_recv() {
+                    messages.push(Message::User(UserMessage {
+                        uuid: Uuid::new_v4().to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: format!("[Follow-up message from coordinator]\n{}", msg_text),
+                        }],
+                    }));
+                }
+            }
+
             // Check abort at the top of every turn
             if tool_context.abort_signal.is_aborted() {
                 state.write().await.messages = messages.clone();

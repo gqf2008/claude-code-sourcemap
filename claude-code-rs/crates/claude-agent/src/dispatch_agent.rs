@@ -12,7 +12,7 @@ use crate::coordinator::AgentTracker;
 use crate::executor::ToolExecutor;
 use crate::hooks::HookRegistry;
 use crate::permissions::PermissionChecker;
-use crate::query::{query_stream, AgentEvent, QueryConfig};
+use crate::query::{query_stream, query_stream_with_injection, AgentEvent, QueryConfig};
 use crate::state::new_shared_state;
 use claude_tools::ToolRegistry;
 
@@ -397,7 +397,7 @@ impl Tool for DispatchAgentTool {
                 let agent_name_clone = agent_name.clone();
 
                 tokio::spawn(async move {
-                    let mut stream = query_stream(
+                    let mut stream = query_stream_with_injection(
                         client,
                         executor,
                         state,
@@ -406,18 +406,12 @@ impl Tool for DispatchAgentTool {
                         init_messages,
                         all_tool_defs,
                         no_hooks,
+                        Some(msg_rx),
                     );
 
                     let mut output = String::new();
                     let mut tool_use_count: u32 = 0;
                     let mut total_tokens: u64 = 0;
-
-                    // Note: msg_rx is kept alive so SendMessage doesn't get "channel closed"
-                    // errors, but follow-up messages are not injected mid-stream because
-                    // query_stream uses a local messages vec. This is a known limitation;
-                    // the TS implementation has more complex plumbing for live injection.
-                    // For now, received messages are dropped after the stream completes.
-                    let _msg_rx = msg_rx;
 
                     loop {
                         tokio::select! {
