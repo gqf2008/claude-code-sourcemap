@@ -45,6 +45,7 @@ use tracing::{debug, error, info, warn};
 
 use claude_bus::bus::BusHandle;
 use claude_bus::events::*;
+use claude_mcp::McpBusAdapter;
 
 use crate::engine::QueryEngine;
 use crate::query::AgentEvent;
@@ -59,6 +60,7 @@ use crate::query::AgentEvent;
 pub struct AgentCoreAdapter {
     engine: Arc<QueryEngine>,
     bus: Mutex<BusHandle>,
+    mcp: Option<McpBusAdapter>,
     /// Current turn number (incremented on each submit).
     turn: Mutex<u32>,
 }
@@ -68,6 +70,17 @@ impl AgentCoreAdapter {
         Self {
             engine: Arc::new(engine),
             bus: Mutex::new(bus),
+            mcp: None,
+            turn: Mutex::new(0),
+        }
+    }
+
+    /// Create with an MCP bus adapter for MCP server management.
+    pub fn with_mcp(engine: QueryEngine, bus: BusHandle, mcp: McpBusAdapter) -> Self {
+        Self {
+            engine: Arc::new(engine),
+            bus: Mutex::new(bus),
+            mcp: Some(mcp),
             turn: Mutex::new(0),
         }
     }
@@ -164,6 +177,15 @@ impl AgentCoreAdapter {
                     // Permission responses are handled via the dedicated channel,
                     // not the general request channel.
                     warn!("Unexpected PermissionResponse in request channel");
+                }
+                AgentRequest::McpConnect { name, command, args, env } => {
+                    self.handle_mcp_connect(&name, &command, &args, &env).await;
+                }
+                AgentRequest::McpDisconnect { name } => {
+                    self.handle_mcp_disconnect(&name).await;
+                }
+                AgentRequest::McpListServers => {
+                    self.handle_mcp_list_servers().await;
                 }
             }
         }
@@ -329,6 +351,54 @@ impl AgentCoreAdapter {
     /// haven't been ported to the bus protocol yet).
     pub fn engine(&self) -> &QueryEngine {
         &self.engine
+    }
+
+    /// Get access to the MCP bus adapter (if configured).
+    pub fn mcp(&self) -> Option<&McpBusAdapter> {
+        self.mcp.as_ref()
+    }
+
+    // ── MCP request handlers ──────────────────────────────────────────────
+
+    async fn handle_mcp_connect(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[String],
+        env: &std::collections::HashMap<String, String>,
+    ) {
+        let notification = match &self.mcp {
+            Some(mcp) => mcp.connect(name, command, args, env).await,
+            None => AgentNotification::McpServerError {
+                name: name.to_string(),
+                error: "MCP support not configured".into(),
+            },
+        };
+        let bus = self.bus.lock().await;
+        bus.notify(notification);
+    }
+
+    async fn handle_mcp_disconnect(&self, name: &str) {
+        let notification = match &self.mcp {
+            Some(mcp) => mcp.disconnect(name).await,
+            None => AgentNotification::McpServerError {
+                name: name.to_string(),
+                error: "MCP support not configured".into(),
+            },
+        };
+        let bus = self.bus.lock().await;
+        bus.notify(notification);
+    }
+
+    async fn handle_mcp_list_servers(&self) {
+        let notification = match &self.mcp {
+            Some(mcp) => mcp.list_servers().await,
+            None => AgentNotification::McpServerList {
+                servers: vec![],
+            },
+        };
+        let bus = self.bus.lock().await;
+        bus.notify(notification);
     }
 }
 

@@ -110,6 +110,20 @@ pub enum AgentNotification {
         is_error: bool,
     },
 
+    // ── MCP lifecycle ──
+
+    /// An MCP server connected successfully.
+    McpServerConnected { name: String, tool_count: usize },
+
+    /// An MCP server disconnected (explicit or crash).
+    McpServerDisconnected { name: String },
+
+    /// An MCP server encountered an error.
+    McpServerError { name: String, error: String },
+
+    /// Response to McpListServers request.
+    McpServerList { servers: Vec<McpServerInfo> },
+
     // ── Errors ──
 
     /// A non-fatal error occurred.
@@ -164,6 +178,23 @@ pub enum AgentRequest {
     /// Cancel/stop a background sub-agent.
     StopAgent { agent_id: String },
 
+    // ── MCP management ──
+
+    /// Connect to an MCP server.
+    McpConnect {
+        name: String,
+        command: String,
+        args: Vec<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+    },
+
+    /// Disconnect an MCP server.
+    McpDisconnect { name: String },
+
+    /// List connected MCP servers (response via McpServerList notification).
+    McpListServers,
+
     /// Graceful shutdown.
     Shutdown,
 }
@@ -217,6 +248,14 @@ pub struct ImageAttachment {
     pub data: String,
     /// MIME type (e.g. "image/png").
     pub media_type: String,
+}
+
+/// MCP server status info (returned in McpServerList notification).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerInfo {
+    pub name: String,
+    pub tool_count: usize,
+    pub connected: bool,
 }
 
 /// Risk level for permission requests.
@@ -311,6 +350,24 @@ mod tests {
                 code: ErrorCode::ApiError,
                 message: "Rate limited".into(),
             },
+            AgentNotification::McpServerConnected {
+                name: "github".into(),
+                tool_count: 5,
+            },
+            AgentNotification::McpServerDisconnected {
+                name: "github".into(),
+            },
+            AgentNotification::McpServerError {
+                name: "github".into(),
+                error: "connection lost".into(),
+            },
+            AgentNotification::McpServerList {
+                servers: vec![McpServerInfo {
+                    name: "test".into(),
+                    tool_count: 3,
+                    connected: true,
+                }],
+            },
         ];
 
         for event in &events {
@@ -344,6 +401,14 @@ mod tests {
                 message: "focus on tests".into(),
             },
             AgentRequest::StopAgent { agent_id: "agent-1".into() },
+            AgentRequest::McpConnect {
+                name: "fs".into(),
+                command: "npx".into(),
+                args: vec!["-y".into(), "fs-server".into()],
+                env: std::collections::HashMap::new(),
+            },
+            AgentRequest::McpDisconnect { name: "fs".into() },
+            AgentRequest::McpListServers,
             AgentRequest::Shutdown,
         ];
 

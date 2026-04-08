@@ -16,6 +16,7 @@ uuid = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
+claude-bus = { path = "../claude-bus" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

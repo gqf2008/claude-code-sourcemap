@@ -332,6 +332,7 @@ dependencies = [
  "claude-api",
  "claude-bus",
  "claude-core",
+ "claude-mcp",
  "claude-tools",
  "crossterm",
  "dirs",
@@ -443,6 +444,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "claude-bus",
  "dirs",
  "futures",
  "reqwest",
