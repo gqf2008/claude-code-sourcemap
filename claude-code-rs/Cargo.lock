@@ -398,7 +398,7 @@ dependencies = [
  "claude-core",
  "claude-mcp",
  "claude-tools",
- "crossterm",
+ "cliclack",
  "dirs",
  "futures",
  "regex",

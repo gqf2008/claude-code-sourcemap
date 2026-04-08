@@ -23,7 +23,7 @@ tracing = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
 tokio-util = { workspace = true }
-crossterm = { workspace = true }
+cliclack = { workspace = true }
 dirs = { workspace = true }
 
 [dev-dependencies]

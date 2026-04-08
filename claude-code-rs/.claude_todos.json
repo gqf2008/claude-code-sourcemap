@@ -14,25 +14,25 @@
   {
     "id": "read-crates",
     "content": "Read each crate's Cargo.toml and key source files",
-    "status": "in_progress",
+    "status": "completed",
     "priority": "high"
   },
   {
     "id": "check-tests",
     "content": "Review test coverage and test quality",
-    "status": "pending",
+    "status": "completed",
     "priority": "medium"
   },
   {
     "id": "check-security",
     "content": "Check for security issues",
-    "status": "pending",
+    "status": "completed",
     "priority": "medium"
   },
   {
     "id": "compile-results",
     "content": "Compile review findings and provide summary",
-    "status": "pending",
+    "status": "completed",
     "priority": "high"
   }
 ]
