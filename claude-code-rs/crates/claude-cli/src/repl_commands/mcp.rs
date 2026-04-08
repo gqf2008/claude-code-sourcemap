@@ -1,6 +1,6 @@
 //! `/mcp` command handler — MCP server discovery and status.
 
-use claude_tools::mcp::server::{discover_mcp_configs, load_mcp_configs};
+use claude_tools::mcp::{discover_mcp_configs, load_mcp_configs};
 
 /// Handle `/mcp [subcommand]`.
 pub(crate) fn handle_mcp_command(sub: &str, cwd: &std::path::Path) {

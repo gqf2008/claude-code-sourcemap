@@ -8,11 +8,12 @@ default = ["shell", "web", "git", "mcp", "code"]
 shell = []
 web = ["reqwest"]
 git = []
-mcp = []
+mcp = ["claude-mcp"]
 code = []
 
 [dependencies]
 claude-core = { path = "../claude-core" }
+claude-mcp = { path = "../claude-mcp", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }

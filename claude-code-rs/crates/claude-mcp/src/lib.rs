@@ -33,4 +33,4 @@ pub mod registry;
 pub use protocol::*;
 pub use types::*;
 pub use client::McpClient;
-pub use registry::{McpManager, format_mcp_tool_name, parse_mcp_tool_name, is_mcp_tool};
+pub use registry::{McpManager, format_mcp_tool_name, parse_mcp_tool_name, is_mcp_tool, load_mcp_configs, discover_mcp_configs};

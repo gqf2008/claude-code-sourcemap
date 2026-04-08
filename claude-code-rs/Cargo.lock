@@ -464,6 +464,7 @@ dependencies = [
  "base64",
  "chrono",
  "claude-core",
+ "claude-mcp",
  "dirs",
  "futures",
  "glob",

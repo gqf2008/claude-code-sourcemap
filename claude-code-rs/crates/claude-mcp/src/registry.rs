@@ -174,6 +174,51 @@ impl McpManager {
         servers.keys().cloned().collect()
     }
 
+    /// Alias for `running_servers()` — backwards compatible.
+    pub async fn server_names(&self) -> Vec<String> {
+        self.running_servers().await
+    }
+
+    /// Call a tool directly by server name and tool name.
+    pub async fn call_tool_direct(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolResult> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{}' not found or not running", server_name))?;
+
+        client.call_tool(tool_name, arguments).await
+    }
+
+    /// List resources from a specific server by name.
+    pub async fn list_resources_for(&self, server_name: &str) -> Result<Vec<McpResource>> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{}' not found", server_name))?;
+
+        client.list_resources().await
+    }
+
+    /// Connect to an MCP server from config and register it (backwards-compat).
+    pub async fn connect_server(&self, config: &McpServerConfig) -> Result<()> {
+        self.start_server(config).await
+    }
+
+    /// Disconnect a server by name (backwards-compat).
+    pub async fn disconnect_server(&self, name: &str) -> Result<()> {
+        self.stop_server(name).await
+    }
+
+    /// Disconnect all servers (backwards-compat).
+    pub async fn disconnect_all(&self) -> Result<()> {
+        self.stop_all().await
+    }
+
     /// Number of running servers.
     pub async fn server_count(&self) -> usize {
         let servers = self.servers.read().await;
@@ -240,6 +285,81 @@ pub fn parse_mcp_tool_name(prefixed: &str) -> Option<(String, String)> {
 /// Check if a tool name is an MCP proxy tool.
 pub fn is_mcp_tool(name: &str) -> bool {
     name.starts_with(MCP_TOOL_PREFIX)
+}
+
+// ── Config loading utilities ─────────────────────────────────────────────────
+
+/// Load MCP server configs from a `.mcp.json` file.
+pub fn load_mcp_configs(path: &std::path::Path) -> Result<Vec<McpServerConfig>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read MCP config: {}", path.display()))?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Invalid JSON in MCP config: {}", path.display()))?;
+
+    let servers = parsed
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .context("Missing 'mcpServers' in MCP config")?;
+
+    let mut configs = Vec::new();
+    for (name, config) in servers {
+        let command = config["command"]
+            .as_str()
+            .with_context(|| format!("Missing 'command' for MCP server '{}'", name))?
+            .to_string();
+
+        let args: Vec<String> = config
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let env: HashMap<String, String> = config
+            .get("env")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        configs.push(McpServerConfig {
+            name: name.clone(),
+            command,
+            args,
+            env,
+        });
+    }
+
+    info!("Loaded {} MCP server configs from {}", configs.len(), path.display());
+    Ok(configs)
+}
+
+/// Discover `.mcp.json` files in standard locations.
+pub fn discover_mcp_configs(cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+
+    // Project-level: <cwd>/.mcp.json
+    let project = cwd.join(".mcp.json");
+    if project.exists() {
+        paths.push(project);
+    }
+
+    // User-level: ~/.claude/.mcp.json
+    if let Some(home) = dirs::home_dir() {
+        let user = home.join(".claude").join(".mcp.json");
+        if user.exists() {
+            paths.push(user);
+        }
+    }
+
+    paths
 }
 
 #[cfg(test)]

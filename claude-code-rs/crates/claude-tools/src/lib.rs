@@ -55,6 +55,9 @@ pub mod tool_search;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+// ── Model attribution & git diff ────────────────────────────────────────────
+pub mod attribution;
+
 // ── Internal utilities (not tools) ──────────────────────────────────────────
 pub mod path_util;
 
@@ -252,7 +255,7 @@ impl ToolRegistry {
     /// Register MCP tools with a shared manager.
     /// Call this after connecting to MCP servers.
     #[cfg(feature = "mcp")]
-    pub fn register_mcp(&mut self, manager: std::sync::Arc<tokio::sync::RwLock<mcp::McpManager>>) {
+    pub fn register_mcp(&mut self, manager: std::sync::Arc<tokio::sync::RwLock<claude_mcp::McpManager>>) {
         self.tools.remove("mcp_list_resources");
         self.tools.remove("mcp_read_resource");
         self.register(mcp::ListMcpResourcesTool { manager: manager.clone() });

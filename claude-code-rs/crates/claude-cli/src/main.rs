@@ -614,11 +614,11 @@ fn generate_claude_md_template(cwd: &std::path::Path) -> String {
 /// Scans `.mcp.json` at project and user levels, extracts server names and
 /// commands, and returns `(server_name, instruction)` pairs for the system prompt.
 fn discover_mcp_instructions(cwd: &std::path::Path) -> Vec<(String, String)> {
-    let config_paths = claude_tools::mcp::server::discover_mcp_configs(cwd);
+    let config_paths = claude_tools::mcp::discover_mcp_configs(cwd);
     let mut instructions = Vec::new();
 
     for path in config_paths {
-        match claude_tools::mcp::server::load_mcp_configs(&path) {
+        match claude_tools::mcp::load_mcp_configs(&path) {
             Ok(configs) => {
                 for cfg in configs {
                     let instruction = format!(

@@ -1,18 +1,11 @@
-//! MCP (Model Context Protocol) — connect to external tool servers.
+//! MCP (Model Context Protocol) — tool implementations that use `claude-mcp`.
 //!
-//! This module provides a full MCP client implementation supporting:
-//! - Stdio transport (spawn child processes)
-//! - JSON-RPC 2.0 protocol
-//! - Tool discovery and dynamic proxy
-//! - Resource listing and reading
-//! - Multi-server management
+//! This module provides Tool trait implementations for MCP operations:
+//! - `ListMcpResourcesTool` — list resources from connected MCP servers
+//! - `ReadMcpResourceTool` — read a specific resource by URI
+//! - `McpToolProxy` — dynamic proxy for MCP server tools
 //!
-//! Aligned with the TS `services/mcp/client.ts` and `tools/MCPTool/MCPTool.ts`.
-
-pub mod client;
-pub mod server;
-pub mod transport;
-pub mod sse_transport;
+//! All protocol types, transport, client, and registry logic live in `claude-mcp`.
 
 use std::sync::Arc;
 
@@ -21,17 +14,18 @@ use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
-pub use client::{McpClient, McpContent, McpServerConfig, McpToolDef, McpToolResult};
-pub use server::{
-    build_mcp_tool_name, discover_mcp_configs, load_mcp_configs, parse_mcp_tool_name, McpManager,
+// Re-export from claude-mcp for convenience
+pub use claude_mcp::{
+    McpClient, McpContent, McpManager, McpResource, McpServerConfig, McpToolDef, McpToolResult,
+    format_mcp_tool_name, parse_mcp_tool_name, is_mcp_tool,
+    load_mcp_configs, discover_mcp_configs,
 };
+
+pub use claude_mcp::registry::MCP_TOOL_PREFIX;
 
 // ── ListMcpResourcesTool ─────────────────────────────────────────────────────
 
 /// Lists resources available from connected MCP servers.
-///
-/// Supports two output formats: human-readable markdown (default) and
-/// structured JSON for programmatic use.
 pub struct ListMcpResourcesTool {
     pub manager: Arc<RwLock<McpManager>>,
 }
@@ -65,7 +59,6 @@ impl Tool for ListMcpResourcesTool {
     }
 
     fn is_read_only(&self) -> bool { true }
-
     fn is_enabled(&self) -> bool { true }
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
@@ -82,13 +75,12 @@ impl Tool for ListMcpResourcesTool {
         }
 
         if json_format {
-            // Structured JSON output
             let mut result = json!({});
             for name in &server_names {
                 if let Some(filter) = server_filter {
                     if name != filter { continue; }
                 }
-                match manager.list_resources(name).await {
+                match manager.list_resources_for(name).await {
                     Ok(resources) => {
                         let entries: Vec<Value> = resources.iter().map(|r| {
                             json!({
@@ -107,13 +99,12 @@ impl Tool for ListMcpResourcesTool {
             }
             Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))
         } else {
-            // Human-readable markdown output
             let mut output = String::new();
             for name in &server_names {
                 if let Some(filter) = server_filter {
                     if name != filter { continue; }
                 }
-                match manager.list_resources(name).await {
+                match manager.list_resources_for(name).await {
                     Ok(resources) => {
                         if resources.is_empty() {
                             output.push_str(&format!("## {} — no resources\n\n", name));
@@ -150,9 +141,6 @@ impl Tool for ListMcpResourcesTool {
 // ── ReadMcpResourceTool ──────────────────────────────────────────────────────
 
 /// Reads a specific resource from an MCP server by URI.
-///
-/// Handles both text and binary (base64-encoded blob) content.
-/// For binary content, can optionally write to disk and return the file path.
 pub struct ReadMcpResourceTool {
     pub manager: Arc<RwLock<McpManager>>,
 }
@@ -190,7 +178,6 @@ impl Tool for ReadMcpResourceTool {
     }
 
     fn is_read_only(&self) -> bool { true }
-
     fn is_enabled(&self) -> bool { true }
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
@@ -218,7 +205,6 @@ impl Tool for ReadMcpResourceTool {
                 let mime = content.mime_type.as_deref().unwrap_or("application/octet-stream");
 
                 if let Some(path) = save_to {
-                    // Decode base64 and write to file
                     match base64::engine::general_purpose::STANDARD.decode(data) {
                         Ok(bytes) => {
                             match std::fs::write(path, &bytes) {
@@ -241,8 +227,7 @@ impl Tool for ReadMcpResourceTool {
                         }
                     }
                 } else {
-                    // Report blob metadata without writing
-                    let size_hint = data.len() * 3 / 4; // approximate decoded size
+                    let size_hint = data.len() * 3 / 4;
                     text_parts.push(format!(
                         "[Binary blob: {} ({}, ~{} bytes). Use save_to to write to disk.]",
                         uri, mime, size_hint
@@ -268,9 +253,6 @@ impl Tool for ReadMcpResourceTool {
 // ── McpToolProxy ─────────────────────────────────────────────────────────────
 
 /// Dynamic proxy tool that dispatches calls to MCP server tools.
-///
-/// Each instance represents one specific tool on one specific MCP server.
-/// The tool name is fully-qualified: `mcp__<server>__<tool>`.
 pub struct McpToolProxy {
     pub qualified_name: String,
     pub server_name: String,
@@ -293,7 +275,7 @@ impl Tool for McpToolProxy {
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
         let manager = self.manager.read().await;
         let result = manager
-            .call_tool(&self.server_name, &self.tool_name, input)
+            .call_tool_direct(&self.server_name, &self.tool_name, input)
             .await?;
 
         if result.is_error {
@@ -318,12 +300,15 @@ pub async fn create_mcp_tool_proxies(
     manager: Arc<RwLock<McpManager>>,
 ) -> anyhow::Result<Vec<McpToolProxy>> {
     let mgr = manager.read().await;
-    let tools = mgr.all_tools().await?;
+    let tools = mgr.list_all_tools().await?;
     drop(mgr);
 
     let mut proxies = Vec::new();
-    for (server_name, tool_def) in tools {
-        let qualified = build_mcp_tool_name(&server_name, &tool_def.name);
+    for (qualified_name, tool_def) in tools {
+        let (server_name, tool_name) = match parse_mcp_tool_name(&qualified_name) {
+            Some((s, t)) => (s, t),
+            None => continue,
+        };
         let read_only = tool_def
             .annotations
             .as_ref()
@@ -331,9 +316,9 @@ pub async fn create_mcp_tool_proxies(
             .unwrap_or(false);
 
         proxies.push(McpToolProxy {
-            qualified_name: qualified,
+            qualified_name,
             server_name,
-            tool_name: tool_def.name,
+            tool_name,
             tool_description: tool_def.description.unwrap_or_default(),
             tool_schema: tool_def.input_schema.unwrap_or(json!({"type": "object"})),
             read_only,

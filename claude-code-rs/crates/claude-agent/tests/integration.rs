@@ -383,9 +383,9 @@ async fn test_permission_checker_plan_denies_writes() {
 
 #[test]
 fn test_mcp_tool_name_roundtrip() {
-    use claude_tools::mcp::{build_mcp_tool_name, parse_mcp_tool_name};
+    use claude_tools::mcp::{format_mcp_tool_name, parse_mcp_tool_name};
 
-    let name = build_mcp_tool_name("github", "create_issue");
+    let name = format_mcp_tool_name("github", "create_issue");
     assert_eq!(name, "mcp__github__create_issue");
 
     let (server, tool) = parse_mcp_tool_name(&name).unwrap();
