@@ -5,6 +5,7 @@ mod commands;
 mod output;
 mod markdown;
 mod diff_display;
+mod session;
 
 use std::sync::Arc;
 

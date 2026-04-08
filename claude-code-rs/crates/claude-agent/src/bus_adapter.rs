@@ -197,6 +197,12 @@ impl AgentCoreAdapter {
                 AgentRequest::McpListServers => {
                     self.handle_mcp_list_servers().await;
                 }
+                AgentRequest::SaveSession => {
+                    self.handle_save_session().await;
+                }
+                AgentRequest::GetStatus => {
+                    self.handle_get_status().await;
+                }
             }
         }
 
@@ -409,6 +415,49 @@ impl AgentCoreAdapter {
         };
         let bus = self.bus.lock().await;
         bus.notify(notification);
+    }
+
+    /// Save the current session to disk.
+    async fn handle_save_session(&self) {
+        match self.engine.save_session().await {
+            Ok(()) => {
+                let session_id = self.engine.session_id().to_string();
+                let bus = self.bus.lock().await;
+                bus.notify(AgentNotification::SessionSaved { session_id });
+            }
+            Err(e) => {
+                let bus = self.bus.lock().await;
+                bus.notify(AgentNotification::Error {
+                    code: ErrorCode::InternalError,
+                    message: format!("Failed to save session: {}", e),
+                });
+            }
+        }
+    }
+
+    /// Return session status: model, turns, token usage, context usage.
+    async fn handle_get_status(&self) {
+        let (session_id, model, total_turns, total_input_tokens, total_output_tokens) = {
+            let state = self.engine.state().read().await;
+            (
+                self.engine.session_id().to_string(),
+                state.model.clone(),
+                state.turn_count,
+                state.total_input_tokens,
+                state.total_output_tokens,
+            )
+        };
+        let context_usage_pct = self.engine.context_usage_percent().await.unwrap_or(0) as f64;
+
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::SessionStatus {
+            session_id,
+            model,
+            total_turns,
+            total_input_tokens,
+            total_output_tokens,
+            context_usage_pct,
+        });
     }
 }
 

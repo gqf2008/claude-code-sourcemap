@@ -76,6 +76,19 @@ pub enum AgentNotification {
     /// Session is ending (user exit, error, etc.).
     SessionEnd { reason: String },
 
+    /// Session was saved to disk.
+    SessionSaved { session_id: String },
+
+    /// Session status response (for GetStatus request).
+    SessionStatus {
+        session_id: String,
+        model: String,
+        total_turns: u32,
+        total_input_tokens: u64,
+        total_output_tokens: u64,
+        context_usage_pct: f64,
+    },
+
     // ── Context management ──
 
     /// Context usage is getting high.
@@ -197,6 +210,12 @@ pub enum AgentRequest {
 
     /// Graceful shutdown.
     Shutdown,
+
+    /// Save the current session to disk.
+    SaveSession,
+
+    /// Query session status (response via SessionStatus notification).
+    GetStatus,
 }
 
 // ── Permission request/response (bidirectional) ──────────────────────────────

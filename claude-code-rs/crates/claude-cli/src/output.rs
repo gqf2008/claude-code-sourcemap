@@ -486,6 +486,15 @@ impl OutputRenderer {
                     eprintln!("\x1b[2m  💡 {}\x1b[0m", h);
                 }
             }
+            AgentNotification::SessionSaved { session_id } => {
+                eprintln!("\x1b[2m(Session saved: {})\x1b[0m", &session_id[..8.min(session_id.len())]);
+            }
+            AgentNotification::SessionStatus { model, total_turns, context_usage_pct, .. } => {
+                eprintln!(
+                    "\x1b[2m[Status: {} | {} turns | context {:.0}%]\x1b[0m",
+                    model, total_turns, context_usage_pct
+                );
+            }
         }
         false
     }
