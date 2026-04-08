@@ -43,6 +43,8 @@ impl std::fmt::Display for AgentStatus {
 #[derive(Debug, Clone)]
 pub struct AgentTask {
     pub agent_id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
     pub prompt: String,
     pub status: AgentStatus,
     pub result: Option<String>,
@@ -130,9 +132,17 @@ impl AgentTracker {
     }
 
     /// Register a new agent as running.
-    pub async fn register(&self, agent_id: &str, prompt: &str) {
+    pub async fn register(
+        &self,
+        agent_id: &str,
+        prompt: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) {
         let task = AgentTask {
             agent_id: agent_id.to_string(),
+            name: name.map(|s| s.to_string()),
+            description: description.map(|s| s.to_string()),
             prompt: prompt.to_string(),
             status: AgentStatus::Running,
             result: None,
@@ -252,6 +262,17 @@ impl AgentTracker {
             .get(agent_id)
             .map(|t| matches!(t.status, AgentStatus::Running))
             .unwrap_or(false)
+    }
+
+    /// Look up an agent_id by its human-readable name.
+    /// Used by SendMessage to resolve the `to` field.
+    pub async fn lookup_by_name(&self, name: &str) -> Option<String> {
+        self.agents
+            .read()
+            .await
+            .values()
+            .find(|t| t.name.as_deref() == Some(name))
+            .map(|t| t.agent_id.clone())
     }
 
     /// Record real-time progress for a running agent (tool use, tokens, activity).
@@ -511,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn tracker_register_and_complete() {
         let (tracker, mut rx) = AgentTracker::new();
-        tracker.register("test-1", "Do something").await;
+        tracker.register("test-1", "Do something", None, None).await;
         tracker.complete("test-1", "Done!".into(), 500, 3).await;
 
         let notif = rx.try_recv().unwrap();
@@ -525,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn tracker_register_and_fail() {
         let (tracker, mut rx) = AgentTracker::new();
-        tracker.register("fail-1", "Will fail").await;
+        tracker.register("fail-1", "Will fail", None, None).await;
         tracker.fail("fail-1", "Connection error".into()).await;
 
         let notif = rx.try_recv().unwrap();
@@ -537,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn tracker_kill() {
         let (tracker, mut rx) = AgentTracker::new();
-        tracker.register("kill-1", "Long task").await;
+        tracker.register("kill-1", "Long task", None, None).await;
         tracker.kill("kill-1").await;
 
         let notif = rx.try_recv().unwrap();

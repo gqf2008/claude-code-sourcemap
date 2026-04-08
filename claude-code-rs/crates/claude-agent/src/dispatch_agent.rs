@@ -216,8 +216,8 @@ impl Tool for DispatchAgentTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Optional name for the agent. Can be used as a target for \
-                                    SendMessage (e.g., SendMessage({to: name}))."
+                    "description": "Optional human-readable name for the agent, used for \
+                                    identification in status output and SendMessage routing."
                 },
                 "allowed_tools": {
                     "type": "array",
@@ -273,6 +273,9 @@ impl Tool for DispatchAgentTool {
             .as_bool()
             .unwrap_or(false)
             || self.agent_tracker.is_some(); // coordinator mode → always background
+
+        let agent_name = input["name"].as_str().map(String::from);
+        let agent_description = input["description"].as_str().map(String::from);
 
         // Build tool definitions for the sub-agent (optionally filtered)
         let all_tool_defs: Vec<ToolDefinition> = self.registry
@@ -350,7 +353,12 @@ impl Tool for DispatchAgentTool {
         if run_in_background {
             if let Some(ref tracker) = self.agent_tracker {
                 let agent_id = format!("agent-{}", &Uuid::new_v4().to_string()[..8]);
-                tracker.register(&agent_id, &prompt).await;
+                tracker.register(
+                    &agent_id,
+                    &prompt,
+                    agent_name.as_deref(),
+                    agent_description.as_deref(),
+                ).await;
 
                 // Create a CancellationToken so TaskStop can abort this agent
                 let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -370,7 +378,15 @@ impl Tool for DispatchAgentTool {
                 // Create message channel so SendMessage can deliver follow-ups
                 let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
                 if let Some(ref channels) = self.agent_channels {
-                    channels.write().await.insert(agent_id.clone(), msg_tx);
+                    let mut ch = channels.write().await;
+                    ch.insert(agent_id.clone(), msg_tx);
+                    // Also register under human-readable name for name-based routing
+                    if let Some(ref name) = agent_name {
+                        let tx = ch.get(&agent_id).cloned();
+                        if let Some(tx) = tx {
+                            ch.insert(name.clone(), tx);
+                        }
+                    }
                 }
 
                 let client = self.client.clone();
@@ -378,6 +394,7 @@ impl Tool for DispatchAgentTool {
                 let agent_id_clone = agent_id.clone();
                 let cancel_tokens = self.cancel_tokens.clone();
                 let agent_channels = self.agent_channels.clone();
+                let agent_name_clone = agent_name.clone();
 
                 tokio::spawn(async move {
                     let mut stream = query_stream(
@@ -458,20 +475,29 @@ impl Tool for DispatchAgentTool {
                         tokens.write().await.remove(&agent_id_clone);
                     }
                     if let Some(ref channels) = agent_channels {
-                        channels.write().await.remove(&agent_id_clone);
+                        let mut ch = channels.write().await;
+                        ch.remove(&agent_id_clone);
+                        // Also remove name-based channel entry
+                        if let Some(ref name) = agent_name_clone {
+                            ch.remove(name);
+                        }
                     }
                     tracker.remove(&agent_id_clone).await;
                 });
 
-                let desc = input["description"].as_str().unwrap_or("background agent");
+                let desc = agent_description.as_deref().unwrap_or("background agent");
+                let mut response = json!({
+                    "status": "async_launched",
+                    "agent_id": agent_id,
+                    "description": desc,
+                    "message": "Agent is running in the background. Results will be delivered as a <task-notification>."
+                });
+                if let Some(ref name) = agent_name {
+                    response["name"] = json!(name);
+                }
                 return Ok(ToolResult::text(
-                    serde_json::to_string_pretty(&json!({
-                        "status": "async_launched",
-                        "agent_id": agent_id,
-                        "description": desc,
-                        "message": "Agent is running in the background. Results will be delivered as a <task-notification>."
-                    }))
-                    .unwrap_or_else(|_| r#"{"status":"async_launched"}"#.to_string()),
+                    serde_json::to_string_pretty(&response)
+                        .unwrap_or_else(|_| r#"{"status":"async_launched"}"#.to_string()),
                 ));
             }
         }

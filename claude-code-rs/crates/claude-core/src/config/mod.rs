@@ -464,26 +464,31 @@ impl Default for RuntimeConfig {
 impl RuntimeConfig {
     /// Load from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// Load from an arbitrary lookup function. Testable without mutating env.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Self {
         let mut cfg = Self::default();
-        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_CONCURRENCY") {
+        if let Some(v) = get("CLAUDE_MAX_TOOL_CONCURRENCY") {
             if let Ok(n) = v.parse::<usize>() { cfg.max_tool_concurrency = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_COMPACT_THRESHOLD") {
+        if let Some(v) = get("CLAUDE_COMPACT_THRESHOLD") {
             if let Ok(n) = v.parse::<u64>() { cfg.auto_compact_threshold = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_COMPACT_BUFFER") {
+        if let Some(v) = get("CLAUDE_COMPACT_BUFFER") {
             if let Ok(n) = v.parse::<u64>() { cfg.compact_buffer_tokens = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_MAX_READ_BYTES") {
+        if let Some(v) = get("CLAUDE_MAX_READ_BYTES") {
             if let Ok(n) = v.parse::<u64>() { cfg.max_read_bytes = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_MAX_WRITE_BYTES") {
+        if let Some(v) = get("CLAUDE_MAX_WRITE_BYTES") {
             if let Ok(n) = v.parse::<usize>() { cfg.max_write_bytes = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_OUTPUT") {
+        if let Some(v) = get("CLAUDE_MAX_TOOL_OUTPUT") {
             if let Ok(n) = v.parse::<usize>() { cfg.max_tool_output_bytes = n; }
         }
-        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_OUTPUT_LINES") {
+        if let Some(v) = get("CLAUDE_MAX_TOOL_OUTPUT_LINES") {
             if let Ok(n) = v.parse::<usize>() { cfg.max_tool_output_lines = n; }
         }
         cfg

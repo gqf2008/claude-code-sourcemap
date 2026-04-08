@@ -195,7 +195,7 @@ async fn test_coordinator_agent_lifecycle() {
     let (tracker, mut rx) = AgentTracker::new();
 
     // Register an agent
-    tracker.register("agent-1", "Do some work").await;
+    tracker.register("agent-1", "Do some work", None, None).await;
     assert!(tracker.is_running("agent-1").await);
 
     // Complete the agent
@@ -217,7 +217,7 @@ async fn test_coordinator_agent_lifecycle() {
 async fn test_coordinator_agent_failure() {
     let (tracker, mut rx) = AgentTracker::new();
 
-    tracker.register("agent-2", "Try something").await;
+    tracker.register("agent-2", "Try something", None, None).await;
     tracker.fail("agent-2", "API error".to_string()).await;
 
     let notif = rx.try_recv().unwrap();
@@ -229,7 +229,7 @@ async fn test_coordinator_agent_failure() {
 async fn test_coordinator_notification_to_message() {
     let (tracker, mut rx) = AgentTracker::new();
 
-    tracker.register("agent-3", "Work").await;
+    tracker.register("agent-3", "Work", None, None).await;
     tracker
         .complete("agent-3", "Result here".to_string(), 100, 1)
         .await;

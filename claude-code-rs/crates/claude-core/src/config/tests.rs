@@ -310,33 +310,45 @@ fn runtime_config_defaults() {
 }
 
 #[test]
-fn runtime_config_from_env_override() {
-    // Save and restore env
-    let old = std::env::var("CLAUDE_MAX_TOOL_CONCURRENCY").ok();
-    std::env::set_var("CLAUDE_MAX_TOOL_CONCURRENCY", "20");
+fn runtime_config_from_lookup_override() {
+    use std::collections::HashMap;
+    let mut env: HashMap<&str, &str> = HashMap::new();
+    env.insert("CLAUDE_MAX_TOOL_CONCURRENCY", "20");
 
-    let cfg = RuntimeConfig::from_env();
+    let cfg = RuntimeConfig::from_lookup(|key| env.get(key).map(|v| v.to_string()));
     assert_eq!(cfg.max_tool_concurrency, 20);
     // Others remain default
     assert_eq!(cfg.auto_compact_threshold, 80_000);
-
-    // Restore
-    match old {
-        Some(v) => std::env::set_var("CLAUDE_MAX_TOOL_CONCURRENCY", v),
-        None => std::env::remove_var("CLAUDE_MAX_TOOL_CONCURRENCY"),
-    }
 }
 
 #[test]
-fn runtime_config_invalid_env_uses_default() {
-    let old = std::env::var("CLAUDE_COMPACT_THRESHOLD").ok();
-    std::env::set_var("CLAUDE_COMPACT_THRESHOLD", "not_a_number");
+fn runtime_config_invalid_value_uses_default() {
+    use std::collections::HashMap;
+    let mut env: HashMap<&str, &str> = HashMap::new();
+    env.insert("CLAUDE_COMPACT_THRESHOLD", "not_a_number");
 
-    let cfg = RuntimeConfig::from_env();
+    let cfg = RuntimeConfig::from_lookup(|key| env.get(key).map(|v| v.to_string()));
     assert_eq!(cfg.auto_compact_threshold, 80_000); // fallback to default
+}
 
-    match old {
-        Some(v) => std::env::set_var("CLAUDE_COMPACT_THRESHOLD", v),
-        None => std::env::remove_var("CLAUDE_COMPACT_THRESHOLD"),
-    }
+#[test]
+fn runtime_config_all_overrides() {
+    use std::collections::HashMap;
+    let mut env: HashMap<&str, &str> = HashMap::new();
+    env.insert("CLAUDE_MAX_TOOL_CONCURRENCY", "5");
+    env.insert("CLAUDE_COMPACT_THRESHOLD", "100000");
+    env.insert("CLAUDE_COMPACT_BUFFER", "30000");
+    env.insert("CLAUDE_MAX_READ_BYTES", "1000000");
+    env.insert("CLAUDE_MAX_WRITE_BYTES", "500000");
+    env.insert("CLAUDE_MAX_TOOL_OUTPUT", "65536");
+    env.insert("CLAUDE_MAX_TOOL_OUTPUT_LINES", "5000");
+
+    let cfg = RuntimeConfig::from_lookup(|key| env.get(key).map(|v| v.to_string()));
+    assert_eq!(cfg.max_tool_concurrency, 5);
+    assert_eq!(cfg.auto_compact_threshold, 100_000);
+    assert_eq!(cfg.compact_buffer_tokens, 30_000);
+    assert_eq!(cfg.max_read_bytes, 1_000_000);
+    assert_eq!(cfg.max_write_bytes, 500_000);
+    assert_eq!(cfg.max_tool_output_bytes, 65_536);
+    assert_eq!(cfg.max_tool_output_lines, 5_000);
 }
