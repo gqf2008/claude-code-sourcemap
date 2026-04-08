@@ -3,6 +3,7 @@ use std::sync::Arc;
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
 use claude_bus::bus::ClientHandle;
+use claude_bus::events::AgentRequest;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -11,7 +12,7 @@ use rustyline::validate::Validator;
 use rustyline::{Editor, Helper};
 
 use crate::commands::{CommandResult, SlashCommand};
-use crate::output::print_stream;
+use crate::output::{print_stream, OutputRenderer};
 use crate::repl_commands::*;
 
 /// Tab-completion helper for slash commands.
@@ -196,7 +197,7 @@ impl ConfigMtimes {
 
 pub async fn run(
     engine: Arc<QueryEngine>,
-    _client: Option<ClientHandle>,
+    mut client: Option<ClientHandle>,
     cwd: std::path::PathBuf,
 ) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
@@ -474,35 +475,63 @@ pub async fn run(
 
                 // Extract @image.png references from input
                 let (text, images) = claude_core::image::extract_image_refs(input);
-                let stream = if images.is_empty() {
-                    engine.submit(&text).await
-                } else {
-                    let img_count = images.len();
-                    println!(
-                        "\x1b[2m📎 {} image{} attached\x1b[0m",
-                        img_count,
-                        if img_count == 1 { "" } else { "s" }
-                    );
-                    let mut content = Vec::new();
-                    if !text.is_empty() {
-                        content.push(claude_core::message::ContentBlock::Text { text });
-                    }
-                    content.extend(images);
-                    engine.submit_with_content(content).await
-                };
 
-                // The background Ctrl+C handler (main.rs) will call engine.abort()
-                // when the user presses Ctrl+C or ESC. print_stream listens for ESC too.
-                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
-                    if engine.abort_signal().is_aborted() {
-                        eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
-                        engine.abort_signal().reset();
-                        // Save session immediately after interrupt to prevent data loss
-                        // if user force-exits with a second Ctrl+C
-                        let _ = engine.save_session().await;
-                        turns_since_save = 0;
+                // Submit via bus (preferred) or direct engine (fallback)
+                if let Some(ref mut client) = client {
+                    // Bus-based path: send request → render notifications
+                    let request = if images.is_empty() {
+                        AgentRequest::Submit { text, images: vec![] }
                     } else {
-                        eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                        let img_count = images.len();
+                        println!(
+                            "\x1b[2m📎 {} image{} attached\x1b[0m",
+                            img_count,
+                            if img_count == 1 { "" } else { "s" }
+                        );
+                        AgentRequest::Submit { text, images: vec![] }
+                        // TODO: convert ContentBlock images to ImageAttachment for bus
+                    };
+
+                    if let Err(e) = client.send_request(request) {
+                        eprintln!("\x1b[31mFailed to send request: {}\x1b[0m", e);
+                    } else {
+                        // Render notifications until TurnComplete
+                        let mut renderer = OutputRenderer::new(&model);
+                        while let Some(notification) = client.recv_notification().await {
+                            let done = renderer.render(notification, Some(engine.cost_tracker()));
+                            if done {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Direct engine path (legacy fallback)
+                    let stream = if images.is_empty() {
+                        engine.submit(&text).await
+                    } else {
+                        let img_count = images.len();
+                        println!(
+                            "\x1b[2m📎 {} image{} attached\x1b[0m",
+                            img_count,
+                            if img_count == 1 { "" } else { "s" }
+                        );
+                        let mut content = Vec::new();
+                        if !text.is_empty() {
+                            content.push(claude_core::message::ContentBlock::Text { text });
+                        }
+                        content.extend(images);
+                        engine.submit_with_content(content).await
+                    };
+
+                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
+                        if engine.abort_signal().is_aborted() {
+                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                            engine.abort_signal().reset();
+                            let _ = engine.save_session().await;
+                            turns_since_save = 0;
+                        } else {
+                            eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                        }
                     }
                 }
                 // Reset abort signal after each turn

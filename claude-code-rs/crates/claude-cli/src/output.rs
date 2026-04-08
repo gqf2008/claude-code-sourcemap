@@ -280,7 +280,6 @@ impl Drop for EscListenerGuard {
 /// This is the bus-native rendering path. The existing `print_stream()` function
 /// works with the legacy `AgentEvent` stream; `OutputRenderer` works with
 /// `ClientHandle.recv_notification()` and produces identical output.
-#[allow(dead_code)]
 pub struct OutputRenderer {
     model: String,
     md: crate::markdown::MarkdownRenderer,
@@ -294,7 +293,6 @@ pub struct OutputRenderer {
     total_output_tokens: u64,
 }
 
-#[allow(dead_code)]
 impl OutputRenderer {
     pub fn new(model: &str) -> Self {
         Self {
@@ -315,6 +313,7 @@ impl OutputRenderer {
     /// until the session ends or the channel closes.
     ///
     /// This is the primary entry point for bus-based rendering.
+    #[allow(dead_code)]
     pub async fn run(
         &mut self,
         client: &mut ClientHandle,
@@ -492,6 +491,7 @@ impl OutputRenderer {
     }
 
     /// Reset renderer state for a new submission cycle.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.first_content = true;
         self.thinking_started = false;
@@ -796,6 +796,7 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claude_bus::events::ErrorCode;
     use serde_json::json;
 
     // ── short_path ───────────────────────────────────────────────────
