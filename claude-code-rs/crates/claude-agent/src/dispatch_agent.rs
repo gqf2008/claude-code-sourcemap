@@ -153,12 +153,16 @@ pub fn resolve_agent_model(alias: Option<&str>, parent_model: &str) -> String {
     }
 }
 
-/// A tool that spawns a sub-agent to execute a given prompt.
-/// The sub-agent runs its own query loop and returns its final text output.
+/// AgentTool — spawns a sub-agent to execute a given prompt.
 ///
-/// In coordinator mode, if `run_in_background` is true, the agent is spawned
-/// via `tokio::spawn` and the tool returns immediately with an `agent_id`.
-/// Results are delivered as `<task-notification>` XML via the `AgentTracker`.
+/// The sub-agent runs its own query loop with isolated conversation and returns
+/// its final text output. In coordinator mode, if `run_in_background` is true,
+/// the agent is spawned via `tokio::spawn` and the tool returns immediately
+/// with an `agent_id`. Results are delivered as `<task-notification>` XML via
+/// the `AgentTracker`.
+///
+/// Aligned with TS `tools/AgentTool.ts` — this is the single "Agent" tool
+/// that the model calls. There is no separate stub.
 pub struct DispatchAgentTool {
     pub client: Arc<ApiClient>,
     pub registry: Arc<ToolRegistry>,
@@ -174,12 +178,13 @@ pub struct DispatchAgentTool {
 
 #[async_trait]
 impl Tool for DispatchAgentTool {
-    fn name(&self) -> &str { "dispatch_agent" }
+    fn name(&self) -> &str { "Agent" }
 
     fn description(&self) -> &str {
         "Launch a sub-agent to accomplish an independent task. The sub-agent runs a full \
-         agentic loop with tools and returns its output when done. Use this for tasks that \
-         can be parallelised or isolated. The sub-agent cannot interact with the user.\n\n\
+         agentic loop with its own conversation and tool permissions, then returns its \
+         output. Use for parallel work, research, verification, or when isolation is needed. \
+         The sub-agent cannot interact with the user.\n\n\
          Agent types:\n\
          - \"general\" (default): Full tool access, up to 20 turns\n\
          - \"explore\": Read-only, fast investigation, up to 10 turns\n\
@@ -195,13 +200,24 @@ impl Tool for DispatchAgentTool {
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "The task prompt for the sub-agent."
+                    "description": "The task prompt for the sub-agent. Be specific and provide \
+                                    all necessary context."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "A short (3-5 word) description of what the agent will do. \
+                                    Displayed in status UI."
                 },
                 "agent_type": {
                     "type": "string",
                     "enum": ["general", "explore", "plan", "code-review", "verification", "worker"],
                     "description": "The type of agent to launch. Determines available tools \
                                     and system prompt. Default: general."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional name for the agent. Can be used as a target for \
+                                    SendMessage (e.g., SendMessage({to: name}))."
                 },
                 "allowed_tools": {
                     "type": "array",
@@ -222,7 +238,8 @@ impl Tool for DispatchAgentTool {
                 "run_in_background": {
                     "type": "boolean",
                     "description": "If true, the sub-agent runs in the background. Returns immediately \
-                                    with an agent_id that can be checked with task_get. Default: false."
+                                    with an agent_id. Results are delivered as <task-notification>. \
+                                    Default: false."
                 }
             },
             "required": ["prompt"]
@@ -262,8 +279,8 @@ impl Tool for DispatchAgentTool {
             .all()
             .iter()
             .filter(|t| t.is_enabled())
-            // Sub-agents cannot use interactive tools or nested dispatch_agent
-            .filter(|t| !matches!(t.name(), "AskUserQuestion" | "dispatch_agent" | "SendMessage" | "TaskStop"))
+            // Sub-agents cannot use interactive tools or spawn nested agents
+            .filter(|t| !matches!(t.name(), "AskUserQuestion" | "Agent" | "SendMessage" | "TaskStop"))
             // Agent-type based filtering
             .filter(|t| {
                 if let Some(ref allowed) = allowed_tools {
@@ -397,9 +414,23 @@ impl Tool for DispatchAgentTool {
                             event = stream.next() => {
                                 match event {
                                     Some(AgentEvent::TextDelta(text)) => output.push_str(&text),
-                                    Some(AgentEvent::ToolUseStart { .. }) => tool_use_count += 1,
+                                    Some(AgentEvent::ToolUseStart { ref name, .. }) => {
+                                        tool_use_count += 1;
+                                        tracker.record_progress(
+                                            &agent_id_clone,
+                                            tool_use_count,
+                                            total_tokens,
+                                            Some(name.clone()),
+                                        ).await;
+                                    }
                                     Some(AgentEvent::UsageUpdate(u)) => {
                                         total_tokens += u.input_tokens + u.output_tokens;
+                                        tracker.record_progress(
+                                            &agent_id_clone,
+                                            tool_use_count,
+                                            total_tokens,
+                                            None,
+                                        ).await;
                                     }
                                     Some(AgentEvent::Error(e)) => {
                                         let error_with_context = if output.is_empty() {
@@ -432,10 +463,12 @@ impl Tool for DispatchAgentTool {
                     tracker.remove(&agent_id_clone).await;
                 });
 
+                let desc = input["description"].as_str().unwrap_or("background agent");
                 return Ok(ToolResult::text(
                     serde_json::to_string_pretty(&json!({
                         "status": "async_launched",
                         "agent_id": agent_id,
+                        "description": desc,
                         "message": "Agent is running in the background. Results will be delivered as a <task-notification>."
                     }))
                     .unwrap_or_else(|_| r#"{"status":"async_launched"}"#.to_string()),
@@ -619,7 +652,7 @@ mod tests {
     #[test]
     fn dispatch_agent_tool_metadata() {
         let tool = make_tool();
-        assert_eq!(tool.name(), "dispatch_agent");
+        assert_eq!(tool.name(), "Agent");
         assert!(!tool.is_read_only());
         assert!(tool.description().contains("sub-agent"));
     }
@@ -630,7 +663,7 @@ mod tests {
         let schema = tool.input_schema();
         assert_eq!(schema["type"], "object");
         let props = schema["properties"].as_object().unwrap();
-        for key in &["prompt", "agent_type", "allowed_tools", "system_prompt", "model", "run_in_background"] {
+        for key in &["prompt", "description", "agent_type", "name", "allowed_tools", "system_prompt", "model", "run_in_background"] {
             assert!(props.contains_key(*key), "Missing property: {}", key);
         }
         let required = schema["required"].as_array().unwrap();

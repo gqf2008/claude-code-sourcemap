@@ -50,6 +50,8 @@ pub struct AgentTask {
     pub total_tokens: u64,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
+    /// Most recent tool activity (for real-time progress display).
+    pub last_activity: Option<String>,
 }
 
 impl AgentTask {
@@ -138,6 +140,7 @@ impl AgentTracker {
             total_tokens: 0,
             started_at: Instant::now(),
             finished_at: None,
+            last_activity: None,
         };
         self.agents.write().await.insert(agent_id.to_string(), task);
     }
@@ -249,6 +252,24 @@ impl AgentTracker {
             .get(agent_id)
             .map(|t| matches!(t.status, AgentStatus::Running))
             .unwrap_or(false)
+    }
+
+    /// Record real-time progress for a running agent (tool use, tokens, activity).
+    pub async fn record_progress(
+        &self,
+        agent_id: &str,
+        tool_use_count: u32,
+        total_tokens: u64,
+        last_activity: Option<String>,
+    ) {
+        let mut agents = self.agents.write().await;
+        if let Some(task) = agents.get_mut(agent_id) {
+            task.tool_use_count = tool_use_count;
+            task.total_tokens = total_tokens;
+            if let Some(activity) = last_activity {
+                task.last_activity = Some(activity);
+            }
+        }
     }
 
     /// Remove an agent entry from the tracker (cleanup after notification sent).
@@ -412,7 +433,7 @@ fn xml_escape(s: &str) -> String {
 /// Build the list of tool names available to workers (excludes coordinator-only tools).
 pub fn worker_tool_names(all_tools: &[&str]) -> Vec<String> {
     let excluded = [
-        "dispatch_agent",
+        "Agent",
         "SendMessage",
         "TaskStop",
         "AskUserQuestion",
@@ -448,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_worker_tool_names() {
-        let all = vec!["Bash", "Read", "Edit", "dispatch_agent", "SendMessage", "AskUserQuestion"];
+        let all = vec!["Bash", "Read", "Edit", "Agent", "SendMessage", "AskUserQuestion"];
         let worker = worker_tool_names(&all);
         assert_eq!(worker, vec!["Bash", "Read", "Edit"]);
     }

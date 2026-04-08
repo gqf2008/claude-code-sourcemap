@@ -151,8 +151,15 @@ fn format_tool_start(name: &str, input: &serde_json::Value) -> String {
             format!(" \x1b[2m{} {}\x1b[0m", sub, args)
         }
         "GitStatus" | "GitStatusTool" => String::new(),
-        "dispatch_agent" => input["agent_type"].as_str()
-            .map(|t| format!(" \x1b[2m({})\x1b[0m", t))
+        "Agent" => input["agent_type"].as_str()
+            .map(|t| {
+                let desc = input["description"].as_str().unwrap_or("");
+                if desc.is_empty() {
+                    format!(" \x1b[2m({})\x1b[0m", t)
+                } else {
+                    format!(" \x1b[2m({}: {})\x1b[0m", t, desc)
+                }
+            })
             .unwrap_or_default(),
         "WebFetch" => input["url"].as_str()
             .map(|u| format!(" \x1b[2m{}\x1b[0m", u))
@@ -878,9 +885,17 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tool_start_dispatch_agent() {
+    fn test_format_tool_start_agent() {
         let input = json!({"agent_type": "explore"});
-        let s = format_tool_start("dispatch_agent", &input);
+        let s = format_tool_start("Agent", &input);
         assert!(s.contains("explore"));
+    }
+
+    #[test]
+    fn test_format_tool_start_agent_with_description() {
+        let input = json!({"agent_type": "explore", "description": "Find config files"});
+        let s = format_tool_start("Agent", &input);
+        assert!(s.contains("explore"));
+        assert!(s.contains("Find config files"));
     }
 }

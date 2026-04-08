@@ -213,7 +213,8 @@ impl ToolRegistry {
         registry.register(plan_mode::EnterPlanModeTool);
         registry.register(plan_mode::ExitPlanModeTool);
         registry.register(skill_tool::SkillTool);
-        registry.register(agent_tool::AgentTool);
+        // Note: AgentTool (DispatchAgentTool) is registered by the engine builder
+        // in claude-agent, not here, because it requires ApiClient and coordinator state.
 
         // Management (always included)
         registry.register(todo::TodoWriteTool);

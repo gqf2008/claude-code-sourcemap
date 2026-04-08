@@ -86,7 +86,7 @@ fn built_in_tool_catalog() -> Vec<(&'static str, &'static str)> {
         ("WebFetch", "Fetch content from a URL"),
         ("WebSearch", "Search the web for current information"),
         ("AskUser", "Ask the user a question and wait for response"),
-        ("dispatch_agent", "Launch a sub-agent for independent tasks"),
+        ("Agent", "Launch a sub-agent for independent tasks"),
         ("task_create", "Create a new task for tracking progress"),
         ("task_update", "Update an existing task's status or details"),
         ("task_get", "Get details of a specific task"),
