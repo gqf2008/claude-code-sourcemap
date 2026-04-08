@@ -461,6 +461,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-rpc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "claude-agent",
+ "claude-bus",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "claude-tools"
 version = "0.1.0"
 dependencies = [
