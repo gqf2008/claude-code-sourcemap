@@ -384,6 +384,7 @@ dependencies = [
  "claude-api",
  "claude-core",
  "claude-tools",
+ "crossterm",
  "dirs",
  "futures",
  "indicatif",

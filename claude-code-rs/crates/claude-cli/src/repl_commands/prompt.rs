@@ -78,7 +78,7 @@ pub(crate) async fn handle_init(engine: &QueryEngine, cwd: &std::path::Path) {
     println!("\x1b[35m[Init]\x1b[0m Analyzing project…");
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mInit error: {}\x1b[0m", e);
     }
 }
@@ -165,7 +165,7 @@ pub(crate) async fn handle_commit(engine: &QueryEngine, cwd: &std::path::Path, u
     println!("\x1b[35m[Commit]\x1b[0m 分析更改…");
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31m提交错误: {}\x1b[0m", e);
     }
 }
@@ -325,7 +325,7 @@ pub(crate) async fn handle_pr(engine: &QueryEngine, custom_prompt: &str, cwd: &s
     println!("\x1b[35m[PR]\x1b[0m {} → {} ({})…", current_branch, default_branch, action);
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mPR 错误: {}\x1b[0m", e);
     }
 }
@@ -443,7 +443,7 @@ pub(crate) async fn handle_bug(engine: &QueryEngine, custom_prompt: &str, cwd: &
     println!("\x1b[35m[Debug]\x1b[0m Investigating…");
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mDebug error: {}\x1b[0m", e);
     }
 }

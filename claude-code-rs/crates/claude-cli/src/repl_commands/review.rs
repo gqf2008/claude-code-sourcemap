@@ -79,7 +79,7 @@ pub(crate) async fn handle_review(engine: &QueryEngine, custom_prompt: &str, cwd
 
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&review_prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mReview 错误: {}\x1b[0m", e);
     }
 }
@@ -220,7 +220,7 @@ async fn handle_review_pr(engine: &QueryEngine, pr_number: u64, cwd: &std::path:
 
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(&prompt).await;
-    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mPR Review 错误: {}\x1b[0m", e);
     }
 }

@@ -50,7 +50,7 @@ pub(crate) async fn run_skill(
 
     let model = { parent_engine.state().read().await.model.clone() };
     let stream = parent_engine.submit(&augmented).await;
-    if let Err(e) = print_stream(stream, &model, Some(parent_engine.cost_tracker())).await {
+    if let Err(e) = print_stream(stream, &model, Some(parent_engine.cost_tracker()), None).await {
         eprintln!("\x1b[31mSkill error: {}\x1b[0m", e);
     }
 }

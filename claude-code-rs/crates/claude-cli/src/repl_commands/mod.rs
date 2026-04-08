@@ -130,7 +130,7 @@ pub(crate) async fn handle_plugin_run(engine: &QueryEngine, name: &str, prompt: 
         let s = engine.state().read().await;
         s.model.clone()
     };
-    if let Err(e) = crate::output::print_stream(stream, &model, Some(cost)).await {
+    if let Err(e) = crate::output::print_stream(stream, &model, Some(cost), None).await {
         eprintln!("\x1b[31mPlugin command error: {}\x1b[0m", e);
     }
 }

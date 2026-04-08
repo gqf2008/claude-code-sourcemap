@@ -119,6 +119,10 @@ impl Hinter for CommandCompleter {
         if !line.starts_with('/') || pos < line.len() {
             return None;
         }
+        // When user types just "/", show a brief command summary as hint
+        if line == "/" {
+            return Some("help  clear  compact  model  cost  skills  status  diff  ...".to_string());
+        }
         // Find the first matching command and show the remaining text as a hint
         SLASH_COMMANDS
             .iter()
@@ -365,7 +369,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                         if prompt.len() > 50 { &prompt[..50] } else { &prompt });
                                     let model = { engine.state().read().await.model.clone() };
                                     let stream = engine.submit(&prompt).await;
-                                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+                                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
                                         eprintln!("\x1b[31mRetry error: {}\x1b[0m", e);
                                     }
                                     print_turn_stats(&engine).await;
@@ -475,8 +479,8 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 };
 
                 // The background Ctrl+C handler (main.rs) will call engine.abort()
-                // when the user presses Ctrl+C. print_stream checks abort internally.
-                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+                // when the user presses Ctrl+C or ESC. print_stream listens for ESC too.
+                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
                     if engine.abort_signal().is_aborted() {
                         eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
                         engine.abort_signal().reset();
@@ -540,7 +544,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                                 if text.is_empty() { continue; }
                                 eprintln!("\x1b[33m[Task notification received]\x1b[0m");
                                 let stream = engine.submit(&text).await;
-                                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker())).await {
+                                if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
                                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                                 }
                             }

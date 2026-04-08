@@ -221,11 +221,13 @@ pub struct PluginCommandEntry {
 
 fn build_help_text(skills: &[SkillEntry], plugin_commands: &[PluginCommandEntry]) -> String {
     let mut text = HELP_TEXT_BASE.to_string();
+    // Skills are shown via /skills command, not in /help (matches TS behavior)
     if !skills.is_empty() {
-        text.push_str("\n\n\x1b[1mSkills\x1b[0m (sub-agents with specialised prompts):");
-        for s in skills {
-            text.push_str(&format!("\n  /{:<20} {}", s.name, s.description));
-        }
+        text.push_str(&format!(
+            "\n\n  \x1b[2m({} skill{} loaded — use /skills to list)\x1b[0m",
+            skills.len(),
+            if skills.len() == 1 { "" } else { "s" },
+        ));
     }
     if !plugin_commands.is_empty() {
         text.push_str("\n\n\x1b[1mPlugins\x1b[0m:");
@@ -453,8 +455,11 @@ mod tests {
         match cmd.execute(&skills, &no_plugins()) {
             CommandResult::Print(text) => {
                 assert!(text.contains("/help"));
-                assert!(text.contains("review"));
-                assert!(text.contains("Code review skill"));
+                // Skills are no longer listed in /help (matches TS behavior)
+                // Instead, a count hint is shown
+                assert!(text.contains("skill"));
+                assert!(text.contains("/skills"));
+                assert!(!text.contains("Code review skill"));
             }
             _ => panic!("expected Print"),
         }

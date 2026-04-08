@@ -2,6 +2,7 @@ use claude_agent::cost::CostTracker;
 use claude_agent::engine::QueryEngine;
 use claude_agent::query::AgentEvent;
 use claude_agent::task_runner::{run_task, CompletionReason, TaskProgress};
+use claude_core::tool::AbortSignal;
 use tokio_stream::StreamExt;
 use std::io::Write as _;
 
@@ -223,10 +224,51 @@ fn categorize_error(msg: &str) -> (&'static str, Option<&'static str>) {
     }
 }
 
+/// Spawn a background thread that listens for ESC key press and triggers abort.
+/// Returns a guard that stops the listener when dropped.
+fn spawn_esc_listener(abort: AbortSignal) -> EscListenerGuard {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let handle = std::thread::spawn(move || {
+        // Enable raw mode to capture individual key presses
+        if crossterm::terminal::enable_raw_mode().is_err() {
+            return;
+        }
+        while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
+            // Poll for events with a short timeout
+            if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+                if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                    if key.code == crossterm::event::KeyCode::Esc {
+                        abort.abort();
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = crossterm::terminal::disable_raw_mode();
+    });
+    EscListenerGuard { stop, handle: Some(handle) }
+}
+
+struct EscListenerGuard {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for EscListenerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 pub async fn print_stream(
     mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>>,
     model: &str,
     cost_tracker: Option<&CostTracker>,
+    abort_signal: Option<&AbortSignal>,
 ) -> anyhow::Result<()> {
     let mut last_tool_name = String::new();
     let mut tool_start_time: Option<std::time::Instant> = None;
@@ -235,6 +277,9 @@ pub async fn print_stream(
     let mut md = crate::markdown::MarkdownRenderer::new();
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+
+    // Listen for ESC key press to cancel the running task
+    let _esc_guard = abort_signal.map(|a| spawn_esc_listener(a.clone()));
 
     // Start the thinking spinner
     let spinner = Spinner::start("Thinking...");
@@ -382,7 +427,7 @@ pub async fn print_stream(
 pub async fn run_single(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> {
     let model = { engine.state().read().await.model.clone() };
     let stream = engine.submit(prompt).await;
-    print_stream(stream, &model, Some(engine.cost_tracker())).await
+    print_stream(stream, &model, Some(engine.cost_tracker()), None).await
 }
 
 /// Run a single prompt and output structured JSON result.

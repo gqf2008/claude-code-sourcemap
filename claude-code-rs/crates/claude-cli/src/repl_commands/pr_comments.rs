@@ -278,7 +278,7 @@ pub(crate) async fn handle_pr_comments(
         let s = engine.state().read().await;
         s.model.clone()
     };
-    if let Err(e) = crate::output::print_stream(stream, &model, Some(cost)).await {
+    if let Err(e) = crate::output::print_stream(stream, &model, Some(cost), None).await {
         eprintln!("\x1b[31mAnalysis error: {}\x1b[0m", e);
     }
 }
