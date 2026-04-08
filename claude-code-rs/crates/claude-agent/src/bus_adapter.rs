@@ -77,10 +77,20 @@ impl AgentCoreAdapter {
 
     /// Create with an MCP bus adapter for MCP server management.
     pub fn with_mcp(engine: QueryEngine, bus: BusHandle, mcp: McpBusAdapter) -> Self {
+        Self::from_arc(Arc::new(engine), bus, Some(mcp))
+    }
+
+    /// Create from a shared Arc<QueryEngine> — allows the caller to retain
+    /// a reference to the engine while the adapter runs in the background.
+    pub fn from_arc(
+        engine: Arc<QueryEngine>,
+        bus: BusHandle,
+        mcp: Option<McpBusAdapter>,
+    ) -> Self {
         Self {
-            engine: Arc::new(engine),
+            engine,
             bus: Mutex::new(bus),
-            mcp: Some(mcp),
+            mcp,
             turn: Mutex::new(0),
         }
     }

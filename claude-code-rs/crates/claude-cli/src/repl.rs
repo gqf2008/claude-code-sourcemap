@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
+use claude_bus::bus::ClientHandle;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -191,7 +194,11 @@ impl ConfigMtimes {
     }
 }
 
-pub async fn run(engine: QueryEngine, cwd: std::path::PathBuf) -> anyhow::Result<()> {
+pub async fn run(
+    engine: Arc<QueryEngine>,
+    _client: Option<ClientHandle>,
+    cwd: std::path::PathBuf,
+) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
     let display = claude_core::model::display_name_any(&current_model);
     println!("\x1b[1;34m╭─────────────────────────────────╮\x1b[0m");

@@ -6,6 +6,8 @@ mod output;
 mod markdown;
 mod diff_display;
 
+use std::sync::Arc;
+
 use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
@@ -215,6 +217,23 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let engine = engine.build();
+    let engine = Arc::new(engine);
+
+    // ── Create Event Bus + AgentCoreAdapter ──────────────────────────────
+    let (bus_handle, client_handle) = claude_bus::bus::EventBus::new(256);
+
+    // Build MCP bus adapter from discovered configs
+    let mcp_manager = claude_mcp::registry::McpManager::new();
+    let mcp_adapter = claude_mcp::McpBusAdapter::new(mcp_manager);
+
+    // Create the core adapter bridging QueryEngine ↔ EventBus
+    let adapter = claude_agent::bus_adapter::AgentCoreAdapter::from_arc(
+        Arc::clone(&engine),
+        bus_handle,
+        Some(mcp_adapter),
+    );
+    let _adapter_handle = adapter.spawn();
+    tracing::debug!("Event Bus started, AgentCoreAdapter spawned");
 
     // ── Ctrl-C → abort signal (second press → force exit) ────────────────
     // We use a shared counter to track Ctrl-C presses.
@@ -324,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("No input provided. Use `claude \"prompt\"` or pipe via stdin.");
         }
     } else {
-        repl::run(engine, cwd).await?;
+        repl::run(engine, Some(client_handle), cwd).await?;
     }
 
     Ok(())
