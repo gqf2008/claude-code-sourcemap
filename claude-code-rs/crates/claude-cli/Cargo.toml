@@ -33,6 +33,7 @@ similar = { workspace = true }
 regex = { workspace = true }
 indicatif = { workspace = true }
 crossterm = { workspace = true }
+cliclack = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
