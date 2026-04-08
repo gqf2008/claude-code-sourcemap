@@ -60,36 +60,37 @@ impl Tool for SkillTool {
             }
         };
 
-        // Expand the skill content with arguments
-        let mut content = skill.system_prompt.clone();
-        if !args.is_empty() {
-            content = content.replace("$ARGUMENTS", args);
+        // Check if model invocation is disabled
+        if skill.disable_model_invocation {
+            return Ok(ToolResult::error(format!(
+                "Skill '{}' has disabled model invocation. It can only be invoked by the user via /{}.",
+                skill_name, skill_name
+            )));
         }
 
-        // Extract metadata from frontmatter-style comments if present
-        // (SkillEntry already parses frontmatter, but check inline comments too)
-        let mut extra_allowed_tools: Option<Vec<String>> = None;
-        let skill_model = skill.model.clone();
-
-        for line in content.lines() {
-            let trimmed = line.trim().to_string();
-            if let Some(rest) = trimmed.strip_prefix("<!-- allowedTools:") {
-                if let Some(tools_str) = rest.strip_suffix("-->") {
-                    extra_allowed_tools = Some(
-                        tools_str.split(',')
-                            .map(|t| t.trim().to_string())
-                            .filter(|t| !t.is_empty())
-                            .collect()
-                    );
-                }
-            }
-        }
+        // Expand the skill content with arguments (handles $ARGUMENTS, ${name}, $1, ${CLAUDE_SKILL_DIR})
+        let content = claude_core::skills::substitute_arguments(skill, args);
 
         // Merge skill's allowed_tools with any inline overrides
         let allowed_tools = if !skill.allowed_tools.is_empty() {
             Some(skill.allowed_tools.clone())
         } else {
-            extra_allowed_tools
+            // Check inline HTML comments as fallback
+            let mut inline_tools = None;
+            for line in content.lines() {
+                let trimmed = line.trim().to_string();
+                if let Some(rest) = trimmed.strip_prefix("<!-- allowedTools:") {
+                    if let Some(tools_str) = rest.strip_suffix("-->") {
+                        inline_tools = Some(
+                            tools_str.split(',')
+                                .map(|t| t.trim().to_string())
+                                .filter(|t| !t.is_empty())
+                                .collect()
+                        );
+                    }
+                }
+            }
+            inline_tools
         };
 
         let mut result = json!({
@@ -102,8 +103,20 @@ impl Tool for SkillTool {
         if let Some(tools) = allowed_tools {
             result["allowedTools"] = json!(tools);
         }
-        if let Some(m) = skill_model {
+        if let Some(ref m) = skill.model {
             result["model"] = json!(m);
+        }
+        if let Some(ref ctx) = skill.context {
+            result["context"] = json!(ctx);
+        }
+        if let Some(ref agent) = skill.agent {
+            result["agent"] = json!(agent);
+        }
+        if let Some(ref effort) = skill.effort {
+            result["effort"] = json!(effort);
+        }
+        if let Some(ref hint) = skill.when_to_use {
+            result["whenToUse"] = json!(hint);
         }
 
         Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))

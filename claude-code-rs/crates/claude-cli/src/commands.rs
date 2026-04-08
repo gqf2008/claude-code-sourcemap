@@ -122,14 +122,37 @@ impl SlashCommand {
             },
             Self::Cost => CommandResult::ShowCost,
             Self::Skills => {
-                if known_skills.is_empty() {
+                let invocable: Vec<_> = known_skills
+                    .iter()
+                    .filter(|s| s.user_invocable)
+                    .collect();
+                if invocable.is_empty() {
                     CommandResult::Print("No skills found. Add .md files to .claude/skills/".into())
                 } else {
-                    let list = known_skills.iter()
-                        .map(|s| format!("  /{:<20} {}", s.name, s.description))
+                    let list = invocable.iter()
+                        .map(|s| {
+                            let name_display = s.display_name.as_deref().unwrap_or(&s.name);
+                            let mut line = format!("  /{:<20} {}", name_display, s.description);
+                            if let Some(ref hint) = s.argument_hint {
+                                line.push_str(&format!("  \x1b[2m{}\x1b[0m", hint));
+                            }
+                            if !s.paths.is_empty() {
+                                line.push_str("  \x1b[33m[conditional]\x1b[0m");
+                            }
+                            line
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    CommandResult::Print(format!("Available skills:\n{}", list))
+                    let cond_count = known_skills.iter().filter(|s| !s.paths.is_empty()).count();
+                    let mut out = format!("Available skills:\n{}", list);
+                    if cond_count > 0 {
+                        out.push_str(&format!(
+                            "\n\n  \x1b[2m({} conditional skill{} — activated when matching files are touched)\x1b[0m",
+                            cond_count,
+                            if cond_count == 1 { "" } else { "s" }
+                        ));
+                    }
+                    CommandResult::Print(out)
                 }
             }
             Self::Memory { sub } => CommandResult::Memory { sub: sub.clone() },
@@ -308,6 +331,18 @@ mod tests {
             system_prompt: "You are a reviewer".into(),
             allowed_tools: vec!["Read".into()],
             model: None,
+            display_name: None,
+            when_to_use: None,
+            paths: vec![],
+            argument_names: vec![],
+            argument_hint: None,
+            version: None,
+            context: None,
+            agent: None,
+            effort: None,
+            user_invocable: true,
+            disable_model_invocation: false,
+            skill_root: None,
         }]
     }
 
@@ -427,6 +462,18 @@ mod tests {
             system_prompt: "".into(),
             allowed_tools: vec![],
             model: None,
+            display_name: None,
+            when_to_use: None,
+            paths: vec![],
+            argument_names: vec![],
+            argument_hint: None,
+            version: None,
+            context: None,
+            agent: None,
+            effort: None,
+            user_invocable: true,
+            disable_model_invocation: false,
+            skill_root: None,
         }];
         match SlashCommand::parse("/myskill do stuff", &skills) {
             Some(SlashCommand::RunSkill { name, prompt }) => {
