@@ -219,68 +219,43 @@ impl ApiBackend for OpenAIBackend {
             anyhow::bail!("Stream API error {} ({}): {}", status, self.provider, body);
         }
 
+        // Use shared SSE line extractor, then do OpenAI-specific JSON parsing
+        let lines = crate::stream::sse_byte_stream_to_lines(response);
+
         let stream = async_stream::stream! {
             use futures::StreamExt;
-            let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
             let mut state = OpenAIStreamState::new(&model);
-            let mut got_done = false;
+            tokio::pin!(lines);
 
-            while let Some(chunk_result) = byte_stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].trim().to_string();
-                            buffer = buffer[pos + 1..].to_string();
-
-                            if line.is_empty() || line == ":" {
-                                continue;
-                            }
-
-                            // Handle SSE format: "data: {...}"
-                            let data = if let Some(stripped) = line.strip_prefix("data: ") {
-                                stripped
-                            } else if let Some(stripped) = line.strip_prefix("data:") {
-                                stripped
-                            } else {
-                                continue;
-                            };
-
-                            // "[DONE]" signals end of stream
-                            if data.trim() == "[DONE]" {
-                                got_done = true;
-                                break;
-                            }
-
-                            match serde_json::from_str::<ChatCompletionChunk>(data) {
-                                Ok(chunk) => {
-                                    let events = state.process_chunk(&chunk);
-                                    for event in events {
-                                        yield Ok(event);
-                                    }
+            while let Some(line_result) = lines.next().await {
+                match line_result {
+                    Ok(data) => {
+                        match serde_json::from_str::<ChatCompletionChunk>(&data) {
+                            Ok(chunk) => {
+                                let events = state.process_chunk(&chunk);
+                                for event in events {
+                                    yield Ok(event);
                                 }
-                                Err(e) => {
-                                    warn!(
-                                        provider = "openai",
-                                        error = %e,
-                                        line = %data,
-                                        "Failed to parse streaming chunk"
-                                    );
-                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    provider = "openai",
+                                    error = %e,
+                                    line = %data,
+                                    "Failed to parse streaming chunk"
+                                );
                             }
                         }
                     }
                     Err(e) => {
-                        yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                        yield Err(e);
                         return;
                     }
                 }
             }
 
             // If the stream ended without a proper finish_reason, synthesize closing events
-            if state.message_started && !got_done {
+            if state.message_started {
                 let closing = state.finalize();
                 for event in closing {
                     yield Ok(event);

@@ -414,3 +414,78 @@ impl LoadedSettings {
         out
     }
 }
+
+// ── Runtime configuration (tunable constants) ───────────────────────────────
+
+/// Runtime-tunable parameters with sensible defaults.
+///
+/// Unlike `Settings` (persisted to JSON), these are in-process tunables
+/// loaded from environment variables. They centralise previously hard-coded
+/// constants so that operators can adjust them without recompiling.
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    /// Max tools executing concurrently in a single turn.
+    /// Env: `CLAUDE_MAX_TOOL_CONCURRENCY` (default: 10).
+    pub max_tool_concurrency: usize,
+    /// Token count at which auto-compaction triggers.
+    /// Env: `CLAUDE_COMPACT_THRESHOLD` (default: 80 000).
+    pub auto_compact_threshold: u64,
+    /// Buffer tokens subtracted from context window for output reservation.
+    /// Env: `CLAUDE_COMPACT_BUFFER` (default: 20 000).
+    pub compact_buffer_tokens: u64,
+    /// Maximum file size tools will read into memory (bytes).
+    /// Env: `CLAUDE_MAX_READ_BYTES` (default: 50 MB).
+    pub max_read_bytes: u64,
+    /// Maximum content size tools will write (bytes).
+    /// Env: `CLAUDE_MAX_WRITE_BYTES` (default: 10 MB).
+    pub max_write_bytes: usize,
+    /// Maximum tool output size in bytes before truncation.
+    /// Env: `CLAUDE_MAX_TOOL_OUTPUT` (default: 30 KB).
+    pub max_tool_output_bytes: usize,
+    /// Maximum tool output lines before truncation.
+    /// Env: `CLAUDE_MAX_TOOL_OUTPUT_LINES` (default: 2000).
+    pub max_tool_output_lines: usize,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            max_tool_concurrency: 10,
+            auto_compact_threshold: 80_000,
+            compact_buffer_tokens: 20_000,
+            max_read_bytes: 50 * 1024 * 1024,
+            max_write_bytes: 10 * 1024 * 1024,
+            max_tool_output_bytes: 30 * 1024,
+            max_tool_output_lines: 2_000,
+        }
+    }
+}
+
+impl RuntimeConfig {
+    /// Load from environment variables, falling back to defaults.
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_CONCURRENCY") {
+            if let Ok(n) = v.parse::<usize>() { cfg.max_tool_concurrency = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_COMPACT_THRESHOLD") {
+            if let Ok(n) = v.parse::<u64>() { cfg.auto_compact_threshold = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_COMPACT_BUFFER") {
+            if let Ok(n) = v.parse::<u64>() { cfg.compact_buffer_tokens = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_MAX_READ_BYTES") {
+            if let Ok(n) = v.parse::<u64>() { cfg.max_read_bytes = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_MAX_WRITE_BYTES") {
+            if let Ok(n) = v.parse::<usize>() { cfg.max_write_bytes = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_OUTPUT") {
+            if let Ok(n) = v.parse::<usize>() { cfg.max_tool_output_bytes = n; }
+        }
+        if let Ok(v) = std::env::var("CLAUDE_MAX_TOOL_OUTPUT_LINES") {
+            if let Ok(n) = v.parse::<usize>() { cfg.max_tool_output_lines = n; }
+        }
+        cfg
+    }
+}

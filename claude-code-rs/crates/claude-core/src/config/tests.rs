@@ -294,3 +294,49 @@ fn merge_permission_rules_are_appended_not_deduped() {
     // Rules are appended (not deduplicated at merge time)
     assert_eq!(merged.permission_rules.len(), 3);
 }
+
+// ── RuntimeConfig tests ─────────────────────────────────────────────────
+
+#[test]
+fn runtime_config_defaults() {
+    let cfg = RuntimeConfig::default();
+    assert_eq!(cfg.max_tool_concurrency, 10);
+    assert_eq!(cfg.auto_compact_threshold, 80_000);
+    assert_eq!(cfg.compact_buffer_tokens, 20_000);
+    assert_eq!(cfg.max_read_bytes, 50 * 1024 * 1024);
+    assert_eq!(cfg.max_write_bytes, 10 * 1024 * 1024);
+    assert_eq!(cfg.max_tool_output_bytes, 30 * 1024);
+    assert_eq!(cfg.max_tool_output_lines, 2_000);
+}
+
+#[test]
+fn runtime_config_from_env_override() {
+    // Save and restore env
+    let old = std::env::var("CLAUDE_MAX_TOOL_CONCURRENCY").ok();
+    std::env::set_var("CLAUDE_MAX_TOOL_CONCURRENCY", "20");
+
+    let cfg = RuntimeConfig::from_env();
+    assert_eq!(cfg.max_tool_concurrency, 20);
+    // Others remain default
+    assert_eq!(cfg.auto_compact_threshold, 80_000);
+
+    // Restore
+    match old {
+        Some(v) => std::env::set_var("CLAUDE_MAX_TOOL_CONCURRENCY", v),
+        None => std::env::remove_var("CLAUDE_MAX_TOOL_CONCURRENCY"),
+    }
+}
+
+#[test]
+fn runtime_config_invalid_env_uses_default() {
+    let old = std::env::var("CLAUDE_COMPACT_THRESHOLD").ok();
+    std::env::set_var("CLAUDE_COMPACT_THRESHOLD", "not_a_number");
+
+    let cfg = RuntimeConfig::from_env();
+    assert_eq!(cfg.auto_compact_threshold, 80_000); // fallback to default
+
+    match old {
+        Some(v) => std::env::set_var("CLAUDE_COMPACT_THRESHOLD", v),
+        None => std::env::remove_var("CLAUDE_COMPACT_THRESHOLD"),
+    }
+}

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
+use tracing::{debug, warn};
 
 use crate::diff_ui::print_create_diff;
 use crate::path_util;
@@ -46,7 +47,10 @@ impl Tool for FileWriteTool {
 
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => {
+                warn!(file_path, error = %e, "Write path resolution rejected");
+                return Ok(ToolResult::error(format!("{}", e)));
+            }
         };
 
         if let Some(parent) = path.parent() {
@@ -60,20 +64,24 @@ impl Tool for FileWriteTool {
                 // File exists — show diff and overwrite
                 crate::diff_ui::print_diff(file_path, &old, content);
                 tokio::fs::write(&path, content).await?;
+                debug!(path = %path.display(), bytes = content.len(), "Overwrote existing file");
                 Ok(ToolResult::text(format!("Wrote {}", path.display())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // New file
                 print_create_diff(file_path, content);
                 tokio::fs::write(&path, content).await?;
+                debug!(path = %path.display(), bytes = content.len(), "Created new file");
                 Ok(ToolResult::text(format!("Created {}", path.display())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 // Existing binary file — overwrite without diff
                 tokio::fs::write(&path, content).await?;
+                debug!(path = %path.display(), "Overwrote binary file");
                 Ok(ToolResult::text(format!("Wrote {} (binary file, no diff)", path.display())))
             }
             Err(e) => {
+                warn!(path = %path.display(), error = %e, "Cannot read existing file for diff");
                 Ok(ToolResult::error(format!("Cannot read existing file: {}", e)))
             }
         }

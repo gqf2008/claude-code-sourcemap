@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::Path;
+use tracing::{debug, warn};
 use crate::path_util;
 
 /// Extensions we support reading as base64-encoded images.
@@ -150,9 +151,13 @@ impl Tool for FileReadTool {
 
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => {
+                warn!(file_path, error = %e, "Path resolution rejected");
+                return Ok(ToolResult::error(format!("{}", e)));
+            }
         };
         if !path.exists() {
+            debug!(path = %path.display(), "File not found");
             // Try to suggest similar files
             let suggestions = find_similar_files(&path, 5);
             let mut msg = format!("File not found: {}", path.display());

@@ -168,38 +168,7 @@ impl ApiBackend for FirstPartyBackend {
             anyhow::bail!("Stream API error {}: {}", status, body);
         }
 
-        let stream = async_stream::stream! {
-            use futures::StreamExt;
-            let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
-
-            while let Some(chunk_result) = byte_stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        buffer.push_str(&String::from_utf8_lossy(&chunk));
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].to_string();
-                            buffer = buffer[pos + 1..].to_string();
-                            if let Some(event_result) = crate::stream::parse_sse_line(&line) {
-                                yield event_result;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        yield Err(anyhow::anyhow!("Stream read error: {}", e));
-                        return;
-                    }
-                }
-            }
-            // Flush remaining buffer
-            if !buffer.trim().is_empty() {
-                if let Some(event_result) = crate::stream::parse_sse_line(&buffer) {
-                    yield event_result;
-                }
-            }
-        };
-
-        Ok(Box::pin(stream))
+        Ok(crate::stream::sse_byte_stream_to_events(response))
     }
 }
 

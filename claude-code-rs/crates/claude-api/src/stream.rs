@@ -141,6 +141,104 @@ pub fn is_idle_timeout_error(err: &anyhow::Error) -> bool {
     err.to_string().contains("Stream idle timeout")
 }
 
+// ── Shared SSE byte-stream → event-stream helper ────────────────────────────
+
+/// Convert a raw `reqwest` byte stream into a parsed SSE `StreamEvent` stream.
+///
+/// This is the common SSE frame parser used by **both** `FirstPartyBackend` and
+/// `OpenAIBackend`. Callers that need to translate events (e.g. OpenAI → Anthropic
+/// format) should use `sse_byte_stream_to_lines` instead and map the chunks themselves.
+///
+/// Behaviour:
+/// - Buffers bytes until a `\n` is found
+/// - Passes each complete line to [`parse_sse_line`]
+/// - Flushes any trailing buffer on stream end
+pub fn sse_byte_stream_to_events(
+    response: reqwest::Response,
+) -> Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>> {
+    let stream = async_stream::stream! {
+        use futures::StreamExt;
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].to_string();
+                        buffer = buffer[pos + 1..].to_string();
+                        if let Some(event_result) = parse_sse_line(&line) {
+                            yield event_result;
+                        }
+                    }
+                }
+                Err(e) => {
+                    yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                    return;
+                }
+            }
+        }
+        // Flush remaining buffer
+        if !buffer.trim().is_empty() {
+            if let Some(event_result) = parse_sse_line(&buffer) {
+                yield event_result;
+            }
+        }
+    };
+
+    Box::pin(stream)
+}
+
+/// Extract raw SSE data strings from a reqwest byte stream (without parsing into StreamEvent).
+///
+/// Returns `(data_string, is_done)` tuples. Callers handle their own JSON parsing
+/// (e.g. OpenAI format → Anthropic format translation).
+pub fn sse_byte_stream_to_lines(
+    response: reqwest::Response,
+) -> Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>> {
+    let stream = async_stream::stream! {
+        use futures::StreamExt;
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].trim().to_string();
+                        buffer = buffer[pos + 1..].to_string();
+
+                        if line.is_empty() || line == ":" {
+                            continue;
+                        }
+
+                        let data = if let Some(stripped) = line.strip_prefix("data: ") {
+                            stripped
+                        } else if let Some(stripped) = line.strip_prefix("data:") {
+                            stripped
+                        } else {
+                            continue;
+                        };
+
+                        if data.trim() == "[DONE]" {
+                            return;
+                        }
+                        yield Ok(data.to_string());
+                    }
+                }
+                Err(e) => {
+                    yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                    return;
+                }
+            }
+        }
+    };
+
+    Box::pin(stream)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
