@@ -29,6 +29,8 @@ pub struct SubAgentConfig {
     pub cwd: PathBuf,
     pub system_prompt: String,
     pub max_turns: u32,
+    /// Model context window size in tokens (used for context percentage warnings).
+    pub context_window: u64,
 }
 
 /// Built-in agent type profiles aligned with the TS codebase.
@@ -321,7 +323,7 @@ impl Tool for DispatchAgentTool {
             temperature: None,
             thinking: None,
             token_budget: 0,
-            context_window: 200_000, // sub-agents inherit default context window
+            context_window: self.config.context_window,
         };
 
         // Sub-agents run without user-defined hooks to avoid re-entrant side effects
@@ -606,6 +608,7 @@ mod tests {
                 cwd: PathBuf::from("."),
                 system_prompt: "Test".into(),
                 max_turns: 10,
+                context_window: 200_000,
             },
             agent_tracker: None,
             cancel_tokens: None,

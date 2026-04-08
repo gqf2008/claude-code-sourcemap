@@ -321,6 +321,7 @@ impl QueryEngineBuilder {
                 cwd: self.cwd.clone(),
                 system_prompt: system_prompt.clone(),
                 max_turns: self.max_turns,
+                context_window: caps.context_window,
             },
             agent_tracker,
             cancel_tokens: coord_cancel_tokens,

@@ -51,6 +51,7 @@ pub struct QueryConfig {
     /// Token budget for this query (0 = unlimited).
     pub token_budget: u64,
     /// Model context window size (for accurate percentage display).
+    /// Overridden at runtime by engine builder from model capabilities.
     pub context_window: u64,
 }
 
@@ -63,7 +64,7 @@ impl Default for QueryConfig {
             temperature: None,
             thinking: None,
             token_budget: 0,
-            context_window: 200_000,
+            context_window: 200_000, // fallback; prefer runtime value from model capabilities
         }
     }
 }
