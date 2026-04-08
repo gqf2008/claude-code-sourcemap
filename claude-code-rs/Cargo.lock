@@ -394,6 +394,7 @@ dependencies = [
  "serde_json",
  "similar",
  "syntect",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tracing",

@@ -30,3 +30,6 @@ syntect = { workspace = true }
 similar = { workspace = true }
 regex = { workspace = true }
 indicatif = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

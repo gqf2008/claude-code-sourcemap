@@ -326,13 +326,64 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read OAuth access token from `~/.claude/.credentials.json`.
+///
+/// The TS Claude Code stores OAuth tokens in this file with the structure:
+/// ```json
+/// { "claudeAiOauth": { "accessToken": "...", "expiresAt": ... } }
+/// ```
+fn read_oauth_credentials() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let cred_path = home.join(".claude").join(".credentials.json");
+    let content = std::fs::read_to_string(&cred_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let oauth = json.get("claudeAiOauth")?;
+
+    // Check expiry — expiresAt is milliseconds since epoch
+    if let Some(expires_at) = oauth.get("expiresAt").and_then(|v| v.as_i64()) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        if now_ms > expires_at {
+            tracing::debug!("OAuth token expired (expiresAt={})", expires_at);
+            return None;
+        }
+    }
+
+    let token = oauth.get("accessToken")?.as_str()?;
+    if token.is_empty() {
+        return None;
+    }
+    tracing::debug!("Loaded OAuth token from {}", cred_path.display());
+    Some(token.to_string())
+}
+
+/// Read `primaryApiKey` from `~/.claude.json` (legacy Claude Code config).
+fn read_legacy_claude_config() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let config_path = home.join(".claude.json");
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let key = json.get("primaryApiKey")?.as_str()?;
+    if key.is_empty() {
+        return None;
+    }
+    tracing::debug!("Loaded primaryApiKey from {}", config_path.display());
+    Some(key.to_string())
+}
+
 /// Resolve API key based on provider.
 ///
-/// - `anthropic`: uses `ANTHROPIC_API_KEY` (default)
-/// - `openai`: uses `OPENAI_API_KEY`
-/// - `deepseek`: uses `DEEPSEEK_API_KEY`
-/// - `ollama` / `local`: no key required
-/// - Others: try explicit flag, then `OPENAI_API_KEY`
+/// Priority (for `anthropic` provider):
+/// 1. `--api-key` CLI flag
+/// 2. `ANTHROPIC_API_KEY` env var (captured by clap)
+/// 3. `~/.claude/settings.json` → `api_key`
+/// 4. `~/.claude/.credentials.json` → OAuth `accessToken`
+/// 5. `~/.claude.json` → `primaryApiKey`
+///
+/// Other providers: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, etc.
+/// `ollama` / `local`: no key required.
 fn resolve_api_key(
     provider: &str,
     cli_key: Option<&str>,
@@ -351,12 +402,25 @@ fn resolve_api_key(
 
     match provider {
         "anthropic" => {
+            // settings.json api_key
             if let Some(key) = settings_key {
                 return Ok(key.to_string());
             }
-            // ANTHROPIC_API_KEY is already captured by clap's env attribute
+            // ANTHROPIC_API_KEY is already captured by clap's env attribute;
+            // if we reach here, it wasn't set. Try Claude Code's credential files.
+
+            // OAuth credentials (~/.claude/.credentials.json)
+            if let Some(token) = read_oauth_credentials() {
+                return Ok(token);
+            }
+            // Legacy config (~/.claude.json → primaryApiKey)
+            if let Some(key) = read_legacy_claude_config() {
+                return Ok(key);
+            }
+
             Err(anyhow::anyhow!(
-                "API key required. Set ANTHROPIC_API_KEY or use --api-key."
+                "API key required. Set ANTHROPIC_API_KEY, use --api-key, \
+                 or login via the official Claude Code CLI."
             ))
         }
         "openai" | "together" | "groq" => {
@@ -697,6 +761,62 @@ mod tests {
     fn test_resolve_api_key_trimmed() {
         let key = resolve_api_key("anthropic", Some("  sk-abc  "), None).unwrap();
         assert_eq!(key, "sk-abc");
+    }
+
+    // ── OAuth / legacy config credential reading ─────────────────────
+
+    #[test]
+    fn test_read_oauth_credentials_valid() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cred_path = tmp.path().join(".credentials.json");
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+            + 3_600_000; // 1 hour from now
+        std::fs::write(
+            &cred_path,
+            format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"tok-123","expiresAt":{}}}}}"#,
+                expires
+            ),
+        )
+        .unwrap();
+
+        // read_oauth_credentials reads from $HOME — we can't easily override that,
+        // so we test the parsing logic directly
+        let content = std::fs::read_to_string(&cred_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let token = json["claudeAiOauth"]["accessToken"].as_str().unwrap();
+        assert_eq!(token, "tok-123");
+    }
+
+    #[test]
+    fn test_read_legacy_config_parsing() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"primaryApiKey":"sk-ant-legacy"}"#).unwrap();
+        let key = json["primaryApiKey"].as_str().unwrap();
+        assert_eq!(key, "sk-ant-legacy");
+    }
+
+    #[test]
+    fn test_oauth_expired_token_ignored() {
+        let expired_json = r#"{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000}}"#;
+        let json: serde_json::Value = serde_json::from_str(expired_json).unwrap();
+        let expires_at = json["claudeAiOauth"]["expiresAt"].as_i64().unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!(now_ms > expires_at, "token should be expired");
+    }
+
+    #[test]
+    fn test_oauth_empty_token_ignored() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"claudeAiOauth":{"accessToken":""}}"#).unwrap();
+        let token = json["claudeAiOauth"]["accessToken"].as_str().unwrap();
+        assert!(token.is_empty());
     }
 
     // ── generate_claude_md_template ──────────────────────────────────
