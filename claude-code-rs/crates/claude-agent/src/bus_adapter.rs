@@ -153,9 +153,18 @@ impl AgentCoreAdapter {
                     self.handle_compact(instructions).await;
                 }
                 AgentRequest::SetModel { model } => {
-                    let mut state = self.engine.state().write().await;
-                    state.model = model.clone();
-                    info!("Model changed to: {}", model);
+                    let resolved = claude_core::model::resolve_model_string(&model);
+                    let display_name = claude_core::model::display_name_any(&resolved);
+                    {
+                        let mut state = self.engine.state().write().await;
+                        state.model = resolved.clone();
+                    }
+                    info!("Model changed to: {} ({})", display_name, resolved);
+                    let bus = self.bus.lock().await;
+                    bus.notify(AgentNotification::ModelChanged {
+                        model: resolved,
+                        display_name,
+                    });
                 }
                 AgentRequest::Shutdown => {
                     info!("Shutdown requested");
@@ -202,6 +211,9 @@ impl AgentCoreAdapter {
                 }
                 AgentRequest::GetStatus => {
                     self.handle_get_status().await;
+                }
+                AgentRequest::ClearHistory => {
+                    self.handle_clear_history().await;
                 }
             }
         }
@@ -458,6 +470,13 @@ impl AgentCoreAdapter {
             total_output_tokens,
             context_usage_pct,
         });
+    }
+
+    /// Clear conversation history.
+    async fn handle_clear_history(&self) {
+        self.engine.clear_history().await;
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::HistoryCleared);
     }
 }
 

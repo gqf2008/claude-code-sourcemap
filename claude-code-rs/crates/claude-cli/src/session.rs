@@ -150,6 +150,59 @@ impl<'a> SessionManager<'a> {
     }
 }
 
+// ── Permission handler ──────────────────────────────────────────────────────
+
+use claude_bus::events::{PermissionRequest, PermissionResponse, RiskLevel};
+
+/// Spawn a background task that handles permission requests via the bus.
+///
+/// Receives `PermissionRequest` from the Agent Core, shows a terminal dialog
+/// using `cliclack`, and sends back `PermissionResponse`.
+///
+/// This should be spawned as a tokio task alongside the REPL:
+/// ```ignore
+/// let perm_handle = tokio::spawn(spawn_permission_handler(client));
+/// ```
+#[allow(dead_code)]
+pub async fn spawn_permission_handler(mut client: ClientHandle) {
+    while let Some(req) = client.recv_permission_request().await {
+        let (granted, remember) = handle_permission_request(&req);
+
+        let resp = PermissionResponse {
+            request_id: req.request_id,
+            granted,
+            remember,
+        };
+
+        if client.send_permission_response(resp).is_err() {
+            break;
+        }
+    }
+}
+
+/// Present a permission dialog and return (granted, remember).
+fn handle_permission_request(req: &PermissionRequest) -> (bool, bool) {
+    let risk = match req.risk_level {
+        RiskLevel::Low => "Low",
+        RiskLevel::Medium => "Medium",
+        RiskLevel::High => "High",
+    };
+
+    match crate::ui::permission_confirm(&req.tool_name, &req.description, risk) {
+        Ok(choice) => match choice {
+            crate::ui::PermissionChoice::AllowOnce => (true, false),
+            crate::ui::PermissionChoice::AllowSession => (true, true),
+            crate::ui::PermissionChoice::AllowAlways => (true, true),
+            crate::ui::PermissionChoice::Deny => (false, false),
+        },
+        Err(_) => {
+            // TTY error (e.g., piped stdin) — deny by default
+            eprintln!("\x1b[33m⚠ Cannot show permission dialog — denying\x1b[0m");
+            (false, false)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +303,29 @@ mod tests {
         let mgr = SessionManager::new(&mut client);
         let result = mgr.abort();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn permission_request_fields() {
+        let req = PermissionRequest {
+            request_id: "perm-1".into(),
+            tool_name: "Bash".into(),
+            input: serde_json::json!({"command": "rm -rf /"}),
+            risk_level: RiskLevel::High,
+            description: "Delete everything".into(),
+        };
+        assert_eq!(req.tool_name, "Bash");
+        assert_eq!(req.risk_level, RiskLevel::High);
+    }
+
+    #[test]
+    fn permission_response_granted() {
+        let resp = PermissionResponse {
+            request_id: "perm-1".into(),
+            granted: true,
+            remember: true,
+        };
+        assert!(resp.granted);
+        assert!(resp.remember);
     }
 }

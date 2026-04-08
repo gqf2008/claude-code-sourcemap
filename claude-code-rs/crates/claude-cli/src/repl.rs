@@ -278,24 +278,54 @@ pub async fn run(
                             CommandResult::Print(text) => println!("{}", text),
                             CommandResult::Exit => { println!("Goodbye!"); break; }
                             CommandResult::ClearHistory => {
-                                engine.clear_history().await;
-                                println!("Conversation history cleared.");
+                                if let Some(ref mut c) = client {
+                                    let _ = c.send_request(AgentRequest::ClearHistory);
+                                    // Wait for HistoryCleared notification
+                                    while let Some(n) = c.recv_notification().await {
+                                        if matches!(n, claude_bus::events::AgentNotification::HistoryCleared) {
+                                            println!("Conversation history cleared.");
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    engine.clear_history().await;
+                                    println!("Conversation history cleared.");
+                                }
                             }
                             CommandResult::SetModel(input) => {
-                                let resolved = claude_core::model::resolve_model_string(&input);
-                                let state = engine.state();
-                                let mut s = state.write().await;
-                                s.model = resolved.clone();
-                                let display = claude_core::model::display_name_any(&resolved);
-                                println!("Model set to: {} ({})", display, resolved);
+                                if let Some(ref mut c) = client {
+                                    let _ = c.send_request(AgentRequest::SetModel { model: input.clone() });
+                                    // Wait for ModelChanged notification
+                                    while let Some(n) = c.recv_notification().await {
+                                        if let claude_bus::events::AgentNotification::ModelChanged { model, display_name } = n {
+                                            println!("Model set to: {} ({})", display_name, model);
+                                            // Persist to user settings
+                                            if let Err(e) = claude_core::config::Settings::update_field(
+                                                claude_core::config::SettingsSource::User,
+                                                &cwd,
+                                                |s| { s.model = Some(model.clone()); },
+                                            ) {
+                                                eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    let resolved = claude_core::model::resolve_model_string(&input);
+                                    let state = engine.state();
+                                    let mut s = state.write().await;
+                                    s.model = resolved.clone();
+                                    let display = claude_core::model::display_name_any(&resolved);
+                                    println!("Model set to: {} ({})", display, resolved);
 
-                                // Persist to user settings
-                                if let Err(e) = claude_core::config::Settings::update_field(
-                                    claude_core::config::SettingsSource::User,
-                                    &cwd,
-                                    |s| { s.model = Some(resolved.clone()); },
-                                ) {
-                                    eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                    // Persist to user settings
+                                    if let Err(e) = claude_core::config::Settings::update_field(
+                                        claude_core::config::SettingsSource::User,
+                                        &cwd,
+                                        |s| { s.model = Some(resolved.clone()); },
+                                    ) {
+                                        eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                    }
                                 }
                             }
                             CommandResult::ShowCost => {
@@ -309,14 +339,33 @@ pub async fn run(
                                 println!("{}", summary);
                             }
                             CommandResult::Compact { instructions } => {
-                                println!("\x1b[33mCompacting conversation…\x1b[0m");
-                                match engine.compact("manual", instructions.as_deref()).await {
-                                    Ok(summary) => {
-                                        println!("\x1b[32m✓ Compacted.\x1b[0m");
-                                        let preview: String = summary.lines().take(5).collect::<Vec<_>>().join("\n");
-                                        println!("\x1b[2m{}\x1b[0m", preview);
+                                if let Some(ref mut c) = client {
+                                    println!("\x1b[33mCompacting conversation…\x1b[0m");
+                                    let _ = c.send_request(AgentRequest::Compact { instructions });
+                                    // Wait for CompactComplete or Error notification
+                                    while let Some(n) = c.recv_notification().await {
+                                        match n {
+                                            claude_bus::events::AgentNotification::CompactComplete { summary_len } => {
+                                                println!("\x1b[32m✓ Compacted ({} chars).\x1b[0m", summary_len);
+                                                break;
+                                            }
+                                            claude_bus::events::AgentNotification::Error { message, .. } => {
+                                                eprintln!("\x1b[31mCompact failed: {}\x1b[0m", message);
+                                                break;
+                                            }
+                                            _ => {}
+                                        }
                                     }
-                                    Err(e) => eprintln!("\x1b[31mCompact failed: {}\x1b[0m", e),
+                                } else {
+                                    println!("\x1b[33mCompacting conversation…\x1b[0m");
+                                    match engine.compact("manual", instructions.as_deref()).await {
+                                        Ok(summary) => {
+                                            println!("\x1b[32m✓ Compacted.\x1b[0m");
+                                            let preview: String = summary.lines().take(5).collect::<Vec<_>>().join("\n");
+                                            println!("\x1b[2m{}\x1b[0m", preview);
+                                        }
+                                        Err(e) => eprintln!("\x1b[31mCompact failed: {}\x1b[0m", e),
+                                    }
                                 }
                             }
                             CommandResult::Memory { sub } => {
@@ -329,7 +378,23 @@ pub async fn run(
                                 handle_diff_command(&cwd);
                             }
                             CommandResult::Status => {
-                                handle_status_command(&engine, &cwd).await;
+                                if let Some(ref mut c) = client {
+                                    let _ = c.send_request(AgentRequest::GetStatus);
+                                    while let Some(n) = c.recv_notification().await {
+                                        if let claude_bus::events::AgentNotification::SessionStatus {
+                                            model, total_turns, total_input_tokens,
+                                            total_output_tokens, context_usage_pct, ..
+                                        } = n {
+                                            println!("Model: {}", model);
+                                            println!("Turns: {}", total_turns);
+                                            println!("Tokens: {} in / {} out", total_input_tokens, total_output_tokens);
+                                            println!("Context: {:.0}%", context_usage_pct);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    handle_status_command(&engine, &cwd).await;
+                                }
                             }
                             CommandResult::Permissions => {
                                 let s = engine.state().read().await;

@@ -495,6 +495,12 @@ impl OutputRenderer {
                     model, total_turns, context_usage_pct
                 );
             }
+            AgentNotification::HistoryCleared => {
+                println!("Conversation history cleared.");
+            }
+            AgentNotification::ModelChanged { model, display_name } => {
+                println!("Model set to: {} ({})", display_name, model);
+            }
         }
         false
     }

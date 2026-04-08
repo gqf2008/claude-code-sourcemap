@@ -89,6 +89,15 @@ pub enum AgentNotification {
         context_usage_pct: f64,
     },
 
+    /// Conversation history was cleared.
+    HistoryCleared,
+
+    /// Model was changed (response to SetModel request).
+    ModelChanged {
+        model: String,
+        display_name: String,
+    },
+
     // ── Context management ──
 
     /// Context usage is getting high.
@@ -216,6 +225,9 @@ pub enum AgentRequest {
 
     /// Query session status (response via SessionStatus notification).
     GetStatus,
+
+    /// Clear the conversation history.
+    ClearHistory,
 }
 
 // ── Permission request/response (bidirectional) ──────────────────────────────
@@ -387,6 +399,11 @@ mod tests {
                     connected: true,
                 }],
             },
+            AgentNotification::HistoryCleared,
+            AgentNotification::ModelChanged {
+                model: "claude-sonnet-4-20250514".into(),
+                display_name: "Claude Sonnet 4".into(),
+            },
         ];
 
         for event in &events {
@@ -429,6 +446,7 @@ mod tests {
             AgentRequest::McpDisconnect { name: "fs".into() },
             AgentRequest::McpListServers,
             AgentRequest::Shutdown,
+            AgentRequest::ClearHistory,
         ];
 
         for req in &requests {
