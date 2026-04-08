@@ -291,7 +291,10 @@ fn parse_skill_file(path: &Path, name: &str) -> Option<SkillEntry> {
         .unwrap_or_default();
     let argument_names = fm_str
         .and_then(|f| extract_list(f, "arguments"))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !s.is_empty() && !s.chars().all(|c| c.is_ascii_digit()))
+        .collect();
     let argument_hint = fm_str.and_then(|f| extract_string(f, "argument-hint"));
     let version = fm_str.and_then(|f| extract_string(f, "version"));
     let context = fm_str.and_then(|f| extract_string(f, "context"));
@@ -689,11 +692,8 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
 
     // 1. Named arguments: $name (no braces, word-boundary aware like TS)
     //    Also support ${name} as an extension.
-    //    Filter out purely numeric names (TS parseArgumentNames behavior).
+    //    Numeric names are already filtered out at load time (parse_skill_file).
     for (i, arg_name) in skill.argument_names.iter().enumerate() {
-        if arg_name.chars().all(|c| c.is_ascii_digit()) {
-            continue; // skip numeric names — they conflict with $0/$1 positional
-        }
         let value = parsed.get(i).map(|s| s.as_str()).unwrap_or("");
 
         // $name — must not be followed by word chars or `[`
@@ -1372,12 +1372,23 @@ Analyze $ARGUMENTS in ${file} for ${language}.
 
     #[test]
     fn substitute_numeric_arg_name_skipped() {
-        // Numeric arg names should be filtered (TS parseArgumentNames behavior)
-        // so $0 is treated as positional, not named
-        let skill = test_skill("$0 and $1", &["0", "file"]);
+        // Numeric arg names are filtered at load time (TS parseArgumentNames behavior)
+        // so $0 is treated as positional, not named.
+        // With arguments: ["0", "file"], after filtering → ["file"]
+        // "file" gets i=0 → parsedArgs[0] (matching TS behavior)
+        let skill = test_skill("$file and $0", &["file"]);
         let result = substitute_arguments(&skill, "a b");
-        // "0" is skipped, "file" maps to index 1 but value is parsed[1]="b"
-        // $0 handled by positional → "a", $1 handled by positional → "b"
-        assert_eq!(result, "a and b");
+        // $file → parsedArgs[0] = "a" (named), $0 → parsedArgs[0] = "a" (positional)
+        assert_eq!(result, "a and a");
+    }
+
+    #[test]
+    fn parse_skill_filters_numeric_arg_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("numeric-args.md");
+        std::fs::write(&path, "---\narguments: [0, file, 1, language]\n---\nPrompt").unwrap();
+
+        let skill = parse_skill_file(&path, "numeric-args").unwrap();
+        assert_eq!(skill.argument_names, vec!["file", "language"]);
     }
 }
