@@ -128,6 +128,19 @@ impl Hinter for CommandCompleter {
 }
 
 impl Highlighter for CommandCompleter {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> std::borrow::Cow<'b, str> {
+        match prompt {
+            "> " => std::borrow::Cow::Borrowed("\x1b[1;32m> \x1b[0m"),
+            "` " => std::borrow::Cow::Borrowed("\x1b[2m` \x1b[0m"),
+            ". " => std::borrow::Cow::Borrowed("\x1b[2m. \x1b[0m"),
+            _ => std::borrow::Cow::Borrowed(prompt),
+        }
+    }
+
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
         // Show hints in dim grey
         std::borrow::Cow::Owned(format!("\x1b[2m{}\x1b[0m", hint))
@@ -207,7 +220,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
     let mut turns_since_save: u32 = 0;
 
     loop {
-        let readline = rl.readline("\x1b[1;32m> \x1b[0m");
+        let readline = rl.readline("> ");
         match readline {
             Ok(line) => {
                 let trimmed = line.trim();
@@ -401,7 +414,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 if input_buf.trim_start().starts_with("```") {
                     // Read until we find a line that is just ```
                     input_buf.push('\n');
-                    while let Ok(cont) = rl.readline("\x1b[2m` \x1b[0m") {
+                    while let Ok(cont) = rl.readline("` ") {
                         if cont.trim() == "```" {
                             break;
                         }
@@ -413,7 +426,7 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                     while input_buf.ends_with('\\') {
                         input_buf.pop(); // remove trailing backslash
                         input_buf.push('\n');
-                        match rl.readline("\x1b[2m. \x1b[0m") {
+                        match rl.readline(". ") {
                             Ok(cont) => input_buf.push_str(&cont),
                             _ => break,
                         }
