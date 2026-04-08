@@ -182,9 +182,9 @@ mod tests {
         let old = "line1\nline2\nline3";
         let new = "line1\nmodified\nline3\nline4";
         let (added, removed) = count_line_changes(old, new);
-        assert!(added >= 1);
-        // removed is usize, always >= 0; just verify we got a value
-        let _ = removed;
+        // "line2" removed, "modified" + "line4" added
+        assert_eq!(added, 2);
+        assert_eq!(removed, 1);
     }
 
     #[test]

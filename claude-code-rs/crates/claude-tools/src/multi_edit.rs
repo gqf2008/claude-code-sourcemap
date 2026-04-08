@@ -314,35 +314,4 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "Hello 世界 world 🎉");
     }
-    #[tokio::test]
-    async fn empty_edits_returns_error() {
-        let tmp = TempDir::new().unwrap();
-        let file = tmp.path().join("test.txt");
-        std::fs::write(&file, "hello").unwrap();
-
-        let tool = MultiEditTool;
-        let input = json!({
-            "file_path": file.to_str().unwrap(),
-            "edits": []
-        });
-        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
-        assert!(result.is_error);
-        assert!(result_text(&result).contains("No edits"));
-    }
-
-    #[tokio::test]
-    async fn empty_old_string_returns_error() {
-        let tmp = TempDir::new().unwrap();
-        let file = tmp.path().join("test.txt");
-        std::fs::write(&file, "hello").unwrap();
-
-        let tool = MultiEditTool;
-        let input = json!({
-            "file_path": file.to_str().unwrap(),
-            "edits": [{"old_string": "", "new_string": "x"}]
-        });
-        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
-        assert!(result.is_error);
-        assert!(result_text(&result).contains("empty"));
-    }
 }

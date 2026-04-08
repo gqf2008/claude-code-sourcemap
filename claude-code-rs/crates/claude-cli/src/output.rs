@@ -759,10 +759,10 @@ mod tests {
 
     #[test]
     fn test_parse_edit_stats_malformed_no_numbers() {
-        // Missing numbers inside parens
-        assert!(parse_edit_stats("Edited file.txt (+ - lines)").is_none()
-            || parse_edit_stats("Edited file.txt (+ - lines)").is_some());
-        // Just checks it doesn't panic
+        // Missing numbers — the parser doesn't validate numeric format,
+        // it just extracts the +/- tokens. So this returns Some (not a panic).
+        let result = parse_edit_stats("Edited file.txt (+ - lines)");
+        assert!(result.is_some(), "parser accepts malformed stats without panicking");
     }
 
     #[test]

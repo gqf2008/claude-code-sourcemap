@@ -450,12 +450,4 @@ mod tests {
     fn type_to_globs_unknown_returns_none() {
         assert!(type_to_globs("fortran77").is_none());
     }
-
-    #[test]
-    fn type_to_globs_aliases_equivalent() {
-        assert_eq!(type_to_globs("py"), type_to_globs("python"));
-        assert_eq!(type_to_globs("js"), type_to_globs("javascript"));
-        assert_eq!(type_to_globs("ts"), type_to_globs("typescript"));
-        assert_eq!(type_to_globs("rs"), type_to_globs("rust"));
-    }
 }

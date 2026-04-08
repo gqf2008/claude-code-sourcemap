@@ -617,12 +617,10 @@ mod tests {
     }
 
     #[test]
-    fn test_dangerous_git_force_with_lease_not_blocked() {
-        // --force-with-lease is safer and should NOT be blocked by the force push pattern
-        // (the pattern is "git push --force" which is a substring of "git push --force-with-lease")
-        // NOTE: current impl blocks this too since it does substring match
+    fn test_dangerous_git_force_with_lease_blocked_known_limitation() {
+        // --force-with-lease is safer, but current impl uses substring match on
+        // "git push --force" which also catches --force-with-lease. Known limitation.
         let result = check_dangerous("git push --force-with-lease");
-        // This is a known limitation — substring match catches --force-with-lease
         assert!(result.is_some(), "current impl blocks --force-with-lease (known limitation)");
     }
 

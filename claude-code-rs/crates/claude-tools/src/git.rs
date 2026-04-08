@@ -320,28 +320,27 @@ mod tests {
     }
 
     // ── git safety edge cases ───────────────────────────────────────────
+    // NOTE: "push" and "reset" are NOT in the allowed subcommands list,
+    // so they are blocked at the allowlist level before force/hard checks run.
 
     #[tokio::test]
-    async fn git_rejects_force_push() {
-        // "push" is NOT in the allowed subcommands list, so it's rejected at that level
+    async fn git_push_not_in_allowlist() {
         let input = json!({"subcommand": "push", "args": ["--force", "origin", "main"]});
         let result = GitTool.call(input, &test_context()).await.unwrap();
         assert!(result.is_error);
-        assert!(get_text(&result).contains("not allowed"), "push should be blocked");
+        assert!(get_text(&result).contains("not allowed"), "push should be blocked by allowlist");
     }
 
     #[tokio::test]
-    async fn git_rejects_force_push_short_flag() {
+    async fn git_push_short_force_also_blocked() {
         let input = json!({"subcommand": "push", "args": ["-f", "origin", "main"]});
         let result = GitTool.call(input, &test_context()).await.unwrap();
         assert!(result.is_error);
-        // Also blocked by subcommand not in allowlist
         assert!(get_text(&result).contains("not allowed"));
     }
 
     #[tokio::test]
-    async fn git_rejects_hard_reset() {
-        // "reset" is NOT in the allowed subcommands list either
+    async fn git_reset_not_in_allowlist() {
         let input = json!({"subcommand": "reset", "args": ["--hard", "HEAD~3"]});
         let result = GitTool.call(input, &test_context()).await.unwrap();
         assert!(result.is_error);
@@ -349,8 +348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_allows_soft_reset() {
-        // "reset" is not in the allowed list, so even --soft is blocked at subcommand level
+    async fn git_reset_soft_also_not_in_allowlist() {
         let input = json!({"subcommand": "reset", "args": ["--soft", "HEAD~1"]});
         let result = GitTool.call(input, &test_context()).await.unwrap();
         assert!(result.is_error);
@@ -358,7 +356,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_rejects_push_subcommand_not_in_allowlist() {
+    async fn git_gc_not_in_allowlist() {
         let input = json!({"subcommand": "gc", "args": []});
         let result = GitTool.call(input, &test_context()).await.unwrap();
         assert!(result.is_error);
