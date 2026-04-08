@@ -45,8 +45,8 @@ impl Tool for SkillTool {
 
         let args = input["args"].as_str().unwrap_or("");
 
-        // Load skills from cwd
-        let skills = claude_core::skills::load_skills(&context.cwd);
+        // Load skills from cwd (cached — no repeated disk I/O)
+        let skills = claude_core::skills::get_skills(&context.cwd);
 
         let skill = skills.iter().find(|s| s.name == skill_name);
         let skill = match skill {

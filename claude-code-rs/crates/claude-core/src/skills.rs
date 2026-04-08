@@ -12,11 +12,13 @@
 //! vulnerabilities and suggest fixes.
 //! ```
 //!
-//! Skills are loaded from (in order, duplicates ignored):
-//!   1. `$CWD/.claude/skills/`
-//!   2. `~/.claude/skills/`
+//! Skills are loaded from `.claude/skills/` at every directory level from
+//! `$CWD` up to `$HOME` (matching the TS `getProjectDirsUpToHome` behavior).
+//! Results are memoized per `cwd`; call [`clear_skill_cache`] to refresh.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::debug;
 
 #[derive(Debug, Clone)]
@@ -33,16 +35,72 @@ pub struct SkillEntry {
     pub model: Option<String>,
 }
 
+// ── Cache ────────────────────────────────────────────────────────────────────
+
+fn cache() -> &'static Mutex<HashMap<PathBuf, Vec<SkillEntry>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<SkillEntry>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Get skills with memoization (cached by canonical `cwd`).
+/// First call per `cwd` scans disk; subsequent calls return the cached list.
+/// Use [`clear_skill_cache`] (e.g. on `/reload-context`) to force a rescan.
+pub fn get_skills(cwd: &Path) -> Vec<SkillEntry> {
+    let key = cwd.to_path_buf();
+    {
+        let map = cache().lock().unwrap();
+        if let Some(cached) = map.get(&key) {
+            return cached.clone();
+        }
+    }
+    // Release lock during I/O
+    let skills = load_skills(cwd);
+    let mut map = cache().lock().unwrap();
+    map.entry(key).or_insert(skills).clone()
+}
+
+/// Invalidate the skill cache so the next [`get_skills`] call rescans disk.
+pub fn clear_skill_cache() {
+    cache().lock().unwrap().clear();
+}
+
+// ── Directory discovery ──────────────────────────────────────────────────────
+
+/// Collect `.claude/skills/` directories from `cwd` up to `$HOME`.
+///
+/// Matches the TS `getProjectDirsUpToHome('skills', cwd)` + user dir behavior:
+/// project-local skills shadow parent/user skills via the name-dedup in
+/// [`load_skills_from_dirs`].
 fn skill_dirs(cwd: &Path) -> Vec<PathBuf> {
+    let home = dirs::home_dir();
     let mut dirs = Vec::new();
-    dirs.push(cwd.join(".claude").join("skills"));
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".claude").join("skills"));
+    let mut current = Some(cwd.to_path_buf());
+
+    while let Some(dir) = current {
+        dirs.push(dir.join(".claude").join("skills"));
+        // Stop after including $HOME
+        if home.as_ref() == Some(&dir) {
+            break;
+        }
+        let parent = dir.parent().map(|p| p.to_path_buf());
+        // Stop at filesystem root (parent == self)
+        if parent.as_ref() == Some(&dir) || parent.is_none() {
+            break;
+        }
+        current = parent;
+    }
+
+    // If cwd is not under $HOME, still include the user skills dir
+    if let Some(ref home) = home {
+        let home_skills = home.join(".claude").join("skills");
+        if !dirs.contains(&home_skills) {
+            dirs.push(home_skills);
+        }
     }
     dirs
 }
 
-/// Load all skills from standard locations; project skills shadow user skills.
+/// Load all skills from standard locations (uncached); project skills shadow user skills.
 pub fn load_skills(cwd: &Path) -> Vec<SkillEntry> {
     load_skills_from_dirs(&skill_dirs(cwd))
 }
@@ -380,5 +438,73 @@ mod tests {
 
         let skills = load_skills_from_dirs(&[skills_dir]);
         assert!(skills.is_empty(), "dir without SKILL.md should be ignored");
+    }
+
+    // ── Directory walking tests ──────────────────────────────────────────
+
+    #[test]
+    fn skill_dirs_walks_parents_up_to_home() {
+        // Create a nested project under a temp "home" dir
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("projects").join("my-app");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let dirs = skill_dirs(&project);
+        // Should include: project/.claude/skills, projects/.claude/skills, home/.claude/skills
+        assert!(dirs.len() >= 2, "Should walk at least 2 levels, got {}", dirs.len());
+        assert_eq!(dirs[0], project.join(".claude").join("skills"));
+    }
+
+    #[test]
+    fn skill_dirs_dedup_parent_skills_by_name() {
+        let root = tempfile::tempdir().unwrap();
+        let parent_skills = root.path().join(".claude").join("skills");
+        let child = root.path().join("sub");
+        let child_skills = child.join(".claude").join("skills");
+        std::fs::create_dir_all(&parent_skills).unwrap();
+        std::fs::create_dir_all(&child_skills).unwrap();
+
+        // Same skill name in both parent and child
+        std::fs::write(parent_skills.join("review.md"), "Parent review").unwrap();
+        std::fs::write(child_skills.join("review.md"), "Child review").unwrap();
+        // Unique to parent
+        std::fs::write(parent_skills.join("deploy.md"), "Deploy").unwrap();
+
+        let skills = load_skills_from_dirs(&[child_skills, parent_skills]);
+        // "review" should only appear once (child wins), "deploy" from parent
+        assert_eq!(skills.len(), 2);
+        let review = skills.iter().find(|s| s.name == "review").unwrap();
+        assert_eq!(review.system_prompt, "Child review", "child should shadow parent");
+    }
+
+    // ── Cache tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn get_skills_caches_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("cached.md"), "Prompt").unwrap();
+
+        // Clear to avoid pollution from other parallel tests
+        clear_skill_cache();
+
+        let first = get_skills(dir.path());
+        let first_count = first.len();
+        assert!(first.iter().any(|s| s.name == "cached"), "should contain our skill");
+
+        // Remove the file — cached result should still return same count
+        std::fs::remove_file(skills_dir.join("cached.md")).unwrap();
+        let second = get_skills(dir.path());
+        assert_eq!(second.len(), first_count, "should return cached result");
+
+        // After clearing cache, rescan should find one fewer
+        clear_skill_cache();
+        let third = get_skills(dir.path());
+        assert_eq!(third.len(), first_count - 1, "after cache clear, should rescan disk");
+        assert!(!third.iter().any(|s| s.name == "cached"), "removed skill should be gone");
+
+        // Cleanup to avoid polluting other tests
+        clear_skill_cache();
     }
 }

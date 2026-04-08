@@ -1,6 +1,5 @@
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
-use claude_core::skills::SkillEntry;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -192,7 +191,7 @@ impl ConfigMtimes {
     }
 }
 
-pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::PathBuf) -> anyhow::Result<()> {
+pub async fn run(engine: QueryEngine, cwd: std::path::PathBuf) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
     let display = claude_core::model::display_name_any(&current_model);
     println!("\x1b[1;34m╭─────────────────────────────────╮\x1b[0m");
@@ -202,8 +201,10 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
     println!("\x1b[1;34m│  Type /help for commands        │\x1b[0m");
     println!("\x1b[1;34m╰─────────────────────────────────╯\x1b[0m\n");
 
-    if !skills.is_empty() {
-        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    // Lazy-loaded and cached — first call scans disk, subsequent calls O(1)
+    let startup_skills = claude_core::skills::get_skills(&cwd);
+    if !startup_skills.is_empty() {
+        let names: Vec<&str> = startup_skills.iter().map(|s| s.name.as_str()).collect();
         println!("\x1b[33mSkills loaded: {}\x1b[0m\n", names.join(", "));
     }
 
@@ -233,6 +234,8 @@ pub async fn run(engine: QueryEngine, skills: Vec<SkillEntry>, cwd: std::path::P
                 // Parse slash commands BEFORE multiline expansion
                 if trimmed.starts_with('/') {
                     let _ = rl.add_history_entry(trimmed);
+                    // Re-fetch skills each time (cached; refreshed by /reload-context)
+                    let skills = claude_core::skills::get_skills(&cwd);
                     if let Some(cmd) = SlashCommand::parse(trimmed, &skills) {
                         let loader = PluginLoader::discover(&cwd);
                         // Resolve Unknown commands: check if they match a plugin command

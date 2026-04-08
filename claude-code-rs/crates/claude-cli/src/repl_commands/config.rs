@@ -90,7 +90,7 @@ pub(crate) async fn handle_context(engine: &QueryEngine, cwd: &std::path::Path) 
 
     // 6. Skills
     println!("\n\x1b[1;33m── Skills ──\x1b[0m");
-    let skills = claude_core::skills::load_skills(cwd);
+    let skills = claude_core::skills::get_skills(cwd);
     if skills.is_empty() {
         println!("  \x1b[2m(no skills)\x1b[0m");
     } else {
@@ -240,8 +240,9 @@ pub(crate) async fn handle_reload_context(engine: &QueryEngine, cwd: &std::path:
     let mem_files = claude_core::memory::list_memory_files(cwd);
     println!("  ✓ Memory: {} file(s)", mem_files.len());
 
-    // 4. Reload skills
-    let skills = claude_core::skills::load_skills(cwd);
+    // 4. Reload skills (clear cache so get_skills rescans disk)
+    claude_core::skills::clear_skill_cache();
+    let skills = claude_core::skills::get_skills(cwd);
     println!("  ✓ Skills: {} loaded", skills.len());
 
     // 5. Reload hooks from settings

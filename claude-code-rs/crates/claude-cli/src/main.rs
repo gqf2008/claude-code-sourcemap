@@ -8,7 +8,6 @@ mod diff_display;
 
 use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
-use claude_core::skills::load_skills;
 
 #[derive(Parser, Debug)]
 #[command(name = "claude", version, about = "Claude Code — AI coding assistant (Rust)")]
@@ -168,7 +167,6 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let permission_mode = config::parse_permission_mode(&cli.permission_mode);
-    let skills = load_skills(&cwd);
 
     // ── Discover MCP server configs ────────────────────────────────────────
     let mcp_instructions = discover_mcp_instructions(&cwd);
@@ -326,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("No input provided. Use `claude \"prompt\"` or pipe via stdin.");
         }
     } else {
-        repl::run(engine, skills, cwd).await?;
+        repl::run(engine, cwd).await?;
     }
 
     Ok(())
