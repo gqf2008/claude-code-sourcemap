@@ -340,43 +340,48 @@ impl Tool for SendMessageTool {
     fn is_read_only(&self) -> bool { false }
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
-        let agent_id = input["to"]
+        let to = input["to"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'to' field"))?;
         let message = input["message"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'message' field"))?;
 
-        // Check the agent exists and is running
-        let task = self.tracker.get(agent_id).await;
-        match task {
-            None => Ok(ToolResult::error(format!("No agent found with id '{}'", agent_id))),
-            Some(t) if !matches!(t.status, AgentStatus::Running) => {
-                Ok(ToolResult::error(format!(
-                    "Agent '{}' is not running (status: {})",
-                    agent_id, t.status
-                )))
+        // Resolve `to` — try agent_id first, then fall back to name-based lookup
+        let agent_id = if self.tracker.get(to).await.is_some() {
+            to.to_string()
+        } else if let Some(id) = self.tracker.lookup_by_name(to).await {
+            id
+        } else {
+            return Ok(ToolResult::error(format!("No agent found with id or name '{}'", to)));
+        };
+
+        // Check the agent is running
+        let task = self.tracker.get(&agent_id).await.unwrap();
+        if !matches!(task.status, AgentStatus::Running) {
+            return Ok(ToolResult::error(format!(
+                "Agent '{}' is not running (status: {})",
+                agent_id, task.status
+            )));
+        }
+
+        let channels = self.agent_channels.read().await;
+        if let Some(tx) = channels.get(&agent_id) {
+            match tx.send(message.to_string()) {
+                Ok(_) => Ok(ToolResult::text(format!(
+                    "Message sent to agent '{}'",
+                    agent_id
+                ))),
+                Err(_) => Ok(ToolResult::error(format!(
+                    "Failed to send message — agent '{}' channel closed",
+                    agent_id
+                ))),
             }
-            Some(_) => {
-                let channels = self.agent_channels.read().await;
-                if let Some(tx) = channels.get(agent_id) {
-                    match tx.send(message.to_string()) {
-                        Ok(_) => Ok(ToolResult::text(format!(
-                            "Message sent to agent '{}'",
-                            agent_id
-                        ))),
-                        Err(_) => Ok(ToolResult::error(format!(
-                            "Failed to send message — agent '{}' channel closed",
-                            agent_id
-                        ))),
-                    }
-                } else {
-                    Ok(ToolResult::error(format!(
-                        "No message channel for agent '{}' — agent may not support follow-ups",
-                        agent_id
-                    )))
-                }
-            }
+        } else {
+            Ok(ToolResult::error(format!(
+                "No message channel for agent '{}' — agent may not support follow-ups",
+                agent_id
+            )))
         }
     }
 }
