@@ -438,6 +438,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dirs",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "claude-tools"
 version = "0.1.0"
 dependencies = [
