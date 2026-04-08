@@ -337,8 +337,11 @@ fn parse_skill_file(path: &Path, name: &str) -> Option<SkillEntry> {
 }
 
 /// Split `---\n<yaml>\n---\n<body>` → `(Some(yaml), body)`.
+/// Handles both LF and CRLF line endings.
 fn split_frontmatter(content: &str) -> (Option<String>, String) {
-    let s = content.trim_start();
+    // Normalize CRLF → LF for reliable parsing on Windows
+    let normalized = content.replace("\r\n", "\n");
+    let s = normalized.trim_start();
     if !s.starts_with("---") {
         return (None, s.to_string());
     }
@@ -404,7 +407,7 @@ fn extract_list(yaml: &str, key: &str) -> Option<Vec<String>> {
 // ── Conditional skill activation ─────────────────────────────────────────────
 
 /// Activate conditional skills whose `paths` patterns match the given file paths.
-/// Uses gitignore-style matching (via `globset`). Activated skills are moved to
+/// Uses gitignore-style glob matching. Activated skills are moved to
 /// the dynamic skills map, making them available to the model.
 ///
 /// Returns the names of newly activated skills.
@@ -573,7 +576,6 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
     let mut disc = discovered_dirs().lock().unwrap();
 
     for fp in file_paths {
-        let norm = fp.replace('\\', "/");
         let mut current = Path::new(fp)
             .parent()
             .map(|p| p.to_path_buf())
@@ -600,7 +602,6 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
                 _ => break,
             }
         }
-        let _ = norm; // used for loop entry path
     }
 
     // Sort deepest first (more specific skills take precedence)
@@ -636,35 +637,141 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
 
 // ── Argument substitution ────────────────────────────────────────────────────
 
+/// Parse arguments using simple shell-like splitting (respects quoted strings).
+fn parse_arguments(args: &str) -> Vec<String> {
+    let args = args.trim();
+    if args.is_empty() {
+        return vec![];
+    }
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let chars = args.chars().peekable();
+
+    for ch in chars {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    result.push(std::mem::take(&mut current));
+                }
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    if !current.is_empty() {
+        result.push(current);
+    }
+    result
+}
+
 /// Substitute argument placeholders in a skill's system prompt.
+/// Matches the TS `substituteArguments()` behavior:
 ///
-/// Supports:
-/// - `$ARGUMENTS` / `${ARGUMENTS}` — replaced with the full argument string
-/// - `$1`, `$2`, ... — positional arguments (space-split)
-/// - `${name}` — named arguments from the skill's `arguments` frontmatter
-/// - `${CLAUDE_SKILL_DIR}` — path to the skill's root directory
+/// 1. `$name` — named arguments from `arguments` frontmatter (word-boundary aware)
+/// 2. `$ARGUMENTS[N]` — indexed argument access (0-based)
+/// 3. `$N` — shorthand positional (0-based, word-boundary aware)
+/// 4. `$ARGUMENTS` — replaced with the full argument string
+/// 5. If no placeholders were found and args is non-empty, appends `\n\nARGUMENTS: {args}`
+/// 6. `${CLAUDE_SKILL_DIR}` — path to the skill's root directory
 pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
     let mut result = skill.system_prompt.clone();
+    let original = result.clone();
+    let parsed = parse_arguments(args);
 
-    // $ARGUMENTS / ${ARGUMENTS}
-    result = result.replace("$ARGUMENTS", args);
-    result = result.replace("${ARGUMENTS}", args);
-
-    // Positional: $1, $2, ...
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    for (i, part) in parts.iter().enumerate() {
-        let placeholder = format!("${}", i + 1);
-        result = result.replace(&placeholder, part);
-    }
-
-    // Named arguments from frontmatter
+    // 1. Named arguments: $name (no braces, word-boundary aware like TS)
+    //    Also support ${name} as an extension
     for (i, arg_name) in skill.argument_names.iter().enumerate() {
-        let placeholder = format!("${{{}}}", arg_name);
-        let value = parts.get(i).copied().unwrap_or("");
-        result = result.replace(&placeholder, value);
+        let value = parsed.get(i).map(|s| s.as_str()).unwrap_or("");
+
+        // $name — must not be followed by word chars or `[`
+        // Process char-by-char to handle word boundaries
+        let dollar_name = format!("${}", arg_name);
+        let mut new_result = String::with_capacity(result.len());
+        let mut idx = 0;
+        let bytes = result.as_bytes();
+        while idx < bytes.len() {
+            if result[idx..].starts_with(&dollar_name) {
+                let after = idx + dollar_name.len();
+                let next_ch = result[after..].chars().next();
+                // Word boundary: next char must NOT be alphanumeric, `_`, or `[`
+                if next_ch.is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '[') {
+                    new_result.push_str(value);
+                    idx = after;
+                    continue;
+                }
+            }
+            new_result.push(bytes[idx] as char);
+            idx += 1;
+        }
+        result = new_result;
+
+        // Also handle ${name} for compatibility
+        let braced = format!("${{{}}}", arg_name);
+        result = result.replace(&braced, value);
     }
 
-    // ${CLAUDE_SKILL_DIR}
+    // 2. $ARGUMENTS[N] — indexed access (0-based)
+    let mut new_result = String::with_capacity(result.len());
+    let mut idx = 0;
+    while idx < result.len() {
+        if result[idx..].starts_with("$ARGUMENTS[") {
+            let start = idx + "$ARGUMENTS[".len();
+            if let Some(bracket_end) = result[start..].find(']') {
+                let index_str = &result[start..start + bracket_end];
+                if let Ok(index) = index_str.parse::<usize>() {
+                    new_result.push_str(parsed.get(index).map(|s| s.as_str()).unwrap_or(""));
+                    idx = start + bracket_end + 1;
+                    continue;
+                }
+            }
+        }
+        new_result.push(result.as_bytes()[idx] as char);
+        idx += 1;
+    }
+    result = new_result;
+
+    // 3. $N shorthand (0-based, word-boundary: not followed by \w)
+    //    Process from highest index to lowest to avoid $1 matching inside $10
+    let max_index = parsed.len().max(10); // handle at least $0..$9
+    for i in (0..max_index).rev() {
+        let placeholder = format!("${}", i);
+        let mut new_result = String::with_capacity(result.len());
+        let mut idx = 0;
+        while idx < result.len() {
+            if result[idx..].starts_with(&placeholder) {
+                let after = idx + placeholder.len();
+                let next_ch = result[after..].chars().next();
+                // Word boundary: next char must NOT be alphanumeric or `_`
+                if next_ch.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
+                    new_result.push_str(parsed.get(i).map(|s| s.as_str()).unwrap_or(""));
+                    idx = after;
+                    continue;
+                }
+            }
+            new_result.push(result.as_bytes()[idx] as char);
+            idx += 1;
+        }
+        result = new_result;
+    }
+
+    // 4. $ARGUMENTS — full argument string
+    result = result.replace("$ARGUMENTS", args);
+
+    // 5. If no placeholders were substituted and args is non-empty, append
+    if result == original && !args.is_empty() {
+        result.push_str(&format!("\n\nARGUMENTS: {}", args));
+    }
+
+    // 6. ${CLAUDE_SKILL_DIR}
     if let Some(ref root) = skill.skill_root {
         let root_str = root.to_string_lossy();
         result = result.replace("${CLAUDE_SKILL_DIR}", &root_str);
@@ -1077,18 +1184,18 @@ Analyze $ARGUMENTS in ${file} for ${language}.
 
     // ── Argument substitution tests ─────────────────────────────────────
 
-    #[test]
-    fn substitute_arguments_basic() {
-        let skill = SkillEntry {
+    /// Helper to create a minimal SkillEntry for argument substitution tests.
+    fn test_skill(prompt: &str, arg_names: &[&str]) -> SkillEntry {
+        SkillEntry {
             name: "test".into(),
             display_name: None,
             description: "test".into(),
-            system_prompt: "Review $ARGUMENTS carefully.".into(),
+            system_prompt: prompt.into(),
             allowed_tools: vec![],
             model: None,
             when_to_use: None,
             paths: vec![],
-            argument_names: vec![],
+            argument_names: arg_names.iter().map(|s| s.to_string()).collect(),
             argument_hint: None,
             version: None,
             context: None,
@@ -1097,61 +1204,131 @@ Analyze $ARGUMENTS in ${file} for ${language}.
             user_invocable: true,
             disable_model_invocation: false,
             skill_root: None,
-        };
+        }
+    }
 
+    #[test]
+    fn substitute_arguments_basic() {
+        let skill = test_skill("Review $ARGUMENTS carefully.", &[]);
         let result = substitute_arguments(&skill, "main.rs");
         assert_eq!(result, "Review main.rs carefully.");
     }
 
     #[test]
-    fn substitute_named_arguments() {
-        let skill = SkillEntry {
-            name: "test".into(),
-            display_name: None,
-            description: "test".into(),
-            system_prompt: "Analyze ${file} in ${language}.".into(),
-            allowed_tools: vec![],
-            model: None,
-            when_to_use: None,
-            paths: vec![],
-            argument_names: vec!["file".into(), "language".into()],
-            argument_hint: None,
-            version: None,
-            context: None,
-            agent: None,
-            effort: None,
-            user_invocable: true,
-            disable_model_invocation: false,
-            skill_root: None,
-        };
-
+    fn substitute_named_arguments_dollar_name() {
+        // TS uses $name (no braces) for named args
+        let skill = test_skill("Analyze $file in $language.", &["file", "language"]);
         let result = substitute_arguments(&skill, "main.rs Rust");
         assert_eq!(result, "Analyze main.rs in Rust.");
     }
 
     #[test]
-    fn substitute_skill_dir() {
-        let skill = SkillEntry {
-            name: "test".into(),
-            display_name: None,
-            description: "test".into(),
-            system_prompt: "Read ${CLAUDE_SKILL_DIR}/ref.md".into(),
-            allowed_tools: vec![],
-            model: None,
-            when_to_use: None,
-            paths: vec![],
-            argument_names: vec![],
-            argument_hint: None,
-            version: None,
-            context: None,
-            agent: None,
-            effort: None,
-            user_invocable: true,
-            disable_model_invocation: false,
-            skill_root: Some(PathBuf::from("/skills/my-skill")),
-        };
+    fn substitute_named_arguments_braced() {
+        // Also support ${name} as extension
+        let skill = test_skill("Analyze ${file} in ${language}.", &["file", "language"]);
+        let result = substitute_arguments(&skill, "main.rs Rust");
+        assert_eq!(result, "Analyze main.rs in Rust.");
+    }
 
+    #[test]
+    fn substitute_positional_zero_based() {
+        // TS uses $0, $1 (0-based)
+        let skill = test_skill("First: $0, second: $1.", &[]);
+        let result = substitute_arguments(&skill, "foo bar");
+        assert_eq!(result, "First: foo, second: bar.");
+    }
+
+    #[test]
+    fn substitute_positional_word_boundary() {
+        // $1 must not match inside $10
+        let skill = test_skill("$0 $1 $10", &[]);
+        let result = substitute_arguments(&skill, "a b c d e f g h i j k");
+        assert_eq!(result, "a b k");
+    }
+
+    #[test]
+    fn substitute_indexed_arguments() {
+        // $ARGUMENTS[N] syntax
+        let skill = test_skill("First: $ARGUMENTS[0], last: $ARGUMENTS[2].", &[]);
+        let result = substitute_arguments(&skill, "foo bar baz");
+        assert_eq!(result, "First: foo, last: baz.");
+    }
+
+    #[test]
+    fn substitute_no_placeholder_appends() {
+        // When no placeholders found, append ARGUMENTS: ...
+        let skill = test_skill("Just a prompt.", &[]);
+        let result = substitute_arguments(&skill, "some args");
+        assert_eq!(result, "Just a prompt.\n\nARGUMENTS: some args");
+    }
+
+    #[test]
+    fn substitute_no_placeholder_empty_args() {
+        // Empty args should NOT append
+        let skill = test_skill("Just a prompt.", &[]);
+        let result = substitute_arguments(&skill, "");
+        assert_eq!(result, "Just a prompt.");
+    }
+
+    #[test]
+    fn substitute_named_word_boundary() {
+        // $file should not match $filename
+        let skill = test_skill("$file and $filename", &["file"]);
+        let result = substitute_arguments(&skill, "test.rs");
+        assert_eq!(result, "test.rs and $filename");
+    }
+
+    #[test]
+    fn substitute_quoted_args() {
+        let skill = test_skill("$0 and $1", &[]);
+        let result = substitute_arguments(&skill, r#"hello "world peace""#);
+        assert_eq!(result, "hello and world peace");
+    }
+
+    #[test]
+    fn substitute_skill_dir() {
+        let mut skill = test_skill("Read ${CLAUDE_SKILL_DIR}/ref.md", &[]);
+        skill.skill_root = Some(PathBuf::from("/skills/my-skill"));
         let result = substitute_arguments(&skill, "");
         assert!(result.contains("/skills/my-skill/ref.md"));
+    }
+
+    // ── CRLF frontmatter test ───────────────────────────────────────────
+
+    #[test]
+    fn split_frontmatter_crlf() {
+        let content = "---\r\ndescription: test\r\n---\r\nBody text here";
+        let (fm, body) = split_frontmatter(content);
+        assert_eq!(fm.unwrap(), "description: test");
+        assert_eq!(body, "Body text here");
+    }
+
+    // ── parse_arguments tests ───────────────────────────────────────────
+
+    #[test]
+    fn parse_args_simple() {
+        assert_eq!(parse_arguments("foo bar baz"), vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn parse_args_quoted() {
+        assert_eq!(
+            parse_arguments(r#"foo "hello world" baz"#),
+            vec!["foo", "hello world", "baz"]
+        );
+    }
+
+    #[test]
+    fn parse_args_single_quoted() {
+        assert_eq!(
+            parse_arguments("foo 'hello world' baz"),
+            vec!["foo", "hello world", "baz"]
+        );
+    }
+
+    #[test]
+    fn parse_args_empty() {
+        assert!(parse_arguments("").is_empty());
+        assert!(parse_arguments("   ").is_empty());
     }
 }

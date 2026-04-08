@@ -136,18 +136,15 @@ impl SlashCommand {
                             if let Some(ref hint) = s.argument_hint {
                                 line.push_str(&format!("  \x1b[2m{}\x1b[0m", hint));
                             }
-                            if !s.paths.is_empty() {
-                                line.push_str("  \x1b[33m[conditional]\x1b[0m");
-                            }
                             line
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let cond_count = known_skills.iter().filter(|s| !s.paths.is_empty()).count();
+                    let cond_count = claude_core::skills::conditional_skill_count();
                     let mut out = format!("Available skills:\n{}", list);
                     if cond_count > 0 {
                         out.push_str(&format!(
-                            "\n\n  \x1b[2m({} conditional skill{} — activated when matching files are touched)\x1b[0m",
+                            "\n\n  \x1b[2m({} conditional skill{} pending — will activate when matching files are touched)\x1b[0m",
                             cond_count,
                             if cond_count == 1 { "" } else { "s" }
                         ));
