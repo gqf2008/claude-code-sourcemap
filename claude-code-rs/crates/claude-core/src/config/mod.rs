@@ -95,6 +95,10 @@ pub struct Settings {
     /// Output style name (e.g. `"concise"`, `"verbose"`).
     #[serde(default)]
     pub output_style: Option<String>,
+    /// Environment variables to inject (from settings.json `env` field).
+    /// The TS Claude Code applies these before auth resolution.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 // ── File paths ──────────────────────────────────────────────────────────────
@@ -179,6 +183,11 @@ fn merge_settings(base: Settings, overlay: &Settings) -> Settings {
         },
         language: overlay.language.clone().or(base.language),
         output_style: overlay.output_style.clone().or(base.output_style),
+        env: {
+            let mut env = base.env;
+            env.extend(overlay.env.clone());
+            env
+        },
     }
 }
 
@@ -199,6 +208,25 @@ impl Settings {
     /// Legacy config dir (XDG)
     pub fn config_dir() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("claude"))
+    }
+
+    /// The Claude Code config directory (`~/.claude/`).
+    pub fn claude_dir() -> Option<PathBuf> {
+        dirs::home_dir().map(|h| h.join(".claude"))
+    }
+
+    /// Apply the `env` map as process environment variables.
+    ///
+    /// This mirrors the TS Claude Code behavior where `settings.json` `env`
+    /// entries are injected before auth resolution, allowing proxy configs
+    /// like `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` to take effect.
+    pub fn apply_env(&self) {
+        for (key, value) in &self.env {
+            if !key.is_empty() {
+                debug!("Injecting env from settings: {}={}", key, if key.contains("KEY") || key.contains("TOKEN") { "****" } else { value.as_str() });
+                std::env::set_var(key, value);
+            }
+        }
     }
 
     /// Load settings from the legacy XDG path only (backward-compatible).
