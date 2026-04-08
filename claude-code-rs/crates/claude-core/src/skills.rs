@@ -44,14 +44,19 @@ fn skill_dirs(cwd: &Path) -> Vec<PathBuf> {
 
 /// Load all skills from standard locations; project skills shadow user skills.
 pub fn load_skills(cwd: &Path) -> Vec<SkillEntry> {
+    load_skills_from_dirs(&skill_dirs(cwd))
+}
+
+/// Load skills from an explicit list of directories (for testing).
+fn load_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillEntry> {
     let mut skills: Vec<SkillEntry> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    for dir in skill_dirs(cwd) {
+    for dir in dirs {
         if !dir.exists() {
             continue;
         }
-        let rd = match std::fs::read_dir(&dir) {
+        let rd = match std::fs::read_dir(dir) {
             Ok(r) => r,
             Err(e) => {
                 debug!("Cannot read skills dir {}: {}", dir.display(), e);
@@ -61,6 +66,30 @@ pub fn load_skills(cwd: &Path) -> Vec<SkillEntry> {
 
         for entry in rd.flatten() {
             let path = entry.path();
+            let ft = entry.file_type();
+
+            // Format 1: skill-name/SKILL.md (directory or symlink containing SKILL.md)
+            if ft.map(|t| t.is_dir() || t.is_symlink()).unwrap_or(false) {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() {
+                    let name = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .replace(' ', "-");
+                    if !name.is_empty() && !seen.contains(&name) {
+                        if let Some(skill) = parse_skill_file(&skill_md, &name) {
+                            debug!("Loaded skill '{}' from {}", name, skill_md.display());
+                            seen.insert(name);
+                            skills.push(skill);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Format 2: skill-name.md (legacy flat file)
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
@@ -277,7 +306,8 @@ mod tests {
     #[test]
     fn load_skills_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let skills = load_skills(dir.path());
+        let skills_dir = dir.path().join(".claude").join("skills");
+        let skills = load_skills_from_dirs(&[skills_dir]);
         assert!(skills.is_empty());
     }
 
@@ -290,7 +320,7 @@ mod tests {
         std::fs::write(skills_dir.join("review.md"), "Review code.").unwrap();
         std::fs::write(skills_dir.join("readme.txt"), "Not a skill").unwrap();
 
-        let skills = load_skills(dir.path());
+        let skills = load_skills_from_dirs(&[skills_dir]);
         assert_eq!(skills.len(), 2);
         let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"test"));
@@ -303,7 +333,52 @@ mod tests {
         let skills_dir = dir.path().join(".claude").join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
         std::fs::write(skills_dir.join("test.md"), "First").unwrap();
-        let skills = load_skills(dir.path());
+        let skills = load_skills_from_dirs(&[skills_dir]);
         assert_eq!(skills.len(), 1);
+    }
+
+    #[test]
+    fn load_skills_directory_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".claude").join("skills");
+
+        // Create directory-format skill: my-skill/SKILL.md
+        let skill_dir = skills_dir.join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\ndescription: My directory skill\n---\nDo something.",
+        )
+        .unwrap();
+
+        // Also create a references file (should be ignored)
+        let refs_dir = skill_dir.join("references");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(refs_dir.join("guide.md"), "Reference content").unwrap();
+
+        // Create a flat-file skill too
+        std::fs::write(skills_dir.join("flat.md"), "Flat skill body.").unwrap();
+
+        let skills = load_skills_from_dirs(&[skills_dir]);
+        assert_eq!(skills.len(), 2);
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"my-skill"));
+        assert!(names.contains(&"flat"));
+
+        let dir_skill = skills.iter().find(|s| s.name == "my-skill").unwrap();
+        assert_eq!(dir_skill.description, "My directory skill");
+        assert_eq!(dir_skill.system_prompt, "Do something.");
+    }
+
+    #[test]
+    fn load_skills_directory_without_skill_md_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".claude").join("skills");
+        let empty_skill = skills_dir.join("no-skill-md");
+        std::fs::create_dir_all(&empty_skill).unwrap();
+        std::fs::write(empty_skill.join("readme.md"), "Not a SKILL.md").unwrap();
+
+        let skills = load_skills_from_dirs(&[skills_dir]);
+        assert!(skills.is_empty(), "dir without SKILL.md should be ignored");
     }
 }
