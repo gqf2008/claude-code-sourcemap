@@ -722,7 +722,7 @@ mod tests {
             "file.txt",
         );
         assert!(result.is_some());
-        let p = result.unwrap();
+        let p = result.expect("should parse valid path");
         assert!(p.to_string_lossy().contains("uploads"));
         assert!(p.to_string_lossy().contains("file.txt"));
     }
@@ -779,15 +779,15 @@ mod tests {
         let cfg = FilesApiConfig::new("my-token".to_string(), "s1".to_string());
         let headers = build_headers(&cfg);
         assert_eq!(
-            headers.get(AUTHORIZATION).unwrap().to_str().unwrap(),
+            headers.get(AUTHORIZATION).expect("auth header").to_str().expect("valid str"),
             "Bearer my-token"
         );
         assert_eq!(
-            headers.get("anthropic-version").unwrap().to_str().unwrap(),
+            headers.get("anthropic-version").expect("version header").to_str().expect("valid str"),
             ANTHROPIC_VERSION
         );
         assert_eq!(
-            headers.get("anthropic-beta").unwrap().to_str().unwrap(),
+            headers.get("anthropic-beta").expect("beta header").to_str().expect("valid str"),
             FILES_API_BETA_HEADER
         );
     }
@@ -800,8 +800,8 @@ mod tests {
             file_id: "file_abc".to_string(),
             relative_path: "src/lib.rs".to_string(),
         };
-        let json = serde_json::to_string(&spec).unwrap();
-        let parsed: FileSpec = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serialize FileSpec");
+        let parsed: FileSpec = serde_json::from_str(&json).expect("deserialize FileSpec");
         assert_eq!(parsed.file_id, "file_abc");
         assert_eq!(parsed.relative_path, "src/lib.rs");
     }

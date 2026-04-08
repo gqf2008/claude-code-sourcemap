@@ -759,7 +759,7 @@ mod tests {
         let result = handle_stop_hooks(None, &[], Some(decision));
         match result {
             StopDecision::Continue { feedback } => assert_eq!(feedback, "please continue"),
-            _ => panic!("Expected Continue"),
+            other => panic!("Expected Continue, got {:?}", other),
         }
     }
 
