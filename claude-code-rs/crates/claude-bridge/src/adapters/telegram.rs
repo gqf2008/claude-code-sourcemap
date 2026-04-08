@@ -12,7 +12,8 @@
 //! 3. Configure `BridgeConfig.telegram` with the bot token
 
 use async_trait::async_trait;
-use tracing::{debug, error, info};
+use tokio::sync::watch;
+use tracing::{error, info};
 
 use crate::adapter::{AdapterError, AdapterResult, ChannelAdapter};
 use crate::config::TelegramConfig;
@@ -23,16 +24,13 @@ use crate::message::{ChannelId, InboundMessage, OutboundMessage, SenderInfo};
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
 /// Telegram adapter state.
-#[allow(dead_code)]
 pub struct TelegramAdapter {
     config: TelegramConfig,
     http: reqwest::Client,
-    /// Last update offset for long-polling.
-    last_update_id: Option<i64>,
     /// Gateway context (set on start).
     ctx: Option<GatewayContext>,
-    /// Polling task handle.
-    poll_task: Option<tokio::task::JoinHandle<()>>,
+    /// Polling task handle + cancel signal.
+    poll_task: Option<(tokio::task::JoinHandle<()>, watch::Sender<bool>)>,
 }
 
 #[allow(dead_code)]
@@ -42,7 +40,6 @@ impl TelegramAdapter {
         Self {
             config,
             http: reqwest::Client::new(),
-            last_update_id: None,
             ctx: None,
             poll_task: None,
         }
@@ -151,10 +148,11 @@ impl ChannelAdapter for TelegramAdapter {
             // Webhook mode: messages come via HTTP, similar to Feishu
         } else {
             info!("Telegram adapter started (polling mode)");
-            // Start polling in a background task
+            // Start polling in a background task with cancellation support
             let http = self.http.clone();
             let api_url = self.api_url("getUpdates");
             let allowed_chat_ids = self.config.allowed_chat_ids.clone();
+            let (cancel_tx, mut cancel_rx) = watch::channel(false);
 
             let poll_task = tokio::spawn(async move {
                 let mut offset: Option<i64> = None;
@@ -167,7 +165,20 @@ impl ChannelAdapter for TelegramAdapter {
                         params["offset"] = serde_json::json!(off);
                     }
 
-                    match http.post(&api_url).json(&params).send().await {
+                    // Race: poll request vs cancellation
+                    let poll_result = tokio::select! {
+                        biased;
+                        _ = cancel_rx.changed() => {
+                            if *cancel_rx.borrow() {
+                                info!("Telegram polling cancelled gracefully");
+                                break;
+                            }
+                            continue;
+                        }
+                        result = http.post(&api_url).json(&params).send() => result,
+                    };
+
+                    match poll_result {
                         Ok(resp) => {
                             if let Ok(body) = resp.json::<serde_json::Value>().await {
                                 if let Some(updates) = body.get("result").and_then(|v| v.as_array()) {
@@ -196,33 +207,48 @@ impl ChannelAdapter for TelegramAdapter {
                         }
                         Err(e) => {
                             error!("Telegram polling error: {}", e);
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            // Back off, but check for cancellation during sleep
+                            tokio::select! {
+                                biased;
+                                _ = cancel_rx.changed() => {
+                                    if *cancel_rx.borrow() {
+                                        info!("Telegram polling cancelled during backoff");
+                                        break;
+                                    }
+                                }
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            }
                         }
                     }
                 }
             });
 
-            self.poll_task = Some(poll_task);
+            self.poll_task = Some((poll_task, cancel_tx));
         }
 
         Ok(())
     }
 
     async fn send_message(&self, channel: &ChannelId, msg: OutboundMessage) -> AdapterResult<()> {
-        debug!("Would send to {}: {}", channel, &msg.text[..msg.text.len().min(50)]);
-        // In production: self.send_text(&channel.channel, &msg.text).await?;
+        self.send_text(&channel.channel, &msg.text).await?;
         Ok(())
     }
 
     async fn send_typing(&self, channel: &ChannelId) -> AdapterResult<()> {
-        debug!("Typing indicator for {}", channel);
-        // In production: self.send_chat_action(&channel.channel).await?;
-        Ok(())
+        self.send_chat_action(&channel.channel).await
     }
 
     async fn stop(&self) -> AdapterResult<()> {
-        if let Some(ref task) = self.poll_task {
-            task.abort();
+        if let Some((ref task, ref cancel_tx)) = self.poll_task {
+            // Signal graceful shutdown
+            let _ = cancel_tx.send(true);
+            // Wait briefly for clean exit, then abort if stuck
+            tokio::select! {
+                _ = async { task } => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                    task.abort();
+                }
+            }
         }
         info!("Telegram adapter stopped");
         Ok(())

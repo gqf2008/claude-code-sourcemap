@@ -99,6 +99,17 @@ impl SessionRouter {
         self.sessions.get(channel_id).map(|s| s.session_id.as_str())
     }
 
+    /// Get a notification subscriber for a channel's session.
+    ///
+    /// Returns a new `broadcast::Receiver` that receives `AgentNotification`s
+    /// from the bus. Returns `None` if no session exists for this channel.
+    pub fn get_client_subscriber(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Option<tokio::sync::broadcast::Receiver<claude_bus::events::AgentNotification>> {
+        self.sessions.get(channel_id).map(|s| s.client.subscribe_notifications())
+    }
+
     /// Get the number of active sessions.
     pub fn session_count(&self) -> usize {
         self.sessions.len()

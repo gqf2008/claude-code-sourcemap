@@ -2,6 +2,13 @@
 //!
 //! The gateway manages all channel adapters and coordinates message
 //! routing between external platforms and the Agent via the Event Bus.
+//!
+//! For each inbound message, the gateway:
+//! 1. Creates or retrieves a session via `SessionRouter`
+//! 2. Submits the user message to the Agent via the Event Bus
+//! 3. Spawns a notification consumer task that reads `AgentNotification`s,
+//!    aggregates them via `MessageFormatter`, and sends replies back
+//!    through the appropriate `ChannelAdapter`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +18,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use claude_bus::bus::BusHandle;
-use claude_bus::events::AgentRequest;
+use claude_bus::events::{AgentNotification, AgentRequest};
 
 use crate::adapter::{AdapterResult, ChannelAdapter};
 use crate::config::BridgeConfig;
@@ -37,15 +44,15 @@ impl GatewayContext {
 
 /// The main gateway that manages adapters and routes messages.
 pub struct ChannelGateway {
-    /// Registered adapters by platform name.
-    adapters: HashMap<String, Box<dyn ChannelAdapter>>,
+    /// Registered adapters by platform name (Arc for sharing with consumer tasks).
+    adapters: Arc<HashMap<String, Arc<Box<dyn ChannelAdapter>>>>,
     /// Session router (shared across message handling tasks).
     router: Arc<Mutex<SessionRouter>>,
-    /// Active message formatters per channel.
-    formatters: Arc<Mutex<HashMap<ChannelId, MessageFormatter>>>,
     /// Inbound message channel.
     inbound_tx: tokio::sync::mpsc::UnboundedSender<InboundMessage>,
     inbound_rx: Option<tokio::sync::mpsc::UnboundedReceiver<InboundMessage>>,
+    /// Active notification consumer tasks.
+    consumer_tasks: Arc<Mutex<HashMap<ChannelId, tokio::task::JoinHandle<()>>>>,
     /// Configuration.
     _config: BridgeConfig,
 }
@@ -58,11 +65,11 @@ impl ChannelGateway {
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            adapters: HashMap::new(),
+            adapters: Arc::new(HashMap::new()),
             router: Arc::new(Mutex::new(router)),
-            formatters: Arc::new(Mutex::new(HashMap::new())),
             inbound_tx,
             inbound_rx: Some(inbound_rx),
+            consumer_tasks: Arc::new(Mutex::new(HashMap::new())),
             _config: config,
         }
     }
@@ -71,7 +78,9 @@ impl ChannelGateway {
     pub fn register_adapter(&mut self, adapter: Box<dyn ChannelAdapter>) {
         let platform = adapter.platform().to_string();
         info!("Registered adapter: {}", platform);
-        self.adapters.insert(platform, adapter);
+        Arc::get_mut(&mut self.adapters)
+            .expect("register_adapter must be called before run()")
+            .insert(platform, Arc::new(adapter));
     }
 
     /// Start all registered adapters and begin message routing.
@@ -83,9 +92,14 @@ impl ChannelGateway {
         };
 
         // Start all adapters
-        for (platform, adapter) in &mut self.adapters {
+        for (platform, adapter) in Arc::get_mut(&mut self.adapters)
+            .expect("run() must not be called concurrently")
+            .iter_mut()
+        {
             info!("Starting adapter: {}", platform);
-            adapter.start(ctx.clone()).await?;
+            Arc::get_mut(adapter)
+                .expect("adapter must not be shared yet")
+                .start(ctx.clone()).await?;
         }
 
         // Process inbound messages
@@ -93,7 +107,8 @@ impl ChannelGateway {
             .expect("Gateway can only be run once");
 
         let router = Arc::clone(&self.router);
-        let formatters = Arc::clone(&self.formatters);
+        let adapters = Arc::clone(&self.adapters);
+        let consumer_tasks = Arc::clone(&self.consumer_tasks);
 
         info!("Gateway running with {} adapters", self.adapters.len());
 
@@ -102,32 +117,75 @@ impl ChannelGateway {
 
             // Handle special commands
             if msg.text.starts_with('/')
-                && self.handle_command(&msg).await
+                && Self::handle_command(&self.router, &msg).await
             {
+                // If session was destroyed, cancel consumer task
+                if matches!(msg.text.trim(), "/new" | "/reset") {
+                    let mut tasks = consumer_tasks.lock().await;
+                    if let Some(task) = tasks.remove(&channel_id) {
+                        task.abort();
+                    }
+                }
                 continue;
             }
 
             // Route to agent session
-            let mut router = router.lock().await;
-            let (client, session_id) = router.get_or_create(&channel_id);
-            let session_id = session_id.to_string();
+            let mut router_guard = router.lock().await;
+            let (client, _session_id) = router_guard.get_or_create(&channel_id);
 
-            // Submit as AgentRequest
+            // Submit user message to the Agent via the bus
             if let Err(e) = client.send_request(AgentRequest::Submit {
                 text: msg.text.clone(),
                 images: vec![],
             }) {
-                error!("[{}] Failed to submit to bus: {}", session_id, e);
+                error!("[{}] Failed to submit to bus: {}", channel_id, e);
                 continue;
             }
 
-            // Create a formatter for this channel if needed
-            let mut fmts = formatters.lock().await;
-            fmts.entry(channel_id.clone())
-                .or_insert_with(MessageFormatter::new);
+            // Spawn a notification consumer task if one isn't already running
+            let mut tasks = consumer_tasks.lock().await;
+            if !tasks.contains_key(&channel_id) || tasks.get(&channel_id).is_some_and(|t| t.is_finished()) {
+                // Get a fresh client for the consumer (subscribes to notifications)
+                let consumer_client = router_guard.get_client_subscriber(&channel_id);
+                drop(router_guard); // Release lock before spawning
 
-            drop(router);
-            drop(fmts);
+                if let Some(mut notif_rx) = consumer_client {
+                    let ch = channel_id.clone();
+                    let adapters_ref = Arc::clone(&adapters);
+
+                    let task = tokio::spawn(async move {
+                        let mut formatter = MessageFormatter::new();
+                        while let Ok(notif) = notif_rx.recv().await {
+                            let is_done = formatter.push(&notif);
+
+                            // Send typing indicator on tool use
+                            if matches!(notif, AgentNotification::ToolUseStart { .. }) {
+                                if let Some(adapter) = adapters_ref.get(&ch.platform) {
+                                    let _ = adapter.send_typing(&ch).await;
+                                }
+                            }
+
+                            if is_done {
+                                // Turn complete — send the final message
+                                let out = formatter.finish();
+                                if !out.text.is_empty() {
+                                    if let Some(adapter) = adapters_ref.get(&ch.platform) {
+                                        if let Err(e) = adapter.send_message(&ch, out).await {
+                                            error!("[{}] Failed to send reply: {}", ch, e);
+                                        }
+                                    }
+                                }
+                                // Reset formatter for next turn
+                                formatter = MessageFormatter::new();
+                            }
+                        }
+                    });
+
+                    tasks.insert(channel_id, task);
+                }
+            } else {
+                drop(router_guard);
+            }
         }
 
         info!("Gateway shutting down");
@@ -138,16 +196,16 @@ impl ChannelGateway {
     /// Handle special slash commands from users.
     ///
     /// Returns `true` if the command was handled (should not be forwarded).
-    async fn handle_command(&self, msg: &InboundMessage) -> bool {
+    async fn handle_command(router: &Arc<Mutex<SessionRouter>>, msg: &InboundMessage) -> bool {
         match msg.text.trim() {
             "/new" | "/reset" => {
-                let mut router = self.router.lock().await;
+                let mut router = router.lock().await;
                 router.destroy(&msg.channel_id);
                 info!("Session reset for channel {}", msg.channel_id);
                 true
             }
             "/status" => {
-                let router = self.router.lock().await;
+                let router = router.lock().await;
                 let count = router.session_count();
                 info!("Status request: {} active sessions", count);
                 true
@@ -158,7 +216,14 @@ impl ChannelGateway {
 
     /// Stop all adapters.
     async fn stop_all(&self) {
-        for (platform, adapter) in &self.adapters {
+        // Cancel all consumer tasks
+        let mut tasks = self.consumer_tasks.lock().await;
+        for (ch, task) in tasks.drain() {
+            info!("Cancelling consumer for {}", ch);
+            task.abort();
+        }
+
+        for (platform, adapter) in self.adapters.as_ref() {
             if let Err(e) = adapter.stop().await {
                 warn!("Error stopping adapter {}: {}", platform, e);
             }

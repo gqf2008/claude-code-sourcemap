@@ -13,6 +13,7 @@
 //! 4. Configure `BridgeConfig.feishu` with app_id and app_secret
 
 use async_trait::async_trait;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::adapter::{AdapterError, AdapterResult, ChannelAdapter};
@@ -21,38 +22,45 @@ use crate::gateway::GatewayContext;
 use crate::message::{ChannelId, InboundMessage, OutboundMessage, SenderInfo};
 
 /// Feishu Bot API base URL.
-#[allow(dead_code)]
 const FEISHU_API_BASE: &str = "https://open.feishu.cn/open-apis";
 
 /// Feishu adapter state.
-#[allow(dead_code)]
+///
+/// Uses `RwLock` for `access_token` to allow token refresh through `&self`
+/// (required by `ChannelAdapter::send_message`).
 pub struct FeishuAdapter {
     config: FeishuConfig,
     http: reqwest::Client,
-    /// Tenant access token (refreshed periodically).
-    access_token: Option<String>,
+    /// Tenant access token (refreshed periodically, interior mutability).
+    access_token: RwLock<Option<String>>,
     /// Gateway context (set on start).
     ctx: Option<GatewayContext>,
 }
 
-#[allow(dead_code)]
 impl FeishuAdapter {
     /// Create a new Feishu adapter.
     pub fn new(config: FeishuConfig) -> Self {
         Self {
             config,
             http: reqwest::Client::new(),
-            access_token: None,
+            access_token: RwLock::new(None),
             ctx: None,
         }
     }
 
     /// Get or refresh the tenant access token.
-    async fn ensure_token(&mut self) -> AdapterResult<&str> {
-        if self.access_token.is_some() {
-            return Ok(self.access_token.as_deref().unwrap());
+    ///
+    /// Uses `RwLock` for interior mutability so this works through `&self`.
+    async fn ensure_token(&self) -> AdapterResult<String> {
+        // Fast path: token already cached
+        {
+            let guard = self.access_token.read().await;
+            if let Some(ref token) = *guard {
+                return Ok(token.clone());
+            }
         }
 
+        // Slow path: fetch a new token
         let url = format!("{}/auth/v3/tenant_access_token/internal", FEISHU_API_BASE);
         let resp = self.http.post(&url)
             .json(&serde_json::json!({
@@ -69,20 +77,28 @@ impl FeishuAdapter {
             .to_string();
 
         info!("Feishu access token acquired");
-        self.access_token = Some(token);
-        Ok(self.access_token.as_deref().unwrap())
+        let mut guard = self.access_token.write().await;
+        *guard = Some(token.clone());
+        Ok(token)
     }
 
-    /// Send a message to a Feishu chat.
-    async fn send_text_message(&mut self, chat_id: &str, text: &str) -> AdapterResult<String> {
-        let token = self.ensure_token().await?.to_string();
+    /// Invalidate the cached token (e.g., on 401 response).
+    #[allow(dead_code)]
+    async fn invalidate_token(&self) {
+        let mut guard = self.access_token.write().await;
+        *guard = None;
+    }
+
+    /// Send a text message to a Feishu chat.
+    async fn send_text_message(&self, chat_id: &str, text: &str) -> AdapterResult<String> {
+        let token = self.ensure_token().await?;
         let url = format!("{}/im/v1/messages?receive_id_type=chat_id", FEISHU_API_BASE);
 
         let content = serde_json::json!({
             "text": text,
         });
 
-        let resp: reqwest::Response = self.http.post(&url)
+        let resp = self.http.post(&url)
             .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
                 "receive_id": chat_id,
@@ -163,9 +179,7 @@ impl ChannelAdapter for FeishuAdapter {
     }
 
     async fn send_message(&self, channel: &ChannelId, msg: OutboundMessage) -> AdapterResult<()> {
-        // For sending, we need a mutable reference to refresh token.
-        // This is a design trade-off — in production, use interior mutability.
-        debug!("Would send to {}: {}", channel, &msg.text[..msg.text.len().min(50)]);
+        self.send_text_message(&channel.channel, &msg.text).await?;
         Ok(())
     }
 

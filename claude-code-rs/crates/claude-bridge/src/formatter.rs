@@ -124,13 +124,22 @@ impl Default for MessageFormatter {
     }
 }
 
-/// Truncate a string to max_len, adding "..." if truncated.
+/// Truncate a string to approximately `max_len` bytes, adding "..." if truncated.
+///
+/// Uses `char_indices()` to find a safe UTF-8 boundary, avoiding panics
+/// on multi-byte characters (CJK, emoji, etc.).
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        return s.to_string();
     }
+    let limit = max_len.saturating_sub(3);
+    // Find the last char boundary at or before `limit`
+    let boundary = s.char_indices()
+        .take_while(|&(i, _)| i <= limit)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    format!("{}...", &s[..boundary])
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -213,6 +222,21 @@ mod tests {
     fn truncate_long_string() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn truncate_utf8_safe() {
+        // CJK characters are 3 bytes each: "你好世界" = 12 bytes
+        let cjk = "你好世界";
+        // Truncate to 10 bytes: "你好" (6 bytes) + "..." = 9 bytes
+        let result = truncate(cjk, 10);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 13); // safe even if boundary shifts
+        // Emoji: "🦀🐍" = 8 bytes (4 bytes each)
+        let emoji = "🦀🐍hello";
+        let result = truncate(emoji, 6);
+        assert!(result.ends_with("..."));
+        // Should not panic
     }
 
     #[test]

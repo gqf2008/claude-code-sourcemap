@@ -1,0 +1,38 @@
+[
+  {
+    "id": "read-cargo-toml",
+    "content": "Read root Cargo.toml and project structure",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "read-architecture",
+    "content": "Read ARCHITECTURE.md for design overview",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "read-crates",
+    "content": "Read each crate's Cargo.toml and key source files",
+    "status": "in_progress",
+    "priority": "high"
+  },
+  {
+    "id": "check-tests",
+    "content": "Review test coverage and test quality",
+    "status": "pending",
+    "priority": "medium"
+  },
+  {
+    "id": "check-security",
+    "content": "Check for security issues",
+    "status": "pending",
+    "priority": "medium"
+  },
+  {
+    "id": "compile-results",
+    "content": "Compile review findings and provide summary",
+    "status": "pending",
+    "priority": "high"
+  }
+]
