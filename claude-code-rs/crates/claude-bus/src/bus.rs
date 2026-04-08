@@ -33,6 +33,7 @@ impl EventBus {
     /// continue from the latest).
     ///
     /// Returns `(core_handle, client_handle)`.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(capacity: usize) -> (BusHandle, ClientHandle) {
         let (notify_tx, notify_rx) = broadcast::channel(capacity);
         let (request_tx, request_rx) = mpsc::unbounded_channel();

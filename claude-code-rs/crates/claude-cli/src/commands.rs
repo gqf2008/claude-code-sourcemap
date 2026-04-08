@@ -37,6 +37,8 @@ pub enum SlashCommand {
     Plugin { sub: String },
     /// Run a command defined by a plugin.
     RunPluginCommand { name: String, prompt: String },
+    /// Agent definitions management.
+    Agents { sub: String },
     Exit,
     Unknown(String),
 }
@@ -85,6 +87,7 @@ impl SlashCommand {
             "reload-context" | "reload" => Self::ReloadContext,
             "mcp" => Self::Mcp { sub: args },
             "plugin" | "plugins" => Self::Plugin { sub: args },
+            "agents" | "agent" => Self::Agents { sub: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -187,6 +190,7 @@ impl SlashCommand {
                 name: name.clone(),
                 prompt: prompt.clone(),
             },
+            Self::Agents { sub } => CommandResult::Agents { sub: sub.clone() },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -230,6 +234,8 @@ pub enum CommandResult {
     Plugin { sub: String },
     /// Execute a plugin-defined command (prompt sent to engine).
     RunPluginCommand { name: String, prompt: String },
+    /// Agent definitions management (/agents list, info, create, delete).
+    Agents { sub: String },
     Exit,
 }
 
@@ -305,6 +311,7 @@ const HELP_TEXT_BASE: &str = "\
 \x1b[1mSystem\x1b[0m
   /doctor            Check environment health
   /skills            List available skills
+  /agents            Manage agent definitions
   /version           Show version info
 
 \x1b[1mTips\x1b[0m

@@ -330,6 +330,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "claude-api",
+ "claude-bus",
  "claude-core",
  "claude-tools",
  "crossterm",

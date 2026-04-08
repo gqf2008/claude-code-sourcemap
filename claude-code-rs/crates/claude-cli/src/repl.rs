@@ -407,6 +407,9 @@ pub async fn run(engine: QueryEngine, cwd: std::path::PathBuf) -> anyhow::Result
                             CommandResult::RunPluginCommand { name, prompt } => {
                                 handle_plugin_run(&engine, &name, &prompt).await;
                             }
+                            CommandResult::Agents { sub } => {
+                                handle_agents_command(&sub, &cwd);
+                            }
                         }
                     }
                     continue;
