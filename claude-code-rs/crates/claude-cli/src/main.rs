@@ -6,6 +6,7 @@ mod output;
 mod markdown;
 mod diff_display;
 mod session;
+mod ui;
 
 use std::sync::Arc;
 
