@@ -4,6 +4,7 @@ members = [
     "crates/claude-api",
     "crates/claude-tools",
     "crates/claude-agent",
+    "crates/claude-bus",
     "crates/claude-cli",
 ]
 resolver = "2"

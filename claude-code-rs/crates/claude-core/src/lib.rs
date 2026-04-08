@@ -4,6 +4,7 @@ pub mod permissions;
 pub mod config;
 pub mod claude_md;
 pub mod skills;
+pub mod agents;
 pub mod memory;
 pub mod session;
 pub mod token_estimation;

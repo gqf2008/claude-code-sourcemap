@@ -373,6 +373,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-bus"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "claude-cli"
 version = "0.1.0"
 dependencies = [
