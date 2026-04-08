@@ -372,4 +372,90 @@ mod tests {
         let result = GrepTool.call(input, &ctx).await.unwrap();
         assert!(result.is_error, "should reject long pattern");
     }
+
+    fn grep_ctx(dir: &std::path::Path) -> ToolContext {
+        use claude_core::permissions::PermissionMode;
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            permission_mode: PermissionMode::Default,
+            abort_signal: Default::default(),
+            messages: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn grep_invalid_regex_returns_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let input = serde_json::json!({ "pattern": "[invalid(" });
+        let result = GrepTool.call(input, &grep_ctx(tmp.path())).await;
+        // Invalid regex should return Err (not panic)
+        assert!(result.is_err(), "invalid regex should produce error");
+    }
+
+    #[tokio::test]
+    async fn grep_empty_pattern_matches_all() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let input = serde_json::json!({ "pattern": "" });
+        // Empty regex matches everything — that's valid behavior
+        let result = GrepTool.call(input, &grep_ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn grep_case_insensitive_flag() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "Hello World\nGOODBYE").unwrap();
+        // default output_mode is "files_with_matches" — just show file name
+        let input = serde_json::json!({ "pattern": "hello", "case_insensitive": true, "output_mode": "content" });
+        let result = GrepTool.call(input, &grep_ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error, "case insensitive search should work");
+        let text = result.content.iter().map(|c| match c {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }).collect::<String>();
+        // Should find the line containing "Hello" via case-insensitive match
+        assert!(text.contains("Hello"), "should match Hello case-insensitively: {}", text);
+    }
+
+    #[tokio::test]
+    async fn grep_no_matches_is_not_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello world").unwrap();
+        let input = serde_json::json!({ "pattern": "zzz_no_match" });
+        let result = GrepTool.call(input, &grep_ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn grep_type_filter_narrows_results() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn hello()").unwrap();
+        std::fs::write(tmp.path().join("b.py"), "def hello()").unwrap();
+        let input = serde_json::json!({ "pattern": "hello", "type": "rs" });
+        let result = GrepTool.call(input, &grep_ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        let text = result.content.iter().map(|c| match c {
+            claude_core::message::ToolResultContent::Text { text } => text.clone(),
+            _ => String::new(),
+        }).collect::<String>();
+        assert!(text.contains("a.rs"));
+        assert!(!text.contains("b.py"));
+    }
+
+    // ── type_to_globs edge cases ─────────────────────────────────────
+
+    #[test]
+    fn type_to_globs_unknown_returns_none() {
+        assert!(type_to_globs("fortran77").is_none());
+    }
+
+    #[test]
+    fn type_to_globs_aliases_equivalent() {
+        assert_eq!(type_to_globs("py"), type_to_globs("python"));
+        assert_eq!(type_to_globs("js"), type_to_globs("javascript"));
+        assert_eq!(type_to_globs("ts"), type_to_globs("typescript"));
+        assert_eq!(type_to_globs("rs"), type_to_globs("rust"));
+    }
 }

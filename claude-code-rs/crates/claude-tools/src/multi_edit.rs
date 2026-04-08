@@ -229,6 +229,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn overlapping_edits_detected() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello world end").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [
+                {"old_string": "hello world", "new_string": "X"},
+                {"old_string": "world end", "new_string": "Y"}
+            ]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error, "overlapping edits should be rejected");
+        assert!(result_text(&result).contains("overlapping"));
+    }
+
+    #[tokio::test]
+    async fn empty_edits_array_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": []
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("No edits"));
+    }
+
+    #[tokio::test]
+    async fn empty_old_string_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "", "new_string": "x"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn adjacent_non_overlapping_edits_succeed() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "AABBCC").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [
+                {"old_string": "AA", "new_string": "xx"},
+                {"old_string": "BB", "new_string": "yy"},
+                {"old_string": "CC", "new_string": "zz"}
+            ]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error, "adjacent edits should succeed: {}", result_text(&result));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "xxyyzz");
+    }
+
+    #[tokio::test]
+    async fn unicode_edits_work_correctly() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "Hello 你好 world 🎉").unwrap();
+
+        let tool = MultiEditTool;
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "edits": [{"old_string": "你好", "new_string": "世界"}]
+        });
+        let result = tool.call(input, &ctx(tmp.path())).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Hello 世界 world 🎉");
+    }
+    #[tokio::test]
     async fn empty_edits_returns_error() {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("test.txt");

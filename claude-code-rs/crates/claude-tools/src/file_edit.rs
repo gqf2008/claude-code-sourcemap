@@ -199,4 +199,75 @@ mod tests {
         // Different content => detected
         assert!(check_external_modification(path, "changed").is_some());
     }
+
+    // ── count_line_changes edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_count_line_changes_identical() {
+        let (added, removed) = count_line_changes("same\nlines", "same\nlines");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_count_line_changes_all_new() {
+        let (added, removed) = count_line_changes("", "line1\nline2");
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_count_line_changes_all_deleted() {
+        let (added, removed) = count_line_changes("line1\nline2\nline3", "");
+        assert_eq!(removed, 3);
+        assert_eq!(added, 0);
+    }
+
+    #[test]
+    fn test_count_line_changes_single_line_modification() {
+        let (added, removed) = count_line_changes("hello", "world");
+        assert_eq!(added, 1);
+        assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn test_count_line_changes_add_lines_at_end() {
+        let (added, removed) = count_line_changes("line1", "line1\nline2\nline3");
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_count_line_changes_modify_and_add() {
+        let (added, removed) = count_line_changes("aaa\nbbb", "xxx\nbbb\nccc");
+        // aaa→xxx = 1 changed, + 1 new line
+        assert_eq!(added, 2);
+        assert_eq!(removed, 1);
+    }
+
+    // ── file state cache edge cases ───────────────────────────────────
+
+    #[test]
+    fn test_file_state_uncached_returns_none() {
+        // Querying a path never cached should return None
+        let path = std::path::Path::new("/nonexistent/never_cached_path.txt");
+        assert!(check_external_modification(path, "anything").is_none());
+    }
+
+    #[test]
+    fn test_file_state_unicode_content() {
+        let path = std::path::Path::new("/tmp/test_state_unicode.txt");
+        let content = "Hello 你好 🎉 world café";
+        update_file_state(path, content);
+        assert!(check_external_modification(path, content).is_none());
+        assert!(check_external_modification(path, "Hello 你好 🎉 world cafe").is_some());
+    }
+
+    #[test]
+    fn test_file_state_empty_content() {
+        let path = std::path::Path::new("/tmp/test_state_empty.txt");
+        update_file_state(path, "");
+        assert!(check_external_modification(path, "").is_none());
+        assert!(check_external_modification(path, " ").is_some());
+    }
 }

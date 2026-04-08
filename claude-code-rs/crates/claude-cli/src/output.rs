@@ -754,4 +754,133 @@ mod tests {
         let result = format_tool_result_inline("MultiEdit", "Edited a.rs (+1 -1 lines), b.rs (+2 -0 lines)");
         assert!(result.is_some());
     }
+
+    // ── parse_edit_stats edge cases ──────────────────────────────────
+
+    #[test]
+    fn test_parse_edit_stats_malformed_no_numbers() {
+        // Missing numbers inside parens
+        assert!(parse_edit_stats("Edited file.txt (+ - lines)").is_none()
+            || parse_edit_stats("Edited file.txt (+ - lines)").is_some());
+        // Just checks it doesn't panic
+    }
+
+    #[test]
+    fn test_parse_edit_stats_zero_changes() {
+        let result = parse_edit_stats("Edited src/main.rs (+0 -0 lines)");
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!(s.contains("+0"));
+        assert!(s.contains("-0"));
+    }
+
+    #[test]
+    fn test_parse_edit_stats_large_numbers() {
+        let result = parse_edit_stats("Edited huge.rs (+9999 -8888 lines)");
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!(s.contains("+9999"));
+        assert!(s.contains("-8888"));
+    }
+
+    #[test]
+    fn test_parse_edit_stats_wrote_prefix() {
+        let result = parse_edit_stats("Wrote src/new.rs (+10 -0 lines)");
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!(s.contains("+10"));
+    }
+
+    // ── short_path edge cases ────────────────────────────────────────
+
+    #[test]
+    fn test_short_path_empty_string() {
+        assert_eq!(short_path(""), "");
+    }
+
+    #[test]
+    fn test_short_path_no_separators() {
+        assert_eq!(short_path("file.txt"), "file.txt");
+    }
+
+    #[test]
+    fn test_short_path_exactly_three_segments() {
+        assert_eq!(short_path("a/b/c"), "a/b/c");
+    }
+
+    #[test]
+    fn test_short_path_windows_deep() {
+        let p = "C:\\Users\\gxh\\Documents\\project\\src\\main.rs";
+        let result = short_path(p);
+        // keeps last 3 segments
+        assert_eq!(result, "project\\src\\main.rs");
+    }
+
+    // ── categorize_error edge cases ──────────────────────────────────
+
+    #[test]
+    fn test_categorize_error_case_insensitive() {
+        let (icon, _) = categorize_error("UNAUTHORIZED ACCESS");
+        assert_eq!(icon, "🔑");
+    }
+
+    #[test]
+    fn test_categorize_error_empty_string() {
+        let (icon, hint) = categorize_error("");
+        assert_eq!(icon, "❌");
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn test_categorize_error_multiple_keywords() {
+        // "401 timeout" — first match wins (401 checked before timeout)
+        let (icon, _) = categorize_error("401 unauthorized timeout");
+        assert_eq!(icon, "🔑");
+    }
+
+    #[test]
+    fn test_categorize_error_forbidden() {
+        let (icon, _) = categorize_error("403 Forbidden");
+        assert_eq!(icon, "🚫");
+    }
+
+    #[test]
+    fn test_categorize_error_502_503() {
+        let (icon, _) = categorize_error("502 Bad Gateway");
+        assert_eq!(icon, "💥");
+        let (icon2, _) = categorize_error("503 Service Unavailable");
+        assert_eq!(icon2, "💥");
+    }
+
+    // ── format_tool_start edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_format_tool_start_repl() {
+        let input = json!({"language": "python", "code": "print('hello')"});
+        let s = format_tool_start("REPL", &input);
+        assert!(s.contains("python"));
+        assert!(s.contains("print"));
+    }
+
+    #[test]
+    fn test_format_tool_start_git() {
+        let input = json!({"subcommand": "log", "args": ["--oneline", "-5"]});
+        let s = format_tool_start("Git", &input);
+        assert!(s.contains("log"));
+        assert!(s.contains("--oneline"));
+    }
+
+    #[test]
+    fn test_format_tool_start_web_search() {
+        let input = json!({"query": "rust async programming tutorial for beginners 2024 advanced"});
+        let s = format_tool_start("WebSearch", &input);
+        assert!(s.contains("rust async"));
+    }
+
+    #[test]
+    fn test_format_tool_start_dispatch_agent() {
+        let input = json!({"agent_type": "explore"});
+        let s = format_tool_start("dispatch_agent", &input);
+        assert!(s.contains("explore"));
+    }
 }

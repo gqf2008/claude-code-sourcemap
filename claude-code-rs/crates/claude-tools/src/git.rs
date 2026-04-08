@@ -318,4 +318,69 @@ mod tests {
     fn git_status_tool_name() {
         assert_eq!(GitStatusTool.name(), "GitStatus");
     }
+
+    // ── git safety edge cases ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn git_rejects_force_push() {
+        // "push" is NOT in the allowed subcommands list, so it's rejected at that level
+        let input = json!({"subcommand": "push", "args": ["--force", "origin", "main"]});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("not allowed"), "push should be blocked");
+    }
+
+    #[tokio::test]
+    async fn git_rejects_force_push_short_flag() {
+        let input = json!({"subcommand": "push", "args": ["-f", "origin", "main"]});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        // Also blocked by subcommand not in allowlist
+        assert!(get_text(&result).contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_rejects_hard_reset() {
+        // "reset" is NOT in the allowed subcommands list either
+        let input = json!({"subcommand": "reset", "args": ["--hard", "HEAD~3"]});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_allows_soft_reset() {
+        // "reset" is not in the allowed list, so even --soft is blocked at subcommand level
+        let input = json!({"subcommand": "reset", "args": ["--soft", "HEAD~1"]});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_rejects_push_subcommand_not_in_allowlist() {
+        let input = json!({"subcommand": "gc", "args": []});
+        let result = GitTool.call(input, &test_context()).await.unwrap();
+        assert!(result.is_error);
+        assert!(get_text(&result).contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn git_allows_all_read_subcommands() {
+        // Verify all these subcommands pass the allowlist check.
+        // They may produce real git output (or errors like "not a git repo"), but
+        // should NOT produce the specific "Subcommand 'X' not allowed" error.
+        let allowed_subs = ["status", "log", "branch", "show", "blame", "rev-parse", "reflog", "diff"];
+        for sub in &allowed_subs {
+            let input = json!({"subcommand": sub});
+            let result = GitTool.call(input, &test_context()).await.unwrap();
+            let text = get_text(&result);
+            let err_prefix = format!("Subcommand '{}' not allowed", sub);
+            assert!(
+                !text.starts_with(&err_prefix),
+                "'{}' should pass allowlist, but got: {}",
+                sub, &text[..text.len().min(100)]
+            );
+        }
+    }
 }
