@@ -688,17 +688,19 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
     let parsed = parse_arguments(args);
 
     // 1. Named arguments: $name (no braces, word-boundary aware like TS)
-    //    Also support ${name} as an extension
+    //    Also support ${name} as an extension.
+    //    Filter out purely numeric names (TS parseArgumentNames behavior).
     for (i, arg_name) in skill.argument_names.iter().enumerate() {
+        if arg_name.chars().all(|c| c.is_ascii_digit()) {
+            continue; // skip numeric names — they conflict with $0/$1 positional
+        }
         let value = parsed.get(i).map(|s| s.as_str()).unwrap_or("");
 
         // $name — must not be followed by word chars or `[`
-        // Process char-by-char to handle word boundaries
         let dollar_name = format!("${}", arg_name);
         let mut new_result = String::with_capacity(result.len());
         let mut idx = 0;
-        let bytes = result.as_bytes();
-        while idx < bytes.len() {
+        while idx < result.len() {
             if result[idx..].starts_with(&dollar_name) {
                 let after = idx + dollar_name.len();
                 let next_ch = result[after..].chars().next();
@@ -709,8 +711,10 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                     continue;
                 }
             }
-            new_result.push(bytes[idx] as char);
-            idx += 1;
+            // Advance by full UTF-8 character (safe for non-ASCII)
+            let ch = result[idx..].chars().next().unwrap();
+            new_result.push(ch);
+            idx += ch.len_utf8();
         }
         result = new_result;
 
@@ -734,8 +738,9 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                 }
             }
         }
-        new_result.push(result.as_bytes()[idx] as char);
-        idx += 1;
+        let ch = result[idx..].chars().next().unwrap();
+        new_result.push(ch);
+        idx += ch.len_utf8();
     }
     result = new_result;
 
@@ -757,8 +762,9 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                     continue;
                 }
             }
-            new_result.push(result.as_bytes()[idx] as char);
-            idx += 1;
+            let ch = result[idx..].chars().next().unwrap();
+            new_result.push(ch);
+            idx += ch.len_utf8();
         }
         result = new_result;
     }
@@ -1330,5 +1336,48 @@ Analyze $ARGUMENTS in ${file} for ${language}.
     fn parse_args_empty() {
         assert!(parse_arguments("").is_empty());
         assert!(parse_arguments("   ").is_empty());
+    }
+
+    // ── UTF-8 safety tests ──────────────────────────────────────────────
+
+    #[test]
+    fn substitute_cjk_before_placeholder() {
+        let skill = test_skill("分析 $file 的结果", &["file"]);
+        let result = substitute_arguments(&skill, "main.rs");
+        assert_eq!(result, "分析 main.rs 的结果");
+    }
+
+    #[test]
+    fn substitute_cjk_no_placeholder() {
+        let skill = test_skill("这是一个中文提示词", &[]);
+        let result = substitute_arguments(&skill, "args");
+        assert_eq!(result, "这是一个中文提示词\n\nARGUMENTS: args");
+    }
+
+    #[test]
+    fn substitute_emoji_in_prompt() {
+        let skill = test_skill("🔍 Review $0 📝", &[]);
+        let result = substitute_arguments(&skill, "code.rs");
+        assert_eq!(result, "🔍 Review code.rs 📝");
+    }
+
+    #[test]
+    fn substitute_mixed_unicode_indexed() {
+        let skill = test_skill("审查 $ARGUMENTS[0] 中的 $ARGUMENTS[1]", &[]);
+        let result = substitute_arguments(&skill, "main.rs bugs");
+        assert_eq!(result, "审查 main.rs 中的 bugs");
+    }
+
+    // ── Numeric argument name filter tests ───────────────────────────────
+
+    #[test]
+    fn substitute_numeric_arg_name_skipped() {
+        // Numeric arg names should be filtered (TS parseArgumentNames behavior)
+        // so $0 is treated as positional, not named
+        let skill = test_skill("$0 and $1", &["0", "file"]);
+        let result = substitute_arguments(&skill, "a b");
+        // "0" is skipped, "file" maps to index 1 but value is parsed[1]="b"
+        // $0 handled by positional → "a", $1 handled by positional → "b"
+        assert_eq!(result, "a and b");
     }
 }
