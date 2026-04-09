@@ -522,6 +522,36 @@ const AUTOCOMPACT_BUFFER_TOKENS: u64 = 13_000;
 /// Maximum consecutive auto-compact failures before circuit-breaker trips.
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
+/// Metrics from a single compaction operation.
+#[derive(Debug, Clone)]
+pub struct CompactMetrics {
+    /// Tokens before compaction.
+    pub tokens_before: u64,
+    /// Tokens after compaction (estimated from summary length).
+    pub tokens_after: u64,
+    /// Wall-clock duration of the compaction call.
+    pub duration_ms: u64,
+    /// Number of messages that were compacted.
+    pub messages_compacted: usize,
+    /// Whether the compaction succeeded.
+    pub success: bool,
+}
+
+impl CompactMetrics {
+    /// Compression ratio (tokens_after / tokens_before). Lower is better.
+    pub fn compression_ratio(&self) -> f64 {
+        if self.tokens_before == 0 {
+            return 1.0;
+        }
+        self.tokens_after as f64 / self.tokens_before as f64
+    }
+
+    /// Tokens saved by compaction.
+    pub fn tokens_saved(&self) -> u64 {
+        self.tokens_before.saturating_sub(self.tokens_after)
+    }
+}
+
 /// State for auto-compact trigger logic.
 pub struct AutoCompactState {
     /// How many compactions have failed in a row.
@@ -530,6 +560,8 @@ pub struct AutoCompactState {
     pub disabled: bool,
     /// Last compaction summary message id (for dedup).
     pub last_summary_id: Option<String>,
+    /// Accumulated metrics from all compactions in this session.
+    pub metrics_history: Vec<CompactMetrics>,
 }
 
 impl AutoCompactState {
@@ -538,6 +570,7 @@ impl AutoCompactState {
             consecutive_failures: 0,
             disabled: false,
             last_summary_id: None,
+            metrics_history: Vec::new(),
         }
     }
 
@@ -553,9 +586,35 @@ impl AutoCompactState {
         current_tokens >= threshold
     }
 
-    /// Call after a successful compaction.
+    /// Call after a successful compaction with metrics.
     pub fn record_success(&mut self) {
         self.consecutive_failures = 0;
+    }
+
+    /// Record compaction metrics (call regardless of success/failure).
+    pub fn record_metrics(&mut self, metrics: CompactMetrics) {
+        if metrics.success {
+            self.consecutive_failures = 0;
+            tracing::info!(
+                tokens_before = metrics.tokens_before,
+                tokens_after = metrics.tokens_after,
+                ratio = format!("{:.2}", metrics.compression_ratio()),
+                saved = metrics.tokens_saved(),
+                duration_ms = metrics.duration_ms,
+                "Compaction succeeded"
+            );
+        } else {
+            self.consecutive_failures += 1;
+            tracing::warn!(
+                consecutive_failures = self.consecutive_failures,
+                max = MAX_CONSECUTIVE_FAILURES,
+                duration_ms = metrics.duration_ms,
+                "Compaction failed (circuit breaker: {}/{})",
+                self.consecutive_failures,
+                MAX_CONSECUTIVE_FAILURES,
+            );
+        }
+        self.metrics_history.push(metrics);
     }
 
     /// Call after a failed compaction attempt.
@@ -566,6 +625,50 @@ impl AutoCompactState {
     /// Whether the circuit breaker has tripped.
     pub fn is_circuit_broken(&self) -> bool {
         self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+    }
+
+    /// Total number of compactions attempted in this session.
+    pub fn total_compactions(&self) -> usize {
+        self.metrics_history.len()
+    }
+
+    /// Number of successful compactions.
+    pub fn successful_compactions(&self) -> usize {
+        self.metrics_history.iter().filter(|m| m.success).count()
+    }
+
+    /// Total tokens saved across all successful compactions.
+    pub fn total_tokens_saved(&self) -> u64 {
+        self.metrics_history
+            .iter()
+            .filter(|m| m.success)
+            .map(|m| m.tokens_saved())
+            .sum()
+    }
+
+    /// Average compression ratio across successful compactions.
+    pub fn average_compression_ratio(&self) -> f64 {
+        let successful: Vec<_> = self.metrics_history.iter().filter(|m| m.success).collect();
+        if successful.is_empty() {
+            return 1.0;
+        }
+        let total: f64 = successful.iter().map(|m| m.compression_ratio()).sum();
+        total / successful.len() as f64
+    }
+
+    /// Format a human-readable metrics summary.
+    pub fn format_metrics_summary(&self) -> String {
+        let total = self.total_compactions();
+        if total == 0 {
+            return "No compactions performed.".to_string();
+        }
+        let success = self.successful_compactions();
+        let saved = self.total_tokens_saved();
+        let avg_ratio = self.average_compression_ratio();
+        format!(
+            "Compactions: {}/{} succeeded | Tokens saved: {} | Avg ratio: {:.1}%",
+            success, total, saved, avg_ratio * 100.0
+        )
     }
 }
 
@@ -773,5 +876,119 @@ mod tests {
         assert!(!state.disabled);
         assert!(!state.is_circuit_broken());
         assert!(state.last_summary_id.is_none());
+        assert_eq!(state.total_compactions(), 0);
+        assert_eq!(state.format_metrics_summary(), "No compactions performed.");
+    }
+
+    // ── CompactMetrics ──────────────────────────────────────────────────────
+
+    #[test]
+    fn compact_metrics_compression_ratio() {
+        let m = CompactMetrics {
+            tokens_before: 100_000,
+            tokens_after: 20_000,
+            duration_ms: 500,
+            messages_compacted: 50,
+            success: true,
+        };
+        assert!((m.compression_ratio() - 0.2).abs() < 0.001);
+        assert_eq!(m.tokens_saved(), 80_000);
+    }
+
+    #[test]
+    fn compact_metrics_zero_before() {
+        let m = CompactMetrics {
+            tokens_before: 0,
+            tokens_after: 0,
+            duration_ms: 0,
+            messages_compacted: 0,
+            success: true,
+        };
+        assert!((m.compression_ratio() - 1.0).abs() < 0.001);
+        assert_eq!(m.tokens_saved(), 0);
+    }
+
+    #[test]
+    fn auto_compact_state_record_metrics_success() {
+        let mut state = AutoCompactState::new();
+        state.record_failure(); // one failure
+        state.record_metrics(CompactMetrics {
+            tokens_before: 80_000,
+            tokens_after: 15_000,
+            duration_ms: 300,
+            messages_compacted: 30,
+            success: true,
+        });
+        // Success resets consecutive failures
+        assert_eq!(state.consecutive_failures, 0);
+        assert_eq!(state.total_compactions(), 1);
+        assert_eq!(state.successful_compactions(), 1);
+        assert_eq!(state.total_tokens_saved(), 65_000);
+    }
+
+    #[test]
+    fn auto_compact_state_record_metrics_failure() {
+        let mut state = AutoCompactState::new();
+        state.record_metrics(CompactMetrics {
+            tokens_before: 80_000,
+            tokens_after: 0,
+            duration_ms: 100,
+            messages_compacted: 30,
+            success: false,
+        });
+        assert_eq!(state.consecutive_failures, 1);
+        assert_eq!(state.total_compactions(), 1);
+        assert_eq!(state.successful_compactions(), 0);
+        assert_eq!(state.total_tokens_saved(), 0);
+    }
+
+    #[test]
+    fn auto_compact_state_metrics_summary_format() {
+        let mut state = AutoCompactState::new();
+        state.record_metrics(CompactMetrics {
+            tokens_before: 100_000,
+            tokens_after: 20_000,
+            duration_ms: 500,
+            messages_compacted: 40,
+            success: true,
+        });
+        state.record_metrics(CompactMetrics {
+            tokens_before: 90_000,
+            tokens_after: 18_000,
+            duration_ms: 400,
+            messages_compacted: 35,
+            success: true,
+        });
+        state.record_metrics(CompactMetrics {
+            tokens_before: 80_000,
+            tokens_after: 0,
+            duration_ms: 100,
+            messages_compacted: 30,
+            success: false,
+        });
+        let summary = state.format_metrics_summary();
+        assert!(summary.contains("2/3 succeeded"));
+        assert!(summary.contains("152000")); // 80000 + 72000
+    }
+
+    #[test]
+    fn auto_compact_state_average_ratio() {
+        let mut state = AutoCompactState::new();
+        state.record_metrics(CompactMetrics {
+            tokens_before: 100_000,
+            tokens_after: 20_000, // 0.2
+            duration_ms: 0,
+            messages_compacted: 0,
+            success: true,
+        });
+        state.record_metrics(CompactMetrics {
+            tokens_before: 100_000,
+            tokens_after: 40_000, // 0.4
+            duration_ms: 0,
+            messages_compacted: 0,
+            success: true,
+        });
+        let avg = state.average_compression_ratio();
+        assert!((avg - 0.3).abs() < 0.001); // (0.2 + 0.4) / 2
     }
 }
