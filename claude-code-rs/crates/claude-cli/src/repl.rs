@@ -512,7 +512,7 @@ pub async fn run(
                                 handle_plugin_run(&engine, &name, &prompt).await;
                             }
                             CommandResult::Agents { sub } => {
-                                handle_agents_command(&sub, &cwd);
+                                handle_agents_command(&sub, &cwd, None);
                             }
                         }
                     }
