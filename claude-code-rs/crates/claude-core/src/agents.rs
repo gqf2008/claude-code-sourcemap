@@ -22,8 +22,13 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tracing::debug;
+
+/// Lock a std::sync::Mutex, recovering gracefully from poisoning.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -193,19 +198,19 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Vec<AgentDefinition>>> {
 /// Get agent definitions with memoization (cached by canonical `cwd`).
 pub fn get_agents(cwd: &Path) -> Vec<AgentDefinition> {
     let key = cwd.to_path_buf();
-    let map = cache().lock().unwrap();
+    let map = lock_or_recover(cache());
     if let Some(cached) = map.get(&key) {
         return cached.clone();
     }
     drop(map);
     let agents = load_agents(cwd);
-    let mut map = cache().lock().unwrap();
+    let mut map = lock_or_recover(cache());
     map.entry(key).or_insert(agents).clone()
 }
 
 /// Invalidate the agent cache so the next [`get_agents`] call rescans disk.
 pub fn clear_agent_cache() {
-    cache().lock().unwrap().clear();
+    lock_or_recover(cache()).clear();
 }
 
 // ── Directory discovery ──────────────────────────────────────────────────────

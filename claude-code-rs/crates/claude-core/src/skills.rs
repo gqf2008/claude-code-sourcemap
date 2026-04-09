@@ -18,8 +18,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tracing::debug;
+
+/// Lock a std::sync::Mutex, recovering gracefully from poisoning.
+/// Global caches use simple data (HashMap/HashSet) that remain valid
+/// even after a panic, so recovering via `into_inner()` is safe here.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Debug, Clone)]
 pub struct SkillEntry {
@@ -98,19 +105,19 @@ pub fn get_skills(cwd: &Path) -> Vec<SkillEntry> {
     let key = cwd.to_path_buf();
     let mut result;
     {
-        let map = cache().lock().unwrap();
+        let map = lock_or_recover(cache());
         if let Some(cached) = map.get(&key) {
             result = cached.clone();
         } else {
             drop(map); // Release lock during I/O
             let skills = load_skills(cwd);
-            let mut map = cache().lock().unwrap();
+            let mut map = lock_or_recover(cache());
             result = map.entry(key).or_insert(skills).clone();
         }
     }
 
     // Merge in dynamic skills (discovered from nested dirs + activated conditional)
-    let dyn_skills = dynamic_skills().lock().unwrap();
+    let dyn_skills = lock_or_recover(dynamic_skills());
     let mut seen: HashSet<String> = result.iter().map(|s| s.name.clone()).collect();
     for skill in dyn_skills.values() {
         if !seen.contains(&skill.name) {
@@ -125,16 +132,16 @@ pub fn get_skills(cwd: &Path) -> Vec<SkillEntry> {
 /// Invalidate the skill cache so the next [`get_skills`] call rescans disk.
 /// Does NOT clear activated conditional skills (they persist across reloads, like TS).
 pub fn clear_skill_cache() {
-    cache().lock().unwrap().clear();
+    lock_or_recover(cache()).clear();
 }
 
 /// Full reset: clears all caches including conditional/dynamic (for testing).
 pub fn clear_all_skill_state() {
-    cache().lock().unwrap().clear();
-    conditional_cache().lock().unwrap().clear();
-    activated_names().lock().unwrap().clear();
-    dynamic_skills().lock().unwrap().clear();
-    discovered_dirs().lock().unwrap().clear();
+    lock_or_recover(cache()).clear();
+    lock_or_recover(conditional_cache()).clear();
+    lock_or_recover(activated_names()).clear();
+    lock_or_recover(dynamic_skills()).clear();
+    lock_or_recover(discovered_dirs()).clear();
 }
 
 // ── Directory discovery ──────────────────────────────────────────────────────
@@ -178,8 +185,8 @@ fn skill_dirs(cwd: &Path) -> Vec<PathBuf> {
 pub fn load_skills(cwd: &Path) -> Vec<SkillEntry> {
     let all = load_skills_from_dirs(&skill_dirs(cwd));
     let mut regular = Vec::new();
-    let mut cond = conditional_cache().lock().unwrap();
-    let activated = activated_names().lock().unwrap();
+    let mut cond = lock_or_recover(conditional_cache());
+    let activated = lock_or_recover(activated_names());
 
     for skill in all {
         if !skill.paths.is_empty() {
@@ -415,7 +422,7 @@ fn extract_list(yaml: &str, key: &str) -> Option<Vec<String>> {
 ///
 /// Returns the names of newly activated skills.
 pub fn activate_conditional_skills(file_paths: &[&str], cwd: &Path) -> Vec<String> {
-    let mut cond = conditional_cache().lock().unwrap();
+    let mut cond = lock_or_recover(conditional_cache());
     if cond.is_empty() {
         return vec![];
     }
@@ -441,8 +448,8 @@ pub fn activate_conditional_skills(file_paths: &[&str], cwd: &Path) -> Vec<Strin
         }
     }
 
-    let mut dyn_skills = dynamic_skills().lock().unwrap();
-    let mut act_names = activated_names().lock().unwrap();
+    let mut dyn_skills = lock_or_recover(dynamic_skills());
+    let mut act_names = lock_or_recover(activated_names());
     for name in &to_remove {
         if let Some(skill) = cond.remove(name) {
             dyn_skills.insert(name.clone(), skill);
@@ -455,7 +462,7 @@ pub fn activate_conditional_skills(file_paths: &[&str], cwd: &Path) -> Vec<Strin
 
 /// Number of pending conditional skills (for debugging/testing).
 pub fn conditional_skill_count() -> usize {
-    conditional_cache().lock().unwrap().len()
+    lock_or_recover(conditional_cache()).len()
 }
 
 /// Compute a relative path from `cwd` to `path`, using forward slashes.
@@ -576,7 +583,7 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
     };
 
     let mut new_dirs = Vec::new();
-    let mut disc = discovered_dirs().lock().unwrap();
+    let mut disc = lock_or_recover(discovered_dirs());
 
     for fp in file_paths {
         let mut current = Path::new(fp)
@@ -617,7 +624,7 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
     // Load skills from discovered directories
     if !new_dirs.is_empty() {
         let skills = load_skills_from_dirs(&new_dirs);
-        let mut dyn_skills = dynamic_skills().lock().unwrap();
+        let mut dyn_skills = lock_or_recover(dynamic_skills());
         for skill in skills {
             if !skill.paths.is_empty() {
                 // Conditional → conditional cache

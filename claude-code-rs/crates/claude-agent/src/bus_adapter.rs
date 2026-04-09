@@ -37,6 +37,7 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -63,6 +64,8 @@ pub struct AgentCoreAdapter {
     mcp: Option<McpBusAdapter>,
     /// Current turn number (incremented on each submit).
     turn: Mutex<u32>,
+    /// Track tool_use id → tool_name so ToolResult can populate tool_name.
+    tool_names: Mutex<HashMap<String, String>>,
 }
 
 impl AgentCoreAdapter {
@@ -72,6 +75,7 @@ impl AgentCoreAdapter {
             bus: Mutex::new(bus),
             mcp: None,
             turn: Mutex::new(0),
+            tool_names: Mutex::new(HashMap::new()),
         }
     }
 
@@ -92,6 +96,7 @@ impl AgentCoreAdapter {
             bus: Mutex::new(bus),
             mcp,
             turn: Mutex::new(0),
+            tool_names: Mutex::new(HashMap::new()),
         }
     }
 
@@ -273,6 +278,9 @@ impl AgentCoreAdapter {
             bus.notify(AgentNotification::TurnStart { turn });
         }
 
+        // Clear stale tool name mappings from previous turn
+        self.tool_names.lock().await.clear();
+
         let mut stream = self.engine.submit(text).await;
 
         let mut input_tokens: u64 = 0;
@@ -284,27 +292,37 @@ impl AgentCoreAdapter {
 
                 AgentEvent::ThinkingDelta(text) => AgentNotification::ThinkingDelta { text },
 
-                AgentEvent::ToolUseStart { id, name } => AgentNotification::ToolUseStart {
-                    id,
-                    tool_name: name,
-                },
+                AgentEvent::ToolUseStart { id, name } => {
+                    self.tool_names.lock().await.insert(id.clone(), name.clone());
+                    AgentNotification::ToolUseStart {
+                        id,
+                        tool_name: name,
+                    }
+                }
 
-                AgentEvent::ToolUseReady { id, name, input } => AgentNotification::ToolUseReady {
-                    id,
-                    tool_name: name,
-                    input,
-                },
+                AgentEvent::ToolUseReady { id, name, input } => {
+                    self.tool_names.lock().await.insert(id.clone(), name.clone());
+                    AgentNotification::ToolUseReady {
+                        id,
+                        tool_name: name,
+                        input,
+                    }
+                }
 
                 AgentEvent::ToolResult {
                     id,
                     is_error,
                     text,
-                } => AgentNotification::ToolUseComplete {
-                    id,
-                    tool_name: String::new(), // not available in AgentEvent::ToolResult
-                    is_error,
-                    result_preview: text,
-                },
+                } => {
+                    let tool_name = self.tool_names.lock().await.remove(&id)
+                        .unwrap_or_default();
+                    AgentNotification::ToolUseComplete {
+                        id,
+                        tool_name,
+                        is_error,
+                        result_preview: text,
+                    }
+                }
 
                 AgentEvent::AssistantMessage(_msg) => {
                     // Full message already represented by TextDelta deltas
@@ -696,7 +714,7 @@ mod tests {
                 text,
             } => Some(AgentNotification::ToolUseComplete {
                 id,
-                tool_name: String::new(),
+                tool_name: String::new(), // stateless helper; real adapter uses tool_names map
                 is_error,
                 result_preview: text,
             }),
