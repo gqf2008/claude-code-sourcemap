@@ -119,11 +119,27 @@ impl StdioTransport {
     }
 
     /// Read one JSON-RPC message from stdout.
+    ///
+    /// Each individual `read_line` call is guarded by [`READ_LINE_TIMEOUT`] to
+    /// detect hung MCP servers even when the outer request timeout has not yet
+    /// elapsed (e.g. a server that writes partial output but never a newline).
     async fn read_message(&mut self) -> Result<JsonRpcMessage> {
+        const READ_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
         let mut line = String::new();
         loop {
             line.clear();
-            let bytes_read = self.stdout.read_line(&mut line).await?;
+
+            // Check child is still alive before blocking on stdout
+            if let Ok(Some(status)) = self.child.try_wait() {
+                anyhow::bail!("MCP server exited with {status} before producing a response");
+            }
+
+            let bytes_read = tokio::time::timeout(READ_LINE_TIMEOUT, self.stdout.read_line(&mut line))
+                .await
+                .map_err(|_| anyhow::anyhow!("MCP server read timed out after {}s (no output)", READ_LINE_TIMEOUT.as_secs()))?
+                .context("Failed to read from MCP server stdout")?;
+
             if bytes_read == 0 {
                 anyhow::bail!("MCP server closed stdout (EOF)");
             }

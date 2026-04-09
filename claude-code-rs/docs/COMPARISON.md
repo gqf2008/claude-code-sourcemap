@@ -1,7 +1,7 @@
 # Rust 实现 vs JS 原版 — 深度对比分析
 
 > 对比项目：`claude-code-rs` (Rust) vs `restored-src` (JS/TS 原版)
-> 分析日期：2026-04-12
+> 分析日期：2026-04-13
 > JS 版本基准：`@anthropic-ai/claude-code` v2.1.88
 
 ---
@@ -11,8 +11,8 @@
 | 指标 | Rust 实现 | JS 原版 | 优势方 |
 |------|-----------|---------|--------|
 | **源文件数** | 180 (.rs) | ~1,200+ (.ts/.tsx) | Rust (7x 更少) |
-| **代码行数** | ~59,400 | ~200,000+ (估算) | Rust (3.4x 更少) |
-| **测试数量** | 1,862 | 未知 | — |
+| **代码行数** | ~59,700 | ~200,000+ (估算) | Rust (3.4x 更少) |
+| **测试数量** | 1,868 | 未知 | — |
 | **Crate/包数** | 10 crates | 1 大包 | — |
 | **循环依赖** | 0 | 大量 | Rust |
 | **unsafe 块** | 0 | N/A | Rust |
@@ -44,10 +44,10 @@ main.tsx (4,684行) → interactiveHelpers → Ink App → REPL → 各组件
 
 | Rust Crate | 职责 | 文件 | 测试 | 对应 JS 目录 |
 |------------|------|------|------|-------------|
-| `claude-core` | 基础类型、Tool trait、配置、权限 | 26 | 478 | `Tool.ts`, `types.ts`, `constants/` |
+| `claude-core` | 基础类型、Tool trait、配置、权限 | 26 | 485 | `Tool.ts`, `types.ts`, `constants/` |
 | `claude-agent` | Agent 循环、hooks、权限、压缩、蜂群、插件 | 43 | 401 | `entrypoints/`, `utils/processUserInput/` |
 | `claude-tools` | 34+ 工具实现、ToolRegistry | 34 | 294 | `tools/` |
-| `claude-api` | HTTP 客户端、SSE 流、OAuth | 15 | 177 | `services/api/`, `query.ts` |
+| `claude-api` | HTTP 客户端、SSE 流、OAuth | 15 | 179 | `services/api/`, `query.ts` |
 | `claude-cli` | 二进制入口、REPL、CLI、UI | 26 | 242 | `main.tsx`, `commands/` |
 | `claude-bridge` | 外部消息网关 (飞书/TG/Slack) | 11 | 52 | 无 (Rust 独有) |
 | `claude-rpc` | JSON-RPC 外部接口 (TCP/stdio) | 9 | 84 | 无 (Rust 独有) |
@@ -347,11 +347,10 @@ RPC 接口          ████████████████████
 
 | 优先级 | 缺失功能 | JS 实现参考 | 建议 |
 |--------|---------|------------|------|
-| 中 | BriefTool | `tools/BriefTool/` | 富文本消息 + 文件附件 |
-| 中 | SyntheticOutputTool | `tools/SyntheticOutputTool/` | --print 结构化输出 |
-| 低 | McpAuthTool | `tools/McpAuthTool/` | MCP OAuth 认证流 |
-| 低 | 语音模式 | `voice/` + audio-capture | 优先级低 |
+| 低 | 语音模式 | `voice/` + audio-capture | 需要原生音频捕获 |
 | 低 | Vim 键位 | `vim/` 4 文件 | 终端 UI 成熟后考虑 |
+| 低 | ScheduleCronTool | `tools/ScheduleCronTool/` | 云/daemon 特性 |
+| 低 | RemoteTriggerTool | `tools/RemoteTriggerTool/` | 云 API 特性 |
 
 ---
 
@@ -359,7 +358,7 @@ RPC 接口          ████████████████████
 
 | 维度 | 优势方 | 说明 |
 |------|--------|------|
-| 架构清晰度 | Rust | 9 crates vs 1 大包，零循环依赖 |
+| 架构清晰度 | Rust | 10 crates vs 1 大包，零循环依赖 |
 | 代码质量 | Rust | 0 unsafe，0 clippy 警告，0 生产 panic |
 | 功能完整性 | JS | 插件市场、Computer Use、语音等 |
 | 安全性 | Rust | 编译时内存/并发保证 |
@@ -368,4 +367,4 @@ RPC 接口          ████████████████████
 | 生态扩展 | 各有优势 | Rust: Bridge/RPC；JS: 插件市场/DXT |
 | 权限精细度 | JS (略领先) | JS: Bash AST；Rust: 风险分类器 + 危险模式 |
 
-**结论：** Rust 实现在架构质量、代码简洁度、安全保证上全面领先，功能覆盖约 90%（核心功能 ~95%）。180 个源文件、59K 行代码、1,862 个测试、0 clippy 警告。已实现完整的插件系统（发现/安装/重载/MCP 集成）、Computer Use（截图/输入/剪贴板/平台检测/终端排除）、YOLO 自动模式、MCP 重连/健康监控/Elicitation、Agent 蜂群团队管理、压缩指标追踪。JS 原版在插件市场生态（DXT 包格式、GCS 市场）和部分云服务特性（定时任务、远程触发、语音模式）上更成熟。Rust 版本通过 Bridge 和 RPC 展现了独有的多客户端扩展方向。
+**结论：** Rust 实现在架构质量、代码简洁度、安全保证上全面领先，功能覆盖约 90%（核心功能 ~95%）。180 个源文件、59.7K 行代码、1,868 个测试、0 clippy 警告。已实现完整的插件系统（发现/安装/重载/MCP 集成）、Computer Use（截图/输入/剪贴板/平台检测/终端排除）、YOLO 自动模式、MCP 重连/健康监控/Elicitation、Agent 蜂群团队管理、压缩指标追踪。Phase 8 加固修复了 MCP stdio 超时、Bus 图片转发、OAuth 主动刷新等生产问题。JS 原版在插件市场生态（DXT 包格式、GCS 市场）和部分云服务特性（定时任务、远程触发、语音模式）上更成熟。Rust 版本通过 Bridge 和 RPC 展现了独有的多客户端扩展方向。

@@ -46,6 +46,7 @@ use tracing::{debug, error, info, warn};
 
 use claude_bus::bus::BusHandle;
 use claude_bus::events::*;
+use claude_core::message::{ContentBlock, ImageSource};
 use claude_mcp::McpBusAdapter;
 
 use crate::engine::QueryEngine;
@@ -142,9 +143,25 @@ impl AgentCoreAdapter {
             debug!("Adapter received request: {:?}", std::mem::discriminant(&request));
 
             match request {
-                AgentRequest::Submit { text, images: _ } => {
-                    // TODO: support images via submit_with_content
-                    self.handle_submit(&text).await;
+                AgentRequest::Submit { text, images } => {
+                    if images.is_empty() {
+                        self.handle_submit(&text).await;
+                    } else {
+                        // Build content blocks: text first, then images
+                        let mut content = Vec::with_capacity(1 + images.len());
+                        if !text.is_empty() {
+                            content.push(ContentBlock::Text { text: text.clone() });
+                        }
+                        for img in &images {
+                            content.push(ContentBlock::Image {
+                                source: ImageSource {
+                                    media_type: img.media_type.clone(),
+                                    data: img.data.clone(),
+                                },
+                            });
+                        }
+                        self.handle_submit_content(content).await;
+                    }
                 }
                 AgentRequest::Abort => {
                     self.engine.abort();
@@ -401,6 +418,86 @@ impl AgentCoreAdapter {
         }
 
         debug!("Submit stream ended for turn {}", turn);
+    }
+
+    /// Submit content blocks (text + images), stream the response, and forward events.
+    async fn handle_submit_content(&self, content: Vec<ContentBlock>) {
+        let turn = {
+            let mut t = self.turn.lock().await;
+            *t += 1;
+            *t
+        };
+
+        {
+            let bus = self.bus.lock().await;
+            bus.notify(AgentNotification::TurnStart { turn });
+        }
+
+        self.tool_names.lock().await.clear();
+
+        let mut stream = self.engine.submit_with_content(content).await;
+
+        let mut input_tokens: u64 = 0;
+        let mut output_tokens: u64 = 0;
+
+        while let Some(event) = stream.next().await {
+            let notification = match event {
+                AgentEvent::TextDelta(text) => AgentNotification::TextDelta { text },
+                AgentEvent::ThinkingDelta(text) => AgentNotification::ThinkingDelta { text },
+                AgentEvent::ToolUseStart { id, name } => {
+                    self.tool_names.lock().await.insert(id.clone(), name.clone());
+                    AgentNotification::ToolUseStart { id, tool_name: name }
+                }
+                AgentEvent::ToolUseReady { id, name, input } => {
+                    self.tool_names.lock().await.insert(id.clone(), name.clone());
+                    AgentNotification::ToolUseReady { id, tool_name: name, input }
+                }
+                AgentEvent::ToolResult { id, is_error, text } => {
+                    let tool_name = self.tool_names.lock().await.remove(&id).unwrap_or_default();
+                    AgentNotification::ToolUseComplete { id, tool_name, is_error, result_preview: text }
+                }
+                AgentEvent::AssistantMessage(_msg) => AgentNotification::AssistantMessage {
+                    turn,
+                    text_blocks: _msg.content.iter().filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    }).collect(),
+                },
+                AgentEvent::TurnComplete { stop_reason } => AgentNotification::TurnComplete {
+                    turn,
+                    stop_reason: format!("{:?}", stop_reason),
+                    usage: UsageInfo { input_tokens, output_tokens, cache_read_tokens: 0, cache_creation_tokens: 0 },
+                },
+                AgentEvent::UsageUpdate(usage) => {
+                    input_tokens = usage.input_tokens;
+                    output_tokens = usage.output_tokens;
+                    continue;
+                }
+                AgentEvent::TurnTokens { input_tokens: it, output_tokens: ot } => {
+                    input_tokens = it;
+                    output_tokens = ot;
+                    continue;
+                }
+                AgentEvent::ContextWarning { usage_pct, message } => {
+                    AgentNotification::ContextWarning { usage_pct, message }
+                }
+                AgentEvent::CompactStart => AgentNotification::CompactStart,
+                AgentEvent::CompactComplete { summary_len } => AgentNotification::CompactComplete { summary_len },
+                AgentEvent::MaxTurns { limit } => AgentNotification::TurnComplete {
+                    turn,
+                    stop_reason: format!("max_turns({})", limit),
+                    usage: UsageInfo { input_tokens, output_tokens, cache_read_tokens: 0, cache_creation_tokens: 0 },
+                },
+                AgentEvent::Error(msg) => AgentNotification::Error {
+                    code: ErrorCode::InternalError,
+                    message: msg,
+                },
+            };
+            let bus = self.bus.lock().await;
+            bus.notify(notification);
+        }
+
+        debug!("Submit (content) stream ended for turn {}", turn);
     }
 
     /// Handle compaction request.

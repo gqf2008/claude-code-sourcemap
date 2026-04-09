@@ -41,16 +41,31 @@ impl OAuthToken {
     /// the actual API call using the token.
     #[must_use] 
     pub fn is_expired(&self) -> bool {
-        const EXPIRY_BUFFER_SECS: u64 = 30;
+        self.expires_within_secs(30)
+    }
+
+    /// Check if the token will expire within the given number of seconds.
+    #[must_use]
+    pub fn expires_within_secs(&self, buffer_secs: u64) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            now + EXPIRY_BUFFER_SECS >= expires_at
+            now + buffer_secs >= expires_at
         } else {
             false
         }
+    }
+
+    /// Check if the token should be proactively refreshed.
+    ///
+    /// Returns true if the token will expire within 5 minutes, which gives
+    /// ample time to refresh before actual expiration.
+    #[must_use]
+    pub fn should_refresh(&self) -> bool {
+        const PROACTIVE_REFRESH_SECS: u64 = 300; // 5 minutes
+        self.expires_within_secs(PROACTIVE_REFRESH_SECS)
     }
 }
 
@@ -217,6 +232,44 @@ pub fn load_token() -> anyhow::Result<Option<OAuthToken>> {
     }
     let json = std::fs::read_to_string(&path)?;
     let token: OAuthToken = serde_json::from_str(&json)?;
+    Ok(Some(token))
+}
+
+/// Load the stored OAuth token and proactively refresh it if it will expire
+/// soon (within 5 minutes). Returns `None` if no token is stored.
+///
+/// This avoids the common pitfall of using an about-to-expire token for
+/// a long-running API call that then fails mid-stream.
+pub async fn ensure_valid_token(flow: &OAuthFlow) -> anyhow::Result<Option<OAuthToken>> {
+    let token = match load_token()? {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    // Already expired beyond recovery (no refresh token)
+    if token.is_expired() && token.refresh_token.is_none() {
+        return Ok(None);
+    }
+
+    // Proactively refresh if expiring soon or already expired
+    if token.should_refresh() {
+        if token.refresh_token.is_some() {
+            match flow.refresh(&token).await {
+                Ok(new_token) => {
+                    save_token(&new_token)?;
+                    return Ok(Some(new_token));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Proactive token refresh failed, using existing token");
+                    // Fall through — existing token might still work for a bit
+                    if token.is_expired() {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Some(token))
 }
 
@@ -418,5 +471,56 @@ mod tests {
         assert_eq!(token.access_token, "abc");
         assert!(token.expires_at.is_some());
         assert_eq!(token.scopes, vec!["read", "write"]);
+    }
+
+    #[test]
+    fn test_should_refresh() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Token expiring in 2 minutes — should refresh (within 5min window)
+        let soon = OAuthToken {
+            access_token: "test".into(),
+            token_type: "Bearer".into(),
+            refresh_token: Some("rt".into()),
+            expires_at: Some(now + 120),
+            scopes: vec![],
+        };
+        assert!(soon.should_refresh(), "Token expiring in 2min should trigger proactive refresh");
+        assert!(!soon.is_expired(), "Token expiring in 2min should not be expired yet");
+
+        // Token expiring in 10 minutes — should NOT refresh
+        let later = OAuthToken {
+            expires_at: Some(now + 600),
+            ..soon.clone()
+        };
+        assert!(!later.should_refresh(), "Token expiring in 10min should not trigger refresh");
+
+        // Token with no expiry — never refresh
+        let no_expiry = OAuthToken {
+            expires_at: None,
+            ..soon
+        };
+        assert!(!no_expiry.should_refresh());
+    }
+
+    #[test]
+    fn test_expires_within_secs() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let token = OAuthToken {
+            access_token: "test".into(),
+            token_type: "Bearer".into(),
+            refresh_token: None,
+            expires_at: Some(now + 100),
+            scopes: vec![],
+        };
+        assert!(token.expires_within_secs(200));
+        assert!(!token.expires_within_secs(50));
     }
 }
