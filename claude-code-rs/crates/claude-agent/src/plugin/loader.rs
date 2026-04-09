@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use tracing::{info, warn, debug};
 
-use super::manifest::PluginManifest;
+use super::manifest::{PluginManifest, PluginCommand, PluginSkill};
 
 /// A loaded and validated plugin.
 #[derive(Debug, Clone)]
@@ -134,6 +134,7 @@ impl PluginLoader {
 }
 
 /// Load plugins from a directory. Each subdirectory with a `plugin.json` is a plugin.
+/// Also supports DXT-format plugins (`.claude-plugin/plugin.json`).
 fn load_plugins_from_dir(dir: &Path, source: PluginSource, plugins: &mut Vec<LoadedPlugin>) {
     if !dir.is_dir() {
         return;
@@ -153,10 +154,18 @@ fn load_plugins_from_dir(dir: &Path, source: PluginSource, plugins: &mut Vec<Loa
             continue;
         }
 
-        let manifest_path = path.join("plugin.json");
-        if !manifest_path.exists() {
+        // Try simple format first: plugin.json at root
+        let simple_manifest = path.join("plugin.json");
+        // Then try DXT format: .claude-plugin/plugin.json
+        let dxt_manifest = path.join(".claude-plugin").join("plugin.json");
+
+        let manifest_path = if simple_manifest.exists() {
+            simple_manifest
+        } else if dxt_manifest.exists() {
+            dxt_manifest
+        } else {
             continue;
-        }
+        };
 
         match load_single_plugin(&manifest_path, &path, source) {
             Ok(plugin) => {
@@ -182,7 +191,7 @@ fn load_single_plugin(
     source: PluginSource,
 ) -> anyhow::Result<LoadedPlugin> {
     let content = std::fs::read_to_string(manifest_path)?;
-    let manifest: PluginManifest = serde_json::from_str(&content)?;
+    let mut manifest: PluginManifest = serde_json::from_str(&content)?;
 
     // Validate: name must not be empty
     if manifest.name.is_empty() {
@@ -203,6 +212,66 @@ fn load_single_plugin(
                 "Plugin command '{}' conflicts with built-in command",
                 cmd.name
             );
+        }
+    }
+
+    // Auto-discover commands from commands/ directory (DXT convention)
+    let cmds_dir = plugin_dir.join("commands");
+    if cmds_dir.is_dir() {
+        let existing_names: std::collections::HashSet<String> =
+            manifest.commands.iter().map(|c| c.name.clone()).collect();
+        if let Ok(entries) = std::fs::read_dir(&cmds_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if !existing_names.contains(stem) && !builtins.contains(&stem) {
+                            let relative = format!("commands/{}.md", stem);
+                            // Extract description from first heading
+                            let desc = std::fs::read_to_string(&path)
+                                .ok()
+                                .and_then(|c| c.lines().next()
+                                    .and_then(|l| l.strip_prefix('#'))
+                                    .map(|s| s.trim().to_string()))
+                                .unwrap_or_default();
+                            manifest.commands.push(PluginCommand {
+                                name: stem.to_string(),
+                                description: desc,
+                                prompt_file: Some(relative),
+                                prompt: None,
+                                allowed_tools: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Auto-discover skills from skills/ directory (DXT convention)
+    let skills_dir = plugin_dir.join("skills");
+    if skills_dir.is_dir() {
+        let existing_names: std::collections::HashSet<String> =
+            manifest.skills.iter().map(|s| s.name.clone()).collect();
+        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.exists() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if !existing_names.contains(name) {
+                                let relative = format!("skills/{}/SKILL.md", name);
+                                manifest.skills.push(PluginSkill {
+                                    name: name.to_string(),
+                                    description: String::new(),
+                                    prompt_file: relative,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -400,5 +469,103 @@ mod tests {
 
         let loader = PluginLoader::discover(tmp.path());
         assert_eq!(loader.count(), 0);
+    }
+
+    #[test]
+    fn test_dxt_format_discovery() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        let plugin_dir = plugins_dir.join("dxt-plugin");
+        let manifest_dir = plugin_dir.join(".claude-plugin");
+        fs::create_dir_all(&manifest_dir).unwrap();
+        fs::write(manifest_dir.join("plugin.json"), r#"{"name": "dxt-plugin", "version": "2.0.0"}"#).unwrap();
+
+        let loader = PluginLoader::discover(tmp.path());
+        assert_eq!(loader.count(), 1);
+        assert_eq!(loader.plugins()[0].manifest.name, "dxt-plugin");
+        assert_eq!(loader.plugins()[0].manifest.version, "2.0.0");
+    }
+
+    #[test]
+    fn test_auto_discover_commands_dir() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        let plugin_dir = create_plugin_dir(&plugins_dir, "auto-cmd", r#"{"name": "auto-cmd"}"#);
+
+        // Create commands/ directory with .md files
+        let cmds_dir = plugin_dir.join("commands");
+        fs::create_dir_all(&cmds_dir).unwrap();
+        fs::write(cmds_dir.join("deploy.md"), "# Deploy\nDeploy to production").unwrap();
+        fs::write(cmds_dir.join("test.md"), "# Test\nRun tests").unwrap();
+
+        let loader = PluginLoader::discover(tmp.path());
+        assert_eq!(loader.count(), 1);
+        let cmds = loader.all_commands();
+        assert_eq!(cmds.len(), 2);
+
+        let names: Vec<&str> = cmds.iter().map(|(_, c)| c.name.as_str()).collect();
+        assert!(names.contains(&"deploy"));
+        assert!(names.contains(&"test"));
+
+        // Verify prompt file reading works
+        let deploy = cmds.iter().find(|(_, c)| c.name == "deploy").unwrap();
+        let prompt = PluginLoader::command_prompt(deploy.0, deploy.1);
+        assert!(prompt.unwrap().contains("Deploy to production"));
+    }
+
+    #[test]
+    fn test_auto_discover_skills_dir() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        let plugin_dir = create_plugin_dir(&plugins_dir, "auto-skill", r#"{"name": "auto-skill"}"#);
+
+        // Create skills/ directory with SKILL.md
+        let skill_dir = plugin_dir.join("skills").join("code-review");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "Review code changes carefully").unwrap();
+
+        let loader = PluginLoader::discover(tmp.path());
+        let skills = loader.all_skills();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].1.name, "code-review");
+    }
+
+    #[test]
+    fn test_manifest_commands_take_precedence_over_auto_discover() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        let plugin_dir = create_plugin_dir(&plugins_dir, "precedence", r#"{
+            "name": "precedence",
+            "commands": [{"name": "deploy", "description": "From manifest", "prompt": "manifest deploy"}]
+        }"#);
+
+        // commands/deploy.md should NOT override manifest
+        let cmds_dir = plugin_dir.join("commands");
+        fs::create_dir_all(&cmds_dir).unwrap();
+        fs::write(cmds_dir.join("deploy.md"), "# Deploy\nFrom directory").unwrap();
+
+        let loader = PluginLoader::discover(tmp.path());
+        let cmds = loader.all_commands();
+        assert_eq!(cmds.len(), 1);
+        // Manifest command wins — uses inline prompt
+        let prompt = PluginLoader::command_prompt(cmds[0].0, cmds[0].1);
+        assert_eq!(prompt.as_deref(), Some("manifest deploy"));
+    }
+
+    #[test]
+    fn test_simple_format_preferred_over_dxt() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        let plugin_dir = plugins_dir.join("dual-format");
+
+        // Create both formats
+        fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        fs::write(plugin_dir.join("plugin.json"), r#"{"name": "simple-wins"}"#).unwrap();
+        fs::write(plugin_dir.join(".claude-plugin").join("plugin.json"), r#"{"name": "dxt-loses"}"#).unwrap();
+
+        let loader = PluginLoader::discover(tmp.path());
+        assert_eq!(loader.count(), 1);
+        // Simple format (plugin.json at root) wins
+        assert_eq!(loader.plugins()[0].manifest.name, "simple-wins");
     }
 }

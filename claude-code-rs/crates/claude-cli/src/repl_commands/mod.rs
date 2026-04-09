@@ -117,8 +117,22 @@ pub(crate) fn handle_plugin_command(sub: &str, cwd: &std::path::Path) {
                 None => println!("Usage: /plugin info <name>"),
             }
         }
+        "enable" => {
+            let name = sub.split_whitespace().nth(1);
+            match name {
+                Some(name) => println!("Enable not yet persistent. Plugin '{}' noted.", name),
+                None => println!("Usage: /plugin enable <name>"),
+            }
+        }
+        "disable" => {
+            let name = sub.split_whitespace().nth(1);
+            match name {
+                Some(name) => println!("Disable not yet persistent. Plugin '{}' noted.", name),
+                None => println!("Usage: /plugin disable <name>"),
+            }
+        }
         other => {
-            println!("Unknown subcommand: {}. Use: /plugin [list|info <name>]", other);
+            println!("Unknown subcommand: {}. Use: /plugin [list|info|enable|disable] <name>", other);
         }
     }
 }
