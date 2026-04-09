@@ -241,10 +241,11 @@ impl ComputerUseMcpServer {
             .unwrap_or(false);
 
         // Minimize terminal before capture if requested
+        // Best-effort: minimize terminal before capture.
+        // Uses a fixed delay which may be insufficient on slow systems.
         if exclude_terminal {
             minimize_terminal_window();
-            // Brief delay to let the window manager process the minimize
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
         let result = if let Some(region) = input.get("region") {
@@ -257,7 +258,6 @@ impl ComputerUseMcpServer {
             screenshot::capture_screen()
         };
 
-        // Restore terminal after capture
         if exclude_terminal {
             restore_terminal_window();
         }

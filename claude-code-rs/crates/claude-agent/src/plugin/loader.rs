@@ -162,9 +162,7 @@ impl PluginLoader {
 
             let content = std::fs::read_to_string(&manifest_path)?;
             let manifest: PluginManifest = serde_json::from_str(&content)?;
-            if manifest.name.is_empty() {
-                anyhow::bail!("Plugin name cannot be empty");
-            }
+            validate_plugin_name(&manifest.name)?;
 
             let dest = user_plugins_dir()?.join(&manifest.name);
             if dest.exists() {
@@ -374,14 +372,36 @@ fn user_plugins_dir() -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Recursively copy a directory.
+/// Validate that a plugin name is safe for use as a directory name.
+fn validate_plugin_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("Plugin name cannot be empty");
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\')
+        || name.contains('\0') || name.starts_with('.')
+    {
+        anyhow::bail!(
+            "Plugin name '{}' contains invalid characters (path separators, '..', or leading '.')",
+            name
+        );
+    }
+    Ok(())
+}
+
+/// Recursively copy a directory, skipping symlinks.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        let ft = entry.file_type()?;
+        // Skip symlinks to prevent exfiltration of files outside the plugin dir
+        if ft.is_symlink() {
+            tracing::warn!("Skipping symlink during plugin copy: {:?}", entry.path());
+            continue;
+        }
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
+        if ft.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path)?;
@@ -705,5 +725,51 @@ mod tests {
         let result = PluginLoader::install_from_path(&source);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No plugin.json"));
+    }
+
+    #[test]
+    fn test_install_path_traversal_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("evil");
+        fs::create_dir_all(&source).unwrap();
+
+        // Name with path traversal
+        fs::write(source.join("plugin.json"), r#"{"name": "../../etc/evil"}"#).unwrap();
+        let result = PluginLoader::install_from_path(&source);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid characters"));
+    }
+
+    #[test]
+    fn test_install_backslash_name_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("evil2");
+        fs::create_dir_all(&source).unwrap();
+
+        fs::write(source.join("plugin.json"), r#"{"name": "foo\\bar"}"#).unwrap();
+        let result = PluginLoader::install_from_path(&source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_install_dotname_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("evil3");
+        fs::create_dir_all(&source).unwrap();
+
+        fs::write(source.join("plugin.json"), r#"{"name": ".hidden"}"#).unwrap();
+        let result = PluginLoader::install_from_path(&source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_plugin_name() {
+        assert!(validate_plugin_name("my-plugin").is_ok());
+        assert!(validate_plugin_name("plugin_v2").is_ok());
+        assert!(validate_plugin_name("").is_err());
+        assert!(validate_plugin_name("..").is_err());
+        assert!(validate_plugin_name("a/b").is_err());
+        assert!(validate_plugin_name("a\\b").is_err());
+        assert!(validate_plugin_name(".hidden").is_err());
     }
 }
