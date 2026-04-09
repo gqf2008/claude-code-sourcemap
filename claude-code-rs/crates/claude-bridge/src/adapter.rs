@@ -90,6 +90,6 @@ mod tests {
     #[test]
     fn adapter_result_ok() {
         let r: AdapterResult<i32> = Ok(42);
-        assert_eq!(r.unwrap(), 42);
+        assert!(matches!(r, Ok(42)));
     }
 }

@@ -13,7 +13,7 @@ mod tests {
     #[test]
     fn rpc_result_ok() {
         let result: RpcResult<i32> = Ok(42);
-        assert_eq!(result.unwrap(), 42);
+        assert!(matches!(result, Ok(42)));
     }
 
     #[test]

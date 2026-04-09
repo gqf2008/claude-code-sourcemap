@@ -45,6 +45,5 @@ mod tests {
     fn branch_module_exists() {
         // This test verifies the module compiles correctly.
         // Integration tests for /branch are in commands.rs tests.
-        assert!(true);
     }
 }

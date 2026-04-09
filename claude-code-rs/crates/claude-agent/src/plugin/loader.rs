@@ -271,7 +271,7 @@ mod tests {
     fn test_discover_with_commands() {
         let tmp = TempDir::new().unwrap();
         let plugins_dir = tmp.path().join(".claude").join("plugins");
-        let plugin_dir = create_plugin_dir(&plugins_dir, "cmd-plugin", r#"{
+        let _plugin_dir = create_plugin_dir(&plugins_dir, "cmd-plugin", r#"{
             "name": "cmd-plugin",
             "commands": [
                 {"name": "greet", "description": "Say hello", "prompt": "Greet the user"}

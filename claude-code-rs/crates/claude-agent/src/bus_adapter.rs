@@ -577,7 +577,6 @@ impl AgentCoreAdapter {
 mod tests {
     use super::*;
     use claude_bus::bus::EventBus;
-    use claude_bus::events::*;
 
     // Note: full integration tests require a mock QueryEngine which needs
     // the API test-support feature. Here we test the event conversion logic.

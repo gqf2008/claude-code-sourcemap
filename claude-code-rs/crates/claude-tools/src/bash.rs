@@ -674,6 +674,6 @@ mod tests {
         s.push_str(&"b".repeat(1000));
         let truncated = truncate_output(s);
         // Should not panic on char boundary issues
-        assert!(truncated.len() > 0);
+        assert!(!truncated.is_empty());
     }
 }
