@@ -124,7 +124,7 @@ impl StdioTransport {
     /// detect hung MCP servers even when the outer request timeout has not yet
     /// elapsed (e.g. a server that writes partial output but never a newline).
     async fn read_message(&mut self) -> Result<JsonRpcMessage> {
-        const READ_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+        const READ_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
         let mut line = String::new();
         loop {

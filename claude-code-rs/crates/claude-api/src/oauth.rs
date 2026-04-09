@@ -252,20 +252,17 @@ pub async fn ensure_valid_token(flow: &OAuthFlow) -> anyhow::Result<Option<OAuth
     }
 
     // Proactively refresh if expiring soon or already expired
-    if token.should_refresh() {
-        if token.refresh_token.is_some() {
-            match flow.refresh(&token).await {
-                Ok(new_token) => {
-                    save_token(&new_token)?;
-                    return Ok(Some(new_token));
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Proactive token refresh failed, using existing token");
-                    // Fall through — existing token might still work for a bit
-                    if token.is_expired() {
-                        return Ok(None);
-                    }
-                }
+    if token.should_refresh() && token.refresh_token.is_some() {
+        match flow.refresh(&token).await {
+            Ok(new_token) => {
+                save_token(&new_token)?;
+                return Ok(Some(new_token));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Proactive token refresh failed");
+                // Refresh failed — don't return a token that's about to expire,
+                // the caller should handle the missing-token case
+                return Ok(None);
             }
         }
     }

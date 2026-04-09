@@ -284,22 +284,39 @@ impl AgentCoreAdapter {
 
     /// Submit a user prompt, stream the response, and forward all events to the bus.
     async fn handle_submit(&self, text: &str) {
+        let turn = self.begin_turn().await;
+        let stream = self.engine.submit(text).await;
+        self.stream_events(stream, turn).await;
+    }
+
+    /// Submit content blocks (text + images), stream the response, and forward events.
+    async fn handle_submit_content(&self, content: Vec<ContentBlock>) {
+        let turn = self.begin_turn().await;
+        let stream = self.engine.submit_with_content(content).await;
+        self.stream_events(stream, turn).await;
+    }
+
+    /// Increment turn counter, notify TurnStart, and clear stale tool mappings.
+    async fn begin_turn(&self) -> u32 {
         let turn = {
             let mut t = self.turn.lock().await;
             *t += 1;
             *t
         };
-
         {
             let bus = self.bus.lock().await;
             bus.notify(AgentNotification::TurnStart { turn });
         }
-
-        // Clear stale tool name mappings from previous turn
         self.tool_names.lock().await.clear();
+        turn
+    }
 
-        let mut stream = self.engine.submit(text).await;
-
+    /// Consume an agent event stream, mapping each event to a bus notification.
+    async fn stream_events(
+        &self,
+        mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = AgentEvent> + Send>>,
+        turn: u32,
+    ) {
         let mut input_tokens: u64 = 0;
         let mut output_tokens: u64 = 0;
 
@@ -342,15 +359,13 @@ impl AgentCoreAdapter {
                 }
 
                 AgentEvent::AssistantMessage(_msg) => {
-                    // Full message already represented by TextDelta deltas
-                    // and TurnComplete. Optionally emit blocks summary.
                     AgentNotification::AssistantMessage {
                         turn,
                         text_blocks: _msg
                             .content
                             .iter()
                             .filter_map(|b| match b {
-                                claude_core::message::ContentBlock::Text { text } => {
+                                ContentBlock::Text { text } => {
                                     Some(text.clone())
                                 }
                                 _ => None,
@@ -371,10 +386,9 @@ impl AgentCoreAdapter {
                 },
 
                 AgentEvent::UsageUpdate(usage) => {
-                    // Track cumulative tokens for TurnComplete
                     input_tokens = usage.input_tokens;
                     output_tokens = usage.output_tokens;
-                    continue; // Don't emit a separate notification
+                    continue;
                 }
 
                 AgentEvent::TurnTokens {
@@ -383,7 +397,7 @@ impl AgentCoreAdapter {
                 } => {
                     input_tokens = it;
                     output_tokens = ot;
-                    continue; // Tracked internally
+                    continue;
                 }
 
                 AgentEvent::ContextWarning { usage_pct, message } => {
@@ -417,87 +431,7 @@ impl AgentCoreAdapter {
             bus.notify(notification);
         }
 
-        debug!("Submit stream ended for turn {}", turn);
-    }
-
-    /// Submit content blocks (text + images), stream the response, and forward events.
-    async fn handle_submit_content(&self, content: Vec<ContentBlock>) {
-        let turn = {
-            let mut t = self.turn.lock().await;
-            *t += 1;
-            *t
-        };
-
-        {
-            let bus = self.bus.lock().await;
-            bus.notify(AgentNotification::TurnStart { turn });
-        }
-
-        self.tool_names.lock().await.clear();
-
-        let mut stream = self.engine.submit_with_content(content).await;
-
-        let mut input_tokens: u64 = 0;
-        let mut output_tokens: u64 = 0;
-
-        while let Some(event) = stream.next().await {
-            let notification = match event {
-                AgentEvent::TextDelta(text) => AgentNotification::TextDelta { text },
-                AgentEvent::ThinkingDelta(text) => AgentNotification::ThinkingDelta { text },
-                AgentEvent::ToolUseStart { id, name } => {
-                    self.tool_names.lock().await.insert(id.clone(), name.clone());
-                    AgentNotification::ToolUseStart { id, tool_name: name }
-                }
-                AgentEvent::ToolUseReady { id, name, input } => {
-                    self.tool_names.lock().await.insert(id.clone(), name.clone());
-                    AgentNotification::ToolUseReady { id, tool_name: name, input }
-                }
-                AgentEvent::ToolResult { id, is_error, text } => {
-                    let tool_name = self.tool_names.lock().await.remove(&id).unwrap_or_default();
-                    AgentNotification::ToolUseComplete { id, tool_name, is_error, result_preview: text }
-                }
-                AgentEvent::AssistantMessage(_msg) => AgentNotification::AssistantMessage {
-                    turn,
-                    text_blocks: _msg.content.iter().filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.clone()),
-                        _ => None,
-                    }).collect(),
-                },
-                AgentEvent::TurnComplete { stop_reason } => AgentNotification::TurnComplete {
-                    turn,
-                    stop_reason: format!("{:?}", stop_reason),
-                    usage: UsageInfo { input_tokens, output_tokens, cache_read_tokens: 0, cache_creation_tokens: 0 },
-                },
-                AgentEvent::UsageUpdate(usage) => {
-                    input_tokens = usage.input_tokens;
-                    output_tokens = usage.output_tokens;
-                    continue;
-                }
-                AgentEvent::TurnTokens { input_tokens: it, output_tokens: ot } => {
-                    input_tokens = it;
-                    output_tokens = ot;
-                    continue;
-                }
-                AgentEvent::ContextWarning { usage_pct, message } => {
-                    AgentNotification::ContextWarning { usage_pct, message }
-                }
-                AgentEvent::CompactStart => AgentNotification::CompactStart,
-                AgentEvent::CompactComplete { summary_len } => AgentNotification::CompactComplete { summary_len },
-                AgentEvent::MaxTurns { limit } => AgentNotification::TurnComplete {
-                    turn,
-                    stop_reason: format!("max_turns({})", limit),
-                    usage: UsageInfo { input_tokens, output_tokens, cache_read_tokens: 0, cache_creation_tokens: 0 },
-                },
-                AgentEvent::Error(msg) => AgentNotification::Error {
-                    code: ErrorCode::InternalError,
-                    message: msg,
-                },
-            };
-            let bus = self.bus.lock().await;
-            bus.notify(notification);
-        }
-
-        debug!("Submit (content) stream ended for turn {}", turn);
+        debug!("Stream ended for turn {}", turn);
     }
 
     /// Handle compaction request.
