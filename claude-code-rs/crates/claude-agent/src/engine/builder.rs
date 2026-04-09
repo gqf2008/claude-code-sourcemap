@@ -207,6 +207,20 @@ impl QueryEngineBuilder {
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
         let caps = claude_core::model::model_capabilities(&model_name);
 
+        // Apply CLAUDE_CODE_AUTO_COMPACT_WINDOW env var override (matches TS behavior)
+        let effective_context_window = {
+            let mut cw = caps.context_window;
+            if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
+                if let Ok(parsed) = val.parse::<u64>() {
+                    if parsed > 0 {
+                        cw = cw.min(parsed);
+                        tracing::info!("CLAUDE_CODE_AUTO_COMPACT_WINDOW={} → context_window={}", parsed, cw);
+                    }
+                }
+            }
+            cw
+        };
+
         // ── Assemble system prompt via modular builder ────────────────────────
         let claude_md_content = if self.load_claude_md {
             load_claude_md(&self.cwd)
@@ -321,7 +335,7 @@ impl QueryEngineBuilder {
                 cwd: self.cwd.clone(),
                 system_prompt: system_prompt.clone(),
                 max_turns: self.max_turns,
-                context_window: caps.context_window,
+                context_window: effective_context_window,
             },
             agent_tracker,
             cancel_tokens: coord_cancel_tokens.clone(),
@@ -362,7 +376,7 @@ impl QueryEngineBuilder {
                 temperature: None,
                 thinking: self.thinking.clone(),
                 token_budget: 0,
-                context_window: caps.context_window,
+                context_window: effective_context_window,
             },
             hooks,
             cwd: self.cwd,
@@ -377,7 +391,7 @@ impl QueryEngineBuilder {
             cancel_tokens: coord_cancel_tokens,
             agent_channels: coord_agent_channels,
             auto_compact: tokio::sync::Mutex::new(AutoCompactState::new()),
-            context_window: caps.context_window,
+            context_window: effective_context_window,
         }
     }
 }
