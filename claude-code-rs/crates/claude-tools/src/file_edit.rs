@@ -58,7 +58,7 @@ fn check_external_modification(path: &std::path::Path, content: &str) -> Option<
 }
 
 /// Update the file state cache after a successful read or edit.
-fn update_file_state(path: &std::path::Path, content: &str) {
+pub(crate) fn update_file_state(path: &std::path::Path, content: &str) {
     let key = path.to_string_lossy().to_string();
     let mut cache = file_state_cache().lock().unwrap_or_else(|p| p.into_inner());
     cache.insert(key, FileState::from_content(content, path));

@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tracing::{debug, warn};
 
 use crate::diff_ui::print_create_diff;
+use crate::file_edit::update_file_state;
 use crate::path_util;
 
 pub struct FileWriteTool;
@@ -64,6 +65,7 @@ impl Tool for FileWriteTool {
                 // File exists — show diff and overwrite
                 crate::diff_ui::print_diff(file_path, &old, content);
                 tokio::fs::write(&path, content).await?;
+                update_file_state(&path, content);
                 debug!(path = %path.display(), bytes = content.len(), "Overwrote existing file");
                 Ok(ToolResult::text(format!("Wrote {}", path.display())))
             }
@@ -71,12 +73,14 @@ impl Tool for FileWriteTool {
                 // New file
                 print_create_diff(file_path, content);
                 tokio::fs::write(&path, content).await?;
+                update_file_state(&path, content);
                 debug!(path = %path.display(), bytes = content.len(), "Created new file");
                 Ok(ToolResult::text(format!("Created {}", path.display())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 // Existing binary file — overwrite without diff
                 tokio::fs::write(&path, content).await?;
+                update_file_state(&path, content);
                 debug!(path = %path.display(), "Overwrote binary file");
                 Ok(ToolResult::text(format!("Wrote {} (binary file, no diff)", path.display())))
             }

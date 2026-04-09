@@ -8,6 +8,7 @@
 //! - Non-retryable: 400/401/403/404 (client errors)
 
 use std::time::Duration;
+use rand::RngExt;
 use tracing::{info, warn};
 
 /// Default retry parameters (matching TS defaults).
@@ -62,8 +63,13 @@ pub fn retry_delay(attempt: u32, retry_after_secs: Option<u64>, config: &RetryCo
     }
     let exp = config.base_delay_ms.saturating_mul(1u64 << (attempt - 1).min(20));
     let base = exp.min(config.max_delay_ms);
-    // Deterministic jitter: use attempt number to get ~12.5% average jitter
-    let jitter = (base / 8).wrapping_mul((u64::from(attempt).wrapping_mul(7) + 3) % 4);
+    // Random jitter 0..25% to prevent thundering herd
+    let jitter_max = base / 4;
+    let jitter = if jitter_max > 0 {
+        rand::rng().random_range(0..=jitter_max)
+    } else {
+        0
+    };
     Duration::from_millis(base.saturating_add(jitter))
 }
 

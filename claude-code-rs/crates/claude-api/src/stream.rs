@@ -168,13 +168,18 @@ pub fn sse_byte_stream_to_events(
         while let Some(chunk_result) = byte_stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    // Fast-path: try zero-copy UTF-8, fallback to lossy
+                    match std::str::from_utf8(&chunk) {
+                        Ok(s) => buffer.push_str(s),
+                        Err(_) => buffer.push_str(&String::from_utf8_lossy(&chunk)),
+                    }
                     while let Some(pos) = buffer.find('\n') {
-                        let line = buffer[..pos].to_string();
-                        buffer = buffer[pos + 1..].to_string();
-                        if let Some(event_result) = parse_sse_line(&line) {
+                        // Borrow the line slice — avoid allocating a new String
+                        if let Some(event_result) = parse_sse_line(&buffer[..pos]) {
                             yield event_result;
                         }
+                        // Single allocation for the remainder
+                        buffer = buffer[pos + 1..].to_string();
                     }
                 }
                 Err(e) => {

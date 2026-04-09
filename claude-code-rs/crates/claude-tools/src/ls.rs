@@ -113,9 +113,13 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Minimal glob matching: supports leading/trailing `*` wildcards.
+/// Minimal glob matching: supports leading/trailing `*` wildcards and `*x*` contains.
 fn glob_match(pattern: &str, name: &str) -> bool {
     if pattern == "*" { return true; }
+    // Handle *needle* (contains) before the prefix/suffix checks
+    if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() >= 2 {
+        return name.contains(&pattern[1..pattern.len() - 1]);
+    }
     if let Some(suffix) = pattern.strip_prefix('*') {
         return name.ends_with(suffix);
     }
@@ -209,13 +213,27 @@ mod tests {
 
     #[test]
     fn glob_match_patterns() {
+        // Exact and wildcard
         assert!(glob_match("*", "anything"));
+        assert!(glob_match("exact", "exact"));
+        assert!(!glob_match("exact", "other"));
+        // Suffix
         assert!(glob_match("*.log", "test.log"));
         assert!(!glob_match("*.log", "test.txt"));
+        // Prefix
         assert!(glob_match("node_modules*", "node_modules"));
         assert!(glob_match("node_modules*", "node_modules_backup"));
         assert!(!glob_match("node_modules*", "src"));
-        assert!(glob_match("exact", "exact"));
-        assert!(!glob_match("exact", "other"));
+        // Contains (*needle*)
+        assert!(glob_match("*foo*", "foobar"));
+        assert!(glob_match("*foo*", "barfoo"));
+        assert!(glob_match("*foo*", "barfoobaz"));
+        assert!(!glob_match("*foo*", "bar"));
+        // Double star — should match everything like *
+        assert!(glob_match("**", "anything"));
+        assert!(glob_match("**", ""));
+        // Single char pattern
+        assert!(glob_match("*a", "data"));
+        assert!(!glob_match("*a", "dab"));
     }
 }

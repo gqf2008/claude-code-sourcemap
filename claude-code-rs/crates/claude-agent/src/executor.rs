@@ -63,12 +63,12 @@ impl ToolExecutor {
         };
 
         // ── PreToolUse hook ──────────────────────────────────────────────────
-        let mut actual_input = input.clone();
+        let mut actual_input = input; // move, don't clone
         if self.hooks.has_hooks(HookEvent::PreToolUse) {
             let ctx = self.hooks.tool_ctx(
                 HookEvent::PreToolUse,
                 tool_name,
-                Some(input.clone()),
+                Some(actual_input.clone()), // clone only when hooks exist
                 None,
                 None,
             );

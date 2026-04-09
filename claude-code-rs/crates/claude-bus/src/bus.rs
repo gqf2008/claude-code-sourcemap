@@ -40,10 +40,12 @@ impl EventBus {
         const REQUEST_QUEUE_CAP: usize = 1024;
         /// Maximum queued permission responses before backpressure.
         const PERM_RESP_QUEUE_CAP: usize = 256;
+        /// Minimum capacity for critical event channels (permission requests).
+        const MIN_CRITICAL_CAP: usize = 256;
 
         let (notify_tx, notify_rx) = broadcast::channel(capacity);
         let (request_tx, request_rx) = mpsc::channel(REQUEST_QUEUE_CAP);
-        let (perm_req_tx, perm_req_rx) = broadcast::channel(capacity);
+        let (perm_req_tx, perm_req_rx) = broadcast::channel(capacity.max(MIN_CRITICAL_CAP));
         let (perm_resp_tx, perm_resp_rx) = mpsc::channel(PERM_RESP_QUEUE_CAP);
         let (core_alive_tx, core_alive_rx) = watch::channel(true);
 

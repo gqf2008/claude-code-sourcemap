@@ -213,44 +213,64 @@ fn validate_mcp_command(command: &str) -> Result<(), RpcError> {
 
 // ── Outbound: AgentNotification → JSON-RPC notification ──────────────────────
 
+/// Build a JSON object `Value` with pre-allocated capacity.
+#[inline]
+fn json_obj(capacity: usize, entries: &[(&str, Value)]) -> Option<Value> {
+    let mut map = serde_json::Map::with_capacity(capacity);
+    for (k, v) in entries {
+        map.insert((*k).into(), v.clone());
+    }
+    Some(Value::Object(map))
+}
+
 /// Convert an `AgentNotification` into a JSON-RPC `Notification`.
+#[inline]
 pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
     match notif {
         AgentNotification::TextDelta { text } => {
-            Notification::new("agent.textDelta", Some(serde_json::json!({ "text": text })))
+            Notification::new("agent.textDelta", json_obj(1, &[("text", Value::String(text.clone()))]))
         }
         AgentNotification::ThinkingDelta { text } => {
-            Notification::new("agent.thinkingDelta", Some(serde_json::json!({ "text": text })))
+            Notification::new("agent.thinkingDelta", json_obj(1, &[("text", Value::String(text.clone()))]))
         }
         AgentNotification::ToolUseStart { id, tool_name } => {
-            Notification::new("agent.toolStart", Some(serde_json::json!({
-                "id": id, "tool_name": tool_name
-            })))
+            Notification::new("agent.toolStart", json_obj(2, &[
+                ("id", Value::String(id.clone())),
+                ("tool_name", Value::String(tool_name.clone())),
+            ]))
         }
         AgentNotification::ToolUseReady { id, tool_name, input } => {
-            Notification::new("agent.toolReady", Some(serde_json::json!({
-                "id": id, "tool_name": tool_name, "input": input
-            })))
+            Notification::new("agent.toolReady", json_obj(3, &[
+                ("id", Value::String(id.clone())),
+                ("tool_name", Value::String(tool_name.clone())),
+                ("input", input.clone()),
+            ]))
         }
         AgentNotification::ToolUseComplete { id, tool_name, is_error, result_preview } => {
-            Notification::new("agent.toolComplete", Some(serde_json::json!({
-                "id": id, "tool_name": tool_name, "is_error": is_error,
-                "result_preview": result_preview
-            })))
+            let mut map = serde_json::Map::with_capacity(4);
+            map.insert("id".into(), Value::String(id.clone()));
+            map.insert("tool_name".into(), Value::String(tool_name.clone()));
+            map.insert("is_error".into(), Value::Bool(*is_error));
+            map.insert("result_preview".into(), match result_preview {
+                Some(s) => Value::String(s.clone()),
+                None => Value::Null,
+            });
+            Notification::new("agent.toolComplete", Some(Value::Object(map)))
         }
         AgentNotification::TurnStart { turn } => {
-            Notification::new("agent.turnStart", Some(serde_json::json!({ "turn": turn })))
+            Notification::new("agent.turnStart", json_obj(1, &[("turn", serde_json::json!(turn))]))
         }
         AgentNotification::TurnComplete { turn, stop_reason, usage } => {
-            Notification::new("agent.turnComplete", Some(serde_json::json!({
-                "turn": turn, "stop_reason": stop_reason,
-                "usage": {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "cache_read_tokens": usage.cache_read_tokens,
-                    "cache_creation_tokens": usage.cache_creation_tokens,
-                }
-            })))
+            let mut map = serde_json::Map::with_capacity(3);
+            map.insert("turn".into(), serde_json::json!(turn));
+            map.insert("stop_reason".into(), Value::String(stop_reason.clone()));
+            let mut umap = serde_json::Map::with_capacity(4);
+            umap.insert("input_tokens".into(), serde_json::json!(usage.input_tokens));
+            umap.insert("output_tokens".into(), serde_json::json!(usage.output_tokens));
+            umap.insert("cache_read_tokens".into(), serde_json::json!(usage.cache_read_tokens));
+            umap.insert("cache_creation_tokens".into(), serde_json::json!(usage.cache_creation_tokens));
+            map.insert("usage".into(), Value::Object(umap));
+            Notification::new("agent.turnComplete", Some(Value::Object(map)))
         }
         AgentNotification::AssistantMessage { turn, text_blocks } => {
             Notification::new("agent.assistantMessage", Some(serde_json::json!({
@@ -258,35 +278,38 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
             })))
         }
         AgentNotification::SessionStart { session_id, model } => {
-            Notification::new("session.start", Some(serde_json::json!({
-                "session_id": session_id, "model": model
-            })))
+            Notification::new("session.start", json_obj(2, &[
+                ("session_id", Value::String(session_id.clone())),
+                ("model", Value::String(model.clone())),
+            ]))
         }
         AgentNotification::SessionEnd { reason } => {
-            Notification::new("session.end", Some(serde_json::json!({ "reason": reason })))
+            Notification::new("session.end", json_obj(1, &[("reason", Value::String(reason.clone()))]))
         }
         AgentNotification::SessionSaved { session_id } => {
-            Notification::new("session.saved", Some(serde_json::json!({ "session_id": session_id })))
+            Notification::new("session.saved", json_obj(1, &[("session_id", Value::String(session_id.clone()))]))
         }
         AgentNotification::SessionStatus {
             session_id, model, total_turns,
             total_input_tokens, total_output_tokens, context_usage_pct,
         } => {
-            Notification::new("session.status", Some(serde_json::json!({
-                "session_id": session_id, "model": model,
-                "total_turns": total_turns,
-                "total_input_tokens": total_input_tokens,
-                "total_output_tokens": total_output_tokens,
-                "context_usage_pct": context_usage_pct,
-            })))
+            let mut map = serde_json::Map::with_capacity(6);
+            map.insert("session_id".into(), Value::String(session_id.clone()));
+            map.insert("model".into(), Value::String(model.clone()));
+            map.insert("total_turns".into(), serde_json::json!(total_turns));
+            map.insert("total_input_tokens".into(), serde_json::json!(total_input_tokens));
+            map.insert("total_output_tokens".into(), serde_json::json!(total_output_tokens));
+            map.insert("context_usage_pct".into(), serde_json::json!(context_usage_pct));
+            Notification::new("session.status", Some(Value::Object(map)))
         }
         AgentNotification::HistoryCleared => {
             Notification::new("agent.historyCleared", None)
         }
         AgentNotification::ModelChanged { model, display_name } => {
-            Notification::new("agent.modelChanged", Some(serde_json::json!({
-                "model": model, "display_name": display_name
-            })))
+            Notification::new("agent.modelChanged", json_obj(2, &[
+                ("model", Value::String(model.clone())),
+                ("display_name", Value::String(display_name.clone())),
+            ]))
         }
         AgentNotification::ContextWarning { usage_pct, message } => {
             Notification::new("agent.contextWarning", Some(serde_json::json!({
@@ -297,44 +320,52 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
             Notification::new("agent.compactStart", None)
         }
         AgentNotification::CompactComplete { summary_len } => {
-            Notification::new("agent.compactComplete", Some(serde_json::json!({
-                "summary_len": summary_len
-            })))
+            Notification::new("agent.compactComplete", json_obj(1, &[("summary_len", serde_json::json!(summary_len))]))
         }
         AgentNotification::AgentSpawned { agent_id, name, agent_type, background } => {
-            Notification::new("agent.spawned", Some(serde_json::json!({
-                "agent_id": agent_id, "name": name,
-                "agent_type": agent_type, "background": background
-            })))
+            let mut map = serde_json::Map::with_capacity(4);
+            map.insert("agent_id".into(), Value::String(agent_id.clone()));
+            map.insert("name".into(), match name {
+                Some(s) => Value::String(s.clone()),
+                None => Value::Null,
+            });
+            map.insert("agent_type".into(), Value::String(agent_type.clone()));
+            map.insert("background".into(), Value::Bool(*background));
+            Notification::new("agent.spawned", Some(Value::Object(map)))
         }
         AgentNotification::AgentProgress { agent_id, text } => {
-            Notification::new("agent.progress", Some(serde_json::json!({
-                "agent_id": agent_id, "text": text
-            })))
+            Notification::new("agent.progress", json_obj(2, &[
+                ("agent_id", Value::String(agent_id.clone())),
+                ("text", Value::String(text.clone())),
+            ]))
         }
         AgentNotification::AgentComplete { agent_id, result, is_error } => {
-            Notification::new("agent.complete", Some(serde_json::json!({
-                "agent_id": agent_id, "result": result, "is_error": is_error
-            })))
+            Notification::new("agent.complete", json_obj(3, &[
+                ("agent_id", Value::String(agent_id.clone())),
+                ("result", Value::String(result.clone())),
+                ("is_error", Value::Bool(*is_error)),
+            ]))
         }
         AgentNotification::McpServerConnected { name, tool_count } => {
-            Notification::new("mcp.connected", Some(serde_json::json!({
-                "name": name, "tool_count": tool_count
-            })))
+            Notification::new("mcp.connected", json_obj(2, &[
+                ("name", Value::String(name.clone())),
+                ("tool_count", serde_json::json!(tool_count)),
+            ]))
         }
         AgentNotification::McpServerDisconnected { name } => {
-            Notification::new("mcp.disconnected", Some(serde_json::json!({ "name": name })))
+            Notification::new("mcp.disconnected", json_obj(1, &[("name", Value::String(name.clone()))]))
         }
         AgentNotification::McpServerError { name, error } => {
-            Notification::new("mcp.error", Some(serde_json::json!({
-                "name": name, "error": error
-            })))
+            Notification::new("mcp.error", json_obj(2, &[
+                ("name", Value::String(name.clone())),
+                ("error", Value::String(error.clone())),
+            ]))
         }
         AgentNotification::McpServerList { servers } => {
             let list: Vec<Value> = servers.iter().map(|s| serde_json::json!({
                 "name": s.name, "tool_count": s.tool_count, "connected": s.connected
             })).collect();
-            Notification::new("mcp.serverList", Some(serde_json::json!({ "servers": list })))
+            Notification::new("mcp.serverList", json_obj(1, &[("servers", Value::Array(list))]))
         }
         AgentNotification::MemoryExtracted { facts } => {
             Notification::new("agent.memoryExtracted", Some(serde_json::json!({ "facts": facts })))
@@ -343,18 +374,19 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
             let list: Vec<Value> = models.iter().map(|m| serde_json::json!({
                 "id": m.id, "display_name": m.display_name
             })).collect();
-            Notification::new("agent.modelList", Some(serde_json::json!({ "models": list })))
+            Notification::new("agent.modelList", json_obj(1, &[("models", Value::Array(list))]))
         }
         AgentNotification::ToolList { tools } => {
             let list: Vec<Value> = tools.iter().map(|t| serde_json::json!({
                 "name": t.name, "description": t.description, "enabled": t.enabled
             })).collect();
-            Notification::new("agent.toolList", Some(serde_json::json!({ "tools": list })))
+            Notification::new("agent.toolList", json_obj(1, &[("tools", Value::Array(list))]))
         }
         AgentNotification::Error { code, message } => {
-            Notification::new("agent.error", Some(serde_json::json!({
-                "code": code.to_string(), "message": message
-            })))
+            Notification::new("agent.error", json_obj(2, &[
+                ("code", Value::String(code.to_string())),
+                ("message", Value::String(message.clone())),
+            ]))
         }
     }
 }
