@@ -302,13 +302,122 @@ impl McpManager {
         for name in &dead {
             warn!("MCP server '{}' is dead, removing", name);
             if let Some(mut client) = servers.remove(name) {
-                // Timeout to prevent holding write lock indefinitely
                 let close_timeout = std::time::Duration::from_secs(5);
                 if tokio::time::timeout(close_timeout, client.close()).await.is_err() {
                     warn!("MCP server '{}' close timed out after {}s", name, close_timeout.as_secs());
                 }
             }
         }
+    }
+
+    /// Auto-reconnect dead servers using stored configs.
+    ///
+    /// Returns the names of servers that were successfully reconnected.
+    pub async fn reconnect_dead_servers(&self) -> Vec<String> {
+        // First identify dead servers
+        let dead_names: Vec<String> = {
+            let mut servers = self.servers.write().await;
+            let mut dead = Vec::new();
+            for (name, client) in servers.iter_mut() {
+                if !client.is_alive() {
+                    dead.push(name.clone());
+                }
+            }
+            // Remove dead clients
+            for name in &dead {
+                if let Some(mut client) = servers.remove(name) {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        client.close(),
+                    ).await;
+                }
+            }
+            dead
+        };
+
+        if dead_names.is_empty() {
+            return Vec::new();
+        }
+
+        // Find configs for dead servers and try to reconnect
+        let configs = self.configs.read().await;
+        let mut reconnected = Vec::new();
+
+        for name in &dead_names {
+            if let Some(config) = configs.iter().find(|c| &c.name == name) {
+                info!("Attempting to reconnect MCP server '{}'", name);
+                match McpClient::connect(config).await {
+                    Ok(client) => {
+                        let mut servers = self.servers.write().await;
+                        servers.insert(name.clone(), client);
+                        info!("MCP server '{}' reconnected successfully", name);
+                        reconnected.push(name.clone());
+                    }
+                    Err(e) => {
+                        warn!("Failed to reconnect MCP server '{}': {}", name, e);
+                    }
+                }
+            } else {
+                warn!("No config found for dead MCP server '{}', cannot reconnect", name);
+            }
+        }
+
+        reconnected
+    }
+
+    /// Spawn a background health monitor that periodically checks server health
+    /// and attempts to reconnect dead servers.
+    ///
+    /// Returns a `JoinHandle` for the background task. Drop the handle or
+    /// abort it to stop monitoring.
+    pub fn spawn_health_monitor(
+        self: &Arc<Self>,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let reconnected = manager.reconnect_dead_servers().await;
+                if !reconnected.is_empty() {
+                    info!("Health monitor reconnected {} servers: {:?}", reconnected.len(), reconnected);
+                }
+            }
+        })
+    }
+
+    /// Subscribe to resource updates on a specific server.
+    pub async fn subscribe_resource(&self, server_name: &str, uri: &str) -> Result<()> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
+        client.subscribe_resource(uri).await
+    }
+
+    /// Unsubscribe from resource updates on a specific server.
+    pub async fn unsubscribe_resource(&self, server_name: &str, uri: &str) -> Result<()> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
+        client.unsubscribe_resource(uri).await
+    }
+
+    /// Send an elicitation request through a specific server.
+    pub async fn create_elicitation(
+        &self,
+        server_name: &str,
+        message: &str,
+        requested_schema: serde_json::Value,
+    ) -> Result<crate::types::ElicitationResponse> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
+        client.create_elicitation(message, requested_schema).await
     }
 
     /// Refresh tools for a specific server (after `list_changed` notification).
@@ -660,5 +769,46 @@ mod tests {
         let (server, tool) = parse_mcp_tool_name(&formatted).unwrap();
         assert_eq!(server, "my_server");
         assert_eq!(tool, "read_file");
+    }
+
+    #[tokio::test]
+    async fn reconnect_dead_servers_empty() {
+        let mgr = McpManager::new();
+        let reconnected = mgr.reconnect_dead_servers().await;
+        assert!(reconnected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscribe_resource_unknown_server() {
+        let mgr = McpManager::new();
+        let err = mgr.subscribe_resource("nonexistent", "file:///x").await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_resource_unknown_server() {
+        let mgr = McpManager::new();
+        let err = mgr.unsubscribe_resource("nonexistent", "file:///x").await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn create_elicitation_unknown_server() {
+        let mgr = McpManager::new();
+        let err = mgr.create_elicitation("missing", "hi", serde_json::json!({})).await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn health_monitor_can_be_aborted() {
+        let mgr = Arc::new(McpManager::new());
+        let handle = mgr.spawn_health_monitor(std::time::Duration::from_millis(50));
+        // Let it run briefly
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        handle.abort();
+        let result = handle.await;
+        assert!(result.is_err()); // JoinError from abort
     }
 }

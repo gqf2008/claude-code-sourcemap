@@ -18,6 +18,8 @@ pub struct ServerCapabilities {
     pub prompts: Option<Value>,
     #[serde(default)]
     pub logging: Option<Value>,
+    #[serde(default)]
+    pub elicitation: Option<Value>,
 }
 
 /// Server info returned during initialization.
@@ -151,6 +153,45 @@ pub struct McpResourceRef {
     pub mime_type: Option<String>,
 }
 
+// ── Elicitation types ─────────────────────────────────────────────────────────
+
+/// An elicitation request sent to the client by an MCP server.
+/// Allows servers to request structured information from the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationRequest {
+    /// Human-readable message explaining what information is needed.
+    pub message: String,
+    /// JSON Schema describing the requested data shape.
+    #[serde(rename = "requestedSchema")]
+    pub requested_schema: Value,
+}
+
+/// The client's response to an elicitation request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationResponse {
+    /// "accept" if the user provided data, "decline" if they refused.
+    pub action: ElicitationAction,
+    /// User-provided data matching the requested schema (present when action=accept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+}
+
+/// Action taken on an elicitation request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElicitationAction {
+    Accept,
+    Decline,
+}
+
+// ── Resource subscription types ──────────────────────────────────────────────
+
+/// A resource update notification payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceUpdated {
+    pub uri: String,
+}
+
 // ── Server configuration ─────────────────────────────────────────────────────
 
 /// Configuration for connecting to an MCP server via stdio.
@@ -224,6 +265,7 @@ pub async fn persist_large_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn tool_result_text() {
@@ -397,5 +439,61 @@ mod tests {
             }
             _ => panic!("expected resource content"),
         }
+    }
+
+    #[test]
+    fn elicitation_request_roundtrip() {
+        let req = ElicitationRequest {
+            message: "Enter your API key".into(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {
+                    "api_key": { "type": "string" }
+                },
+                "required": ["api_key"]
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deser: ElicitationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.message, "Enter your API key");
+        assert!(deser.requested_schema["properties"]["api_key"]["type"]
+            .as_str()
+            .unwrap()
+            .contains("string"));
+    }
+
+    #[test]
+    fn elicitation_response_accept() {
+        let resp_json = r#"{"action":"accept","content":{"api_key":"sk-123"}}"#;
+        let resp: ElicitationResponse = serde_json::from_str(resp_json).unwrap();
+        assert_eq!(resp.action, ElicitationAction::Accept);
+        assert_eq!(
+            resp.content.unwrap()["api_key"].as_str().unwrap(),
+            "sk-123"
+        );
+    }
+
+    #[test]
+    fn elicitation_response_decline() {
+        let resp_json = r#"{"action":"decline"}"#;
+        let resp: ElicitationResponse = serde_json::from_str(resp_json).unwrap();
+        assert_eq!(resp.action, ElicitationAction::Decline);
+        assert!(resp.content.is_none());
+    }
+
+    #[test]
+    fn resource_updated_deserialize() {
+        let json = r#"{"uri":"file:///project/src/main.rs"}"#;
+        let upd: ResourceUpdated = serde_json::from_str(json).unwrap();
+        assert_eq!(upd.uri, "file:///project/src/main.rs");
+    }
+
+    #[test]
+    fn server_capabilities_with_elicitation() {
+        let json = r#"{"tools":{},"elicitation":{"supported":true}}"#;
+        let caps: ServerCapabilities = serde_json::from_str(json).unwrap();
+        assert!(caps.elicitation.is_some());
+        assert!(caps.tools.is_some());
+        assert!(caps.resources.is_none());
     }
 }

@@ -233,4 +233,75 @@ impl McpClient {
         self.tools_cache = None;
         self.list_tools().await
     }
+
+    // ── Resource subscriptions ───────────────────────────────────────────────
+
+    /// Subscribe to updates for a resource URI.
+    ///
+    /// Requires server `resources.subscribe` capability.
+    pub async fn subscribe_resource(&mut self, uri: &str) -> Result<()> {
+        debug!("MCP subscribe resource: {}/{}", self.server_name, uri);
+        self.transport
+            .request("resources/subscribe", Some(json!({ "uri": uri })))
+            .await
+            .with_context(|| format!("MCP resources/subscribe '{uri}' failed"))?;
+        Ok(())
+    }
+
+    /// Unsubscribe from resource updates.
+    pub async fn unsubscribe_resource(&mut self, uri: &str) -> Result<()> {
+        debug!("MCP unsubscribe resource: {}/{}", self.server_name, uri);
+        self.transport
+            .request("resources/unsubscribe", Some(json!({ "uri": uri })))
+            .await
+            .with_context(|| format!("MCP resources/unsubscribe '{uri}' failed"))?;
+        Ok(())
+    }
+
+    // ── Elicitation ──────────────────────────────────────────────────────────
+
+    /// Send an elicitation request to gather structured input from the user.
+    ///
+    /// Requires server `elicitation` capability.
+    pub async fn create_elicitation(
+        &mut self,
+        message: &str,
+        requested_schema: Value,
+    ) -> Result<crate::types::ElicitationResponse> {
+        debug!("MCP elicitation: {}: {}", self.server_name, message);
+        let result = self
+            .transport
+            .request(
+                "elicitation/create",
+                Some(json!({
+                    "message": message,
+                    "requestedSchema": requested_schema
+                })),
+            )
+            .await
+            .with_context(|| format!("MCP elicitation/create failed for '{}'", self.server_name))?;
+
+        serde_json::from_value(result).context("Failed to parse elicitation response")
+    }
+
+    /// Check if the server supports elicitation.
+    pub fn supports_elicitation(&self) -> bool {
+        self.capabilities.elicitation.is_some()
+    }
+
+    /// Check if the server supports resource subscriptions.
+    pub fn supports_resource_subscriptions(&self) -> bool {
+        // resources capability with subscribe=true
+        self.capabilities
+            .resources
+            .as_ref()
+            .and_then(|v| v.get("subscribe"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Get the stored config name.
+    pub fn name(&self) -> &str {
+        &self.server_name
+    }
 }
