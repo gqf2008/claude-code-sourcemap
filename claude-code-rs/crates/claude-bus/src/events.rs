@@ -256,8 +256,8 @@ pub enum AgentRequest {
 
 /// Permission request from Agent Core → UI.
 ///
-/// The core blocks until the UI responds with a [`PermissionResponse`].
-/// Sent over a dedicated channel (not broadcast) since only one UI should respond.
+/// The core blocks until a UI responds with a [`PermissionResponse`].
+/// Broadcast to all clients; the first matching response wins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequest {
     /// Unique ID for correlating request/response.

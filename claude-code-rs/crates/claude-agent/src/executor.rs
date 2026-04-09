@@ -3,6 +3,7 @@ use futures::future::join_all;
 use claude_core::tool::ToolContext;
 use claude_core::message::{ContentBlock, ToolResultContent};
 use claude_core::permissions::PermissionBehavior;
+use claude_core::permissions::PermissionResponse;
 use claude_tools::ToolRegistry;
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -174,7 +175,11 @@ impl ToolExecutor {
                 }
 
                 let desc = format!("{}: {}", tool_name, serde_json::to_string(&input).unwrap_or_default());
-                let response = PermissionChecker::prompt_user(tool_name, &desc, &perm.suggestions);
+                let tn = tool_name.to_string();
+                let suggestions = perm.suggestions.clone();
+                let response = tokio::task::spawn_blocking(move || {
+                    PermissionChecker::prompt_user(&tn, &desc, &suggestions)
+                }).await.unwrap_or_else(|_| PermissionResponse::deny());
                 if !response.allowed {
                     // Fire PermissionDenied hook
                     if self.hooks.has_hooks(HookEvent::PermissionDenied) {

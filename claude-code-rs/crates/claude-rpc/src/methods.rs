@@ -141,6 +141,10 @@ pub fn parse_request(method: &str, params: Option<Value>) -> Result<AgentRequest
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, "Missing 'command'"))?
                 .to_string();
+
+            // Security: validate MCP command against allowlist
+            validate_mcp_command(&command)?;
+
             let args: Vec<String> = p.get("args")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -169,6 +173,42 @@ pub fn parse_request(method: &str, params: Option<Value>) -> Result<AgentRequest
             format!("Unknown method: {}", method),
         )),
     }
+}
+
+// ── MCP command validation ───────────────────────────────────────────────────
+
+/// Allowed MCP server commands. Only known-safe executables are permitted.
+const MCP_ALLOWED_COMMANDS: &[&str] = &[
+    "npx", "node", "python", "python3", "uvx", "uv",
+    "deno", "bun", "cargo", "go", "java",
+    "docker", "podman",
+    "mcp-server", "mcp-proxy",
+];
+
+/// Validate that an MCP command is on the allowlist.
+fn validate_mcp_command(command: &str) -> Result<(), RpcError> {
+    // Extract the base command name (strip path, handle .exe on Windows)
+    let base = std::path::Path::new(command)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command);
+
+    if MCP_ALLOWED_COMMANDS.iter().any(|&allowed| base.eq_ignore_ascii_case(allowed)) {
+        return Ok(());
+    }
+
+    // Also allow commands that start with "mcp-" (common naming convention)
+    if base.starts_with("mcp-") || base.starts_with("mcp_") {
+        return Ok(());
+    }
+
+    Err(RpcError::new(
+        error_codes::INVALID_PARAMS,
+        format!(
+            "Command '{}' is not allowed for MCP. Allowed: {:?}, or any command starting with 'mcp-'",
+            command, MCP_ALLOWED_COMMANDS
+        ),
+    ))
 }
 
 // ── Outbound: AgentNotification → JSON-RPC notification ──────────────────────

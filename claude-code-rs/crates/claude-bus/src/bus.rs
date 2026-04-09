@@ -9,7 +9,7 @@
 //! ```text
 //! AgentNotification:  Core ──broadcast──→ Client(s)  (1:N, lossy on slow receivers)
 //! AgentRequest:       Client ──mpsc────→ Core        (N:1, backpressure via bounded)
-//! PermissionRequest:  Core ──mpsc──────→ Client      (1:1, only one UI responds)
+//! PermissionRequest:  Core ──broadcast──→ Client(s)  (1:N, first responder wins)
 //! PermissionResponse: Client ──mpsc────→ Core        (1:1, paired with request)
 //! ```
 
@@ -38,14 +38,14 @@ impl EventBus {
     pub fn new(capacity: usize) -> (BusHandle, ClientHandle) {
         let (notify_tx, notify_rx) = broadcast::channel(capacity);
         let (request_tx, request_rx) = mpsc::unbounded_channel();
-        let (perm_req_tx, perm_req_rx) = mpsc::unbounded_channel();
+        let (perm_req_tx, perm_req_rx) = broadcast::channel(capacity);
         let (perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel();
 
         let bus = BusHandle {
             notify_tx: notify_tx.clone(),
             request_rx,
             request_tx: request_tx.clone(),
-            perm_req_tx,
+            perm_req_tx: perm_req_tx.clone(),
             perm_resp_rx,
             perm_resp_tx: perm_resp_tx.clone(),
         };
@@ -54,7 +54,8 @@ impl EventBus {
             notify_rx,
             _notify_tx: notify_tx,
             request_tx,
-            perm_req_rx: Some(perm_req_rx),
+            perm_req_rx,
+            _perm_req_tx: perm_req_tx,
             perm_resp_tx,
         };
 
@@ -73,7 +74,7 @@ pub struct BusHandle {
     notify_tx: broadcast::Sender<AgentNotification>,
     request_rx: mpsc::UnboundedReceiver<AgentRequest>,
     request_tx: mpsc::UnboundedSender<AgentRequest>,
-    perm_req_tx: mpsc::UnboundedSender<PermissionRequest>,
+    perm_req_tx: broadcast::Sender<PermissionRequest>,
     perm_resp_rx: mpsc::UnboundedReceiver<PermissionResponse>,
     perm_resp_tx: mpsc::UnboundedSender<PermissionResponse>,
 }
@@ -186,14 +187,15 @@ impl BusHandle {
     ///
     /// Multiple clients can coexist — all receive notifications (broadcast),
     /// and all share the same request channel (mpsc to core).
-    /// Permission channels are shared (first responder wins).
+    /// Permission requests are broadcast to all clients; first responder wins.
     #[must_use] 
     pub fn new_client(&self) -> ClientHandle {
         ClientHandle {
             notify_rx: self.notify_tx.subscribe(),
             _notify_tx: self.notify_tx.clone(),
             request_tx: self.request_tx.clone(),
-            perm_req_rx: None,
+            perm_req_rx: self.perm_req_tx.subscribe(),
+            _perm_req_tx: self.perm_req_tx.clone(),
             perm_resp_tx: self.perm_resp_tx.clone(),
         }
     }
@@ -229,7 +231,9 @@ pub struct ClientHandle {
     /// Keep the sender alive so `notify_rx` doesn't get `Closed`.
     _notify_tx: broadcast::Sender<AgentNotification>,
     request_tx: mpsc::UnboundedSender<AgentRequest>,
-    perm_req_rx: Option<mpsc::UnboundedReceiver<PermissionRequest>>,
+    perm_req_rx: broadcast::Receiver<PermissionRequest>,
+    /// Keep the sender alive so `perm_req_rx` doesn't get `Closed`.
+    _perm_req_tx: broadcast::Sender<PermissionRequest>,
     perm_resp_tx: mpsc::UnboundedSender<PermissionResponse>,
 }
 
@@ -260,14 +264,17 @@ impl ClientHandle {
 
     /// Receive the next permission request from the Agent Core.
     ///
-    /// Returns `None` if the channel is closed or this client was created
-    /// via `new_client()` (secondary clients don't receive permission requests).
+    /// All clients receive permission requests (broadcast). Only the first
+    /// client to respond with a matching `request_id` wins.
     pub async fn recv_permission_request(&mut self) -> Option<PermissionRequest> {
-        match self.perm_req_rx.as_mut() {
-            Some(rx) => rx.recv().await,
-            None => {
-                // Secondary client: pend forever (no permission channel)
-                std::future::pending().await
+        loop {
+            match self.perm_req_rx.recv().await {
+                Ok(req) => return Some(req),
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("Client lagged by {} permission requests, catching up", n);
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
             }
         }
     }

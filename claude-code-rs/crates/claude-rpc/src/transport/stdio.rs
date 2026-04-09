@@ -41,18 +41,19 @@ impl Default for StdioTransport {
 #[async_trait]
 impl Transport for StdioTransport {
     async fn read_message(&mut self) -> Result<Option<RawMessage>, TransportError> {
-        let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Ok(None); // EOF
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Ok(None); // EOF
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue; // Skip empty lines without recursion
+            }
+            let msg: RawMessage = serde_json::from_str(trimmed)?;
+            return Ok(Some(msg));
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            // Skip empty lines
-            return self.read_message().await;
-        }
-        let msg: RawMessage = serde_json::from_str(trimmed)?;
-        Ok(Some(msg))
     }
 
     async fn write_message(&mut self, msg: &RawMessage) -> Result<(), TransportError> {

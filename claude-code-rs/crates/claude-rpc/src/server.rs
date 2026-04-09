@@ -18,9 +18,10 @@
 //! ```
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tokio::sync::{Mutex, Notify};
-use tracing::{error, info};
+use tokio::sync::Notify;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use claude_bus::bus::BusHandle;
@@ -29,11 +30,17 @@ use crate::session::RpcSession;
 use crate::transport::stdio::StdioTransport;
 use crate::transport::tcp::TcpListener;
 
+/// Maximum concurrent TCP sessions before rejecting new connections.
+const MAX_TCP_SESSIONS: usize = 64;
+
 /// RPC server managing transport listeners and active sessions.
 pub struct RpcServer {
     bus: Arc<BusHandle>,
     shutdown: Arc<Notify>,
-    session_count: Arc<Mutex<usize>>,
+    session_count: Arc<AtomicUsize>,
+    /// Optional auth token for TCP connections. If set, clients must send
+    /// `{"method":"auth","params":{"token":"..."}}` as their first message.
+    auth_token: Option<String>,
 }
 
 impl RpcServer {
@@ -42,7 +49,18 @@ impl RpcServer {
         Self {
             bus: Arc::new(bus),
             shutdown: Arc::new(Notify::new()),
-            session_count: Arc::new(Mutex::new(0)),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            auth_token: None,
+        }
+    }
+
+    /// Create a server with token-based authentication for TCP connections.
+    pub fn with_auth(bus: BusHandle, token: impl Into<String>) -> Self {
+        Self {
+            bus: Arc::new(bus),
+            shutdown: Arc::new(Notify::new()),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            auth_token: Some(token.into()),
         }
     }
 
@@ -57,18 +75,12 @@ impl RpcServer {
 
         info!("Serving stdio session: {}", session_id);
 
-        {
-            let mut count = self.session_count.lock().await;
-            *count += 1;
-        }
+        self.session_count.fetch_add(1, Ordering::Relaxed);
 
         let session = RpcSession::new(session_id, Box::new(transport), client);
         session.run().await;
 
-        {
-            let mut count = self.session_count.lock().await;
-            *count -= 1;
-        }
+        self.session_count.fetch_sub(1, Ordering::Relaxed);
 
         info!("Stdio session ended");
     }
@@ -76,6 +88,7 @@ impl RpcServer {
     /// Serve multiple sessions over TCP.
     ///
     /// Listens for connections and spawns an `RpcSession` for each.
+    /// If `auth_token` is set, clients must authenticate as their first message.
     /// Returns when `shutdown()` is called or the listener errors.
     pub async fn serve_tcp(&self, addr: &str) -> Result<(), std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
@@ -88,26 +101,43 @@ impl RpcServer {
             tokio::select! {
                 result = listener.accept() => {
                     match result {
-                        Ok((transport, peer_addr)) => {
+                        Ok((mut transport, peer_addr)) => {
+                            // Connection limit check
+                            let current = self.session_count.load(Ordering::Relaxed);
+                            if current >= MAX_TCP_SESSIONS {
+                                warn!("Connection limit reached ({}/{}), rejecting {}", current, MAX_TCP_SESSIONS, peer_addr);
+                                drop(transport);
+                                continue;
+                            }
+
+                            // Auth handshake (if token is configured)
+                            if let Some(ref expected_token) = self.auth_token {
+                                match authenticate_connection(&mut transport, expected_token).await {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        warn!("Auth failed from {}, closing", peer_addr);
+                                        let _ = transport.close().await;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        warn!("Auth error from {}: {}", peer_addr, e);
+                                        let _ = transport.close().await;
+                                        continue;
+                                    }
+                                }
+                            }
+
                             let session_id = format!("tcp-{}", &Uuid::new_v4().to_string()[..8]);
-                            info!("[{}] New connection from {}", session_id, peer_addr);
+                            info!("[{}] New connection from {} ({}/{})", session_id, peer_addr, current + 1, MAX_TCP_SESSIONS);
 
                             let client = self.bus.new_client();
                             let session = RpcSession::new(session_id.clone(), Box::new(transport), client);
 
                             let count = Arc::clone(&self.session_count);
+                            count.fetch_add(1, Ordering::Relaxed);
                             tokio::spawn(async move {
-                                {
-                                    let mut c = count.lock().await;
-                                    *c += 1;
-                                }
-
                                 session.run().await;
-
-                                {
-                                    let mut c = count.lock().await;
-                                    *c -= 1;
-                                }
+                                count.fetch_sub(1, Ordering::Relaxed);
                                 info!("[{}] Session closed", session_id);
                             });
                         }
@@ -129,16 +159,64 @@ impl RpcServer {
     /// Signal the server to shut down gracefully.
     pub fn shutdown(&self) {
         info!("Shutdown signal sent");
-        self.shutdown.notify_one();
+        self.shutdown.notify_waiters();
     }
 
     /// Get the current number of active sessions.
-    pub async fn session_count(&self) -> usize {
-        *self.session_count.lock().await
+    pub fn session_count(&self) -> usize {
+        self.session_count.load(Ordering::Relaxed)
     }
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+// ── Auth handshake ───────────────────────────────────────────────────────────
+
+use crate::protocol::{error_codes, RawMessage, Response, RpcError};
+use crate::transport::Transport;
+
+/// Authenticate a new TCP connection by reading the first message as an auth request.
+///
+/// Expected format: `{"method":"auth","params":{"token":"<secret>"}}`
+/// Returns Ok(true) if authenticated, Ok(false) if auth failed, Err on transport error.
+async fn authenticate_connection(
+    transport: &mut impl Transport,
+    expected_token: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    // Read first message with a timeout
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        transport.read_message(),
+    ).await
+        .map_err(|_| "Auth timeout: no message received within 5s")?
+        .map_err(|e| format!("Auth transport error: {e}"))?
+        .ok_or("Auth failed: connection closed before auth message")?;
+
+    // Check method == "auth" and extract token
+    let is_auth = msg.method.as_deref() == Some("auth");
+    let token = msg.params
+        .as_ref()
+        .and_then(|p| p.get("token"))
+        .and_then(|v| v.as_str());
+
+    if is_auth && token == Some(expected_token) {
+        // Send success response
+        let resp = Response::success(
+            msg.id.unwrap_or(crate::protocol::RequestId::Number(0)),
+            serde_json::json!({"authenticated": true}),
+        );
+        transport.write_message(&RawMessage::from(resp)).await
+            .map_err(|e| format!("Auth write error: {e}"))?;
+        Ok(true)
+    } else {
+        // Send auth failure
+        let resp = Response::error(
+            msg.id.unwrap_or(crate::protocol::RequestId::Number(0)),
+            RpcError::new(error_codes::INVALID_PARAMS, "Authentication failed: invalid or missing token"),
+        );
+        transport.write_message(&RawMessage::from(resp)).await
+            .map_err(|e| format!("Auth write error: {e}"))?;
+        Ok(false)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -149,7 +227,7 @@ mod tests {
     async fn server_creation() {
         let (bus_handle, _client) = EventBus::new(64);
         let server = RpcServer::new(bus_handle);
-        assert_eq!(server.session_count().await, 0);
+        assert_eq!(server.session_count(), 0);
     }
 
     #[tokio::test]
@@ -180,5 +258,20 @@ mod tests {
         let server = RpcServer::new(bus_handle);
         server.shutdown();
         // Just verify it doesn't panic
+    }
+
+    #[tokio::test]
+    async fn server_with_auth_creation() {
+        let (bus_handle, _client) = EventBus::new(64);
+        let server = RpcServer::with_auth(bus_handle, "secret-token");
+        assert_eq!(server.session_count(), 0);
+        assert!(server.auth_token.is_some());
+    }
+
+    #[tokio::test]
+    async fn server_no_auth_by_default() {
+        let (bus_handle, _client) = EventBus::new(64);
+        let server = RpcServer::new(bus_handle);
+        assert!(server.auth_token.is_none());
     }
 }

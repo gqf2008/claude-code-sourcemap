@@ -80,7 +80,9 @@ impl RpcSession {
                                 RequestId::Number(0),
                                 RpcError::new(error_codes::PARSE_ERROR, e.to_string()),
                             );
-                            let _ = self.transport.write_message(&RawMessage::from(resp)).await;
+                            if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
+                                debug!("[{}] Failed to write parse error response: {}", session_id, we);
+                            }
                         }
                         Err(e) => {
                             error!("[{}] Transport error: {}", session_id, e);
@@ -150,18 +152,24 @@ impl RpcSession {
                                 request_id,
                                 RpcError::new(error_codes::INTERNAL_ERROR, e.to_string()),
                             );
-                            let _ = self.transport.write_message(&RawMessage::from(resp)).await;
+                            if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
+                                debug!("[{}] Failed to write error response: {}", session_id, we);
+                            }
                         } else {
                             let resp = Response::success(
                                 request_id,
                                 serde_json::json!({"ok": true}),
                             );
-                            let _ = self.transport.write_message(&RawMessage::from(resp)).await;
+                            if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
+                                debug!("[{}] Failed to write success response: {}", session_id, we);
+                            }
                         }
                     }
                     Err(rpc_err) => {
                         let resp = Response::error(request_id, rpc_err);
-                        let _ = self.transport.write_message(&RawMessage::from(resp)).await;
+                        if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
+                            debug!("[{}] Failed to write method error response: {}", session_id, we);
+                        }
                     }
                 }
             }
@@ -173,7 +181,9 @@ impl RpcSession {
             }
             Err(rpc_err) => {
                 let resp = Response::error(RequestId::Number(0), rpc_err);
-                let _ = self.transport.write_message(&RawMessage::from(resp)).await;
+                if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
+                    debug!("[{}] Failed to write classify error response: {}", session_id, we);
+                }
             }
         }
     }
