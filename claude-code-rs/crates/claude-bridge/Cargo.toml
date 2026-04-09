@@ -20,5 +20,8 @@ reqwest = { workspace = true }
 axum = { version = "0.8", features = ["macros"] }
 tower = { version = "0.5", features = ["timeout"] }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -35,5 +35,8 @@ indicatif = { workspace = true }
 crossterm = { workspace = true }
 cliclack = { workspace = true }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tempfile = { workspace = true }

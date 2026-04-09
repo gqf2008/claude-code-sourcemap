@@ -27,3 +27,6 @@ rand = { workspace = true }
 urlencoding = { workspace = true }
 opener = { workspace = true }
 dirs = { workspace = true }
+
+[lints]
+workspace = true

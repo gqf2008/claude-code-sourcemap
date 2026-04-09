@@ -26,6 +26,9 @@ tokio-util = { workspace = true }
 cliclack = { workspace = true }
 dirs = { workspace = true }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 claude-api = { path = "../claude-api", features = ["test-support"] }
 tempfile = { workspace = true }

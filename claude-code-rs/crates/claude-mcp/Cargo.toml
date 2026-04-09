@@ -18,6 +18,9 @@ reqwest = { workspace = true }
 futures = { workspace = true }
 claude-bus = { path = "../claude-bus" }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
