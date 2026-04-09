@@ -1,3 +1,8 @@
+//! Built-in tool implementations for the Claude Code agent.
+//!
+//! Provides file I/O, shell execution, web access, task management, and MCP
+//! proxy tools. Use [`ToolRegistry::with_defaults`] for a battery-included setup.
+
 // ── File I/O tools (always included) ─────────────────────────────────────────
 pub mod file_read;
 pub mod file_edit;
@@ -126,41 +131,49 @@ pub fn tool_category(name: &str) -> ToolCategory {
     }
 }
 
+/// Central registry mapping tool names to their implementations.
 pub struct ToolRegistry {
     tools: HashMap<String, DynTool>,
 }
 
 impl ToolRegistry {
+    /// Create an empty registry.
     #[must_use] 
     pub fn new() -> Self {
         Self { tools: HashMap::new() }
     }
 
+    /// Register a tool. If a tool with the same name exists it is replaced.
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
         self.tools.insert(name, Arc::new(tool));
     }
 
+    /// Look up a tool by name.
     #[must_use] 
     pub fn get(&self, name: &str) -> Option<&DynTool> {
         self.tools.get(name)
     }
 
+    /// Return all registered tools (unordered).
     #[must_use] 
     pub fn all(&self) -> Vec<&DynTool> {
         self.tools.values().collect()
     }
 
+    /// Return the names of all registered tools.
     #[must_use] 
     pub fn names(&self) -> Vec<&str> {
         self.tools.keys().map(std::string::String::as_str).collect()
     }
 
+    /// Number of registered tools.
     #[must_use] 
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
+    /// Returns `true` if no tools are registered.
     #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()

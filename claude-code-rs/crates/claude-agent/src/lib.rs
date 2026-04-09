@@ -1,3 +1,9 @@
+//! Agent engine: query loop, tool execution, compaction, and coordination.
+//!
+//! This crate drives the main agent loop — it receives user messages, streams
+//! API responses, dispatches tool calls through the executor, handles
+//! auto-compaction, and supports multi-agent coordination.
+
 pub mod audit;
 pub mod engine;
 pub mod query;

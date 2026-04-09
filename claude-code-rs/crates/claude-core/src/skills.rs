@@ -649,7 +649,7 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
                 // Conditional → conditional cache
                 conditional_cache()
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|p| p.into_inner())
                     .insert(skill.name.clone(), skill);
             } else {
                 dyn_skills.entry(skill.name.clone()).or_insert(skill);
@@ -738,7 +738,7 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                 }
             }
             // Advance by full UTF-8 character (safe for non-ASCII)
-            let ch = result[idx..].chars().next().unwrap();
+            let Some(ch) = result[idx..].chars().next() else { break };
             new_result.push(ch);
             idx += ch.len_utf8();
         }
@@ -764,7 +764,7 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                 }
             }
         }
-        let ch = result[idx..].chars().next().unwrap();
+        let Some(ch) = result[idx..].chars().next() else { break };
         new_result.push(ch);
         idx += ch.len_utf8();
     }
@@ -788,7 +788,7 @@ pub fn substitute_arguments(skill: &SkillEntry, args: &str) -> String {
                     continue;
                 }
             }
-            let ch = result[idx..].chars().next().unwrap();
+            let Some(ch) = result[idx..].chars().next() else { break };
             new_result.push(ch);
             idx += ch.len_utf8();
         }

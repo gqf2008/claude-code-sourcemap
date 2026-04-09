@@ -11,15 +11,19 @@ use crate::permissions::{PermissionMode, PermissionResult};
 pub struct AbortSignal(Arc<AtomicBool>);
 
 impl AbortSignal {
+    /// Create a new signal in the non-aborted state.
     pub fn new() -> Self {
         Self(Arc::new(AtomicBool::new(false)))
     }
+    /// Set the abort flag. All clones observe the change immediately.
     pub fn abort(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
+    /// Check whether abort has been requested.
     pub fn is_aborted(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+    /// Clear the abort flag so the signal can be reused.
     pub fn reset(&self) {
         self.0.store(false, Ordering::SeqCst);
     }
@@ -47,12 +51,14 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
+    /// Create a successful result containing a single text block.
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             content: vec![ToolResultContent::Text { text: text.into() }],
             is_error: false,
         }
     }
+    /// Create an error result containing a single text block.
     pub fn error(text: impl Into<String>) -> Self {
         Self {
             content: vec![ToolResultContent::Text { text: text.into() }],
@@ -138,6 +144,7 @@ pub trait Tool: Send + Sync {
     }
 }
 
+/// Type-erased tool behind an `Arc` for dynamic dispatch.
 pub type DynTool = Arc<dyn Tool>;
 
 #[cfg(test)]

@@ -1,3 +1,9 @@
+//! Core types and utilities shared across the claude-code-rs workspace.
+//!
+//! This crate provides the foundational building blocks — messages, tools,
+//! permissions, configuration, skills, session persistence, and token
+//! estimation — used by every higher-level crate.
+
 pub mod message;
 pub mod tool;
 pub mod permissions;

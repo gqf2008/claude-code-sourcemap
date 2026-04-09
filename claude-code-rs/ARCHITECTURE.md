@@ -11,22 +11,22 @@
 | 代码行数 | ~50,900 LoC |
 | 注册工具 | 28+ (含 MCP 动态代理) |
 | 斜杠命令 | 30+ |
-| 测试数 | 1,562 |
+| 测试数 | 1,669 |
 | Clippy 警告 | 0 |
 | unsafe 块 | 0 |
 
 ## 分层架构
 
 ```
-Layer 3  claude-cli      (21 files,  7,356 LoC,  207 tests)  二进制入口, REPL, cliclack UI
-Layer 3  claude-rpc      ( 9 files,  1,713 LoC,   55 tests)  JSON-RPC 外部接口 (TCP/stdio)
-Layer 3  claude-bridge   (11 files,  1,985 LoC,   47 tests)  外部消息渠道网关 (Feishu/Telegram/Slack)
-Layer 2  claude-agent    (34 files, 12,248 LoC,  387 tests)  引擎编排, 会话, Hooks, 权限, 压缩
-Layer 2  claude-mcp      ( 8 files,  1,791 LoC,   46 tests)  MCP 服务器注册与生命周期管理
+Layer 3  claude-cli      (21 files,  7,356 LoC,  231 tests)  二进制入口, REPL, cliclack UI
+Layer 3  claude-rpc      ( 9 files,  1,713 LoC,   84 tests)  JSON-RPC 外部接口 (TCP/stdio)
+Layer 3  claude-bridge   (11 files,  1,985 LoC,   52 tests)  外部消息渠道网关 (Feishu/Telegram/Slack)
+Layer 2  claude-agent    (34 files, 12,248 LoC,  394 tests)  引擎编排, 会话, Hooks, 权限, 压缩
+Layer 2  claude-mcp      ( 8 files,  1,791 LoC,   60 tests)  MCP 服务器注册与生命周期管理
 Layer 1  claude-bus      ( 3 files,  1,026 LoC,   20 tests)  事件总线, ClientHandle, 广播通知
 Layer 1  claude-api      (15 files,  6,489 LoC,  177 tests)  HTTP 客户端, 流式 SSE, OAuth PKCE
-Layer 1  claude-tools    (32 files,  7,613 LoC,  264 tests)  28+ 工具实现, ToolRegistry
-Layer 0  claude-core     (24 files, 10,669 LoC,  359 tests)  基础类型, Tool trait, 权限模型, 配置
+Layer 1  claude-tools    (32 files,  7,613 LoC,  271 tests)  28+ 工具实现, ToolRegistry
+Layer 0  claude-core     (24 files, 10,669 LoC,  358 tests)  基础类型, Tool trait, 权限模型, 配置
 ```
 
 依赖方向: `{cli,rpc,bridge} → agent → {api,tools,mcp,bus} → core`（零循环依赖）
@@ -306,14 +306,14 @@ cd claude-code-rs
 # 编译检查
 cargo check
 
-# 运行所有测试 (1,562 tests)
+# 运行所有测试 (1,669 tests)
 cargo test
 
 # 运行特定 crate 测试
-cargo test -p claude-agent    # 387 tests
-cargo test -p claude-core     # 359 tests
-cargo test -p claude-tools    # 264 tests
-cargo test -p claude-cli      # 207 tests
+cargo test -p claude-agent    # 394 tests
+cargo test -p claude-core     # 358 tests
+cargo test -p claude-tools    # 271 tests
+cargo test -p claude-cli      # 231 tests
 cargo test -p claude-api      # 177 tests
 
 # Lint 检查
