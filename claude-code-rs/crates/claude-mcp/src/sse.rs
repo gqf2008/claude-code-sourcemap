@@ -104,7 +104,9 @@ impl SseTransport {
             }
         }
 
-        let post_url = post_url.unwrap();
+        let post_url = post_url.ok_or_else(|| {
+            anyhow::anyhow!("SSE server closed before sending endpoint event")
+        })?;
         info!("MCP SSE: POST endpoint = {}", post_url);
 
         let pending: Arc<Mutex<HashMap<u64, PendingRequest>>> =

@@ -36,10 +36,15 @@ impl EventBus {
     #[allow(clippy::new_ret_no_self)]
     #[must_use] 
     pub fn new(capacity: usize) -> (BusHandle, ClientHandle) {
+        /// Maximum queued requests before backpressure.
+        const REQUEST_QUEUE_CAP: usize = 1024;
+        /// Maximum queued permission responses before backpressure.
+        const PERM_RESP_QUEUE_CAP: usize = 256;
+
         let (notify_tx, notify_rx) = broadcast::channel(capacity);
-        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (request_tx, request_rx) = mpsc::channel(REQUEST_QUEUE_CAP);
         let (perm_req_tx, perm_req_rx) = broadcast::channel(capacity);
-        let (perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel();
+        let (perm_resp_tx, perm_resp_rx) = mpsc::channel(PERM_RESP_QUEUE_CAP);
 
         let bus = BusHandle {
             notify_tx: notify_tx.clone(),
@@ -72,11 +77,11 @@ impl EventBus {
 /// - Create new client handles
 pub struct BusHandle {
     notify_tx: broadcast::Sender<AgentNotification>,
-    request_rx: mpsc::UnboundedReceiver<AgentRequest>,
-    request_tx: mpsc::UnboundedSender<AgentRequest>,
+    request_rx: mpsc::Receiver<AgentRequest>,
+    request_tx: mpsc::Sender<AgentRequest>,
     perm_req_tx: broadcast::Sender<PermissionRequest>,
-    perm_resp_rx: mpsc::UnboundedReceiver<PermissionResponse>,
-    perm_resp_tx: mpsc::UnboundedSender<PermissionResponse>,
+    perm_resp_rx: mpsc::Receiver<PermissionResponse>,
+    perm_resp_tx: mpsc::Sender<PermissionResponse>,
 }
 
 impl BusHandle {
@@ -206,7 +211,7 @@ impl BusHandle {
     /// (via `recv_request`). This creates a *notification* subscription
     /// for the purpose of observing requests in tests.
     #[must_use] 
-    pub fn subscribe_requests(&self) -> mpsc::UnboundedReceiver<AgentRequest> {
+    pub fn subscribe_requests(&self) -> mpsc::Receiver<AgentRequest> {
         // This is a workaround: we can't really "subscribe" to mpsc.
         // For tests, create a new channel pair and swap in the new receiver.
         // In production, the adapter uses recv_request() on the BusHandle.
@@ -215,7 +220,7 @@ impl BusHandle {
         // handles requests properly through the normal flow.
         //
         // We provide a dummy receiver here that will never receive anything.
-        let (_tx, rx) = mpsc::unbounded_channel();
+        let (_tx, rx) = mpsc::channel(1);
         rx
     }
 }
@@ -230,11 +235,11 @@ pub struct ClientHandle {
     notify_rx: broadcast::Receiver<AgentNotification>,
     /// Keep the sender alive so `notify_rx` doesn't get `Closed`.
     _notify_tx: broadcast::Sender<AgentNotification>,
-    request_tx: mpsc::UnboundedSender<AgentRequest>,
+    request_tx: mpsc::Sender<AgentRequest>,
     perm_req_rx: broadcast::Receiver<PermissionRequest>,
     /// Keep the sender alive so `perm_req_rx` doesn't get `Closed`.
     _perm_req_tx: broadcast::Sender<PermissionRequest>,
-    perm_resp_tx: mpsc::UnboundedSender<PermissionResponse>,
+    perm_resp_tx: mpsc::Sender<PermissionResponse>,
 }
 
 impl ClientHandle {
@@ -258,7 +263,7 @@ impl ClientHandle {
     /// Send a request to the Agent Core.
     pub fn send_request(&self, request: AgentRequest) -> Result<(), SendError> {
         self.request_tx
-            .send(request)
+            .try_send(request)
             .map_err(|_| SendError::DISCONNECTED)
     }
 
@@ -282,7 +287,7 @@ impl ClientHandle {
     /// Respond to a permission request.
     pub fn send_permission_response(&self, response: PermissionResponse) -> Result<(), SendError> {
         self.perm_resp_tx
-            .send(response)
+            .try_send(response)
             .map_err(|_| SendError::DISCONNECTED)
     }
 

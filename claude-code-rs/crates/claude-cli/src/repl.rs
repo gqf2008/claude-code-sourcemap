@@ -75,6 +75,14 @@ fn complete_file_path(partial: &str) -> std::io::Result<Vec<Pair>> {
         (std::path::PathBuf::from("."), partial.to_string())
     };
 
+    // Prevent path traversal outside project root
+    let project_root = std::path::Path::new(".").canonicalize()?;
+    if let Ok(canonical_dir) = dir.canonicalize() {
+        if !canonical_dir.starts_with(&project_root) {
+            return Ok(vec![]);
+        }
+    }
+
     let mut results = Vec::new();
     let prefix_lower = prefix.to_lowercase();
 

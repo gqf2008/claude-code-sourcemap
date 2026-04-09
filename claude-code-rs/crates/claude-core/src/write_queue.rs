@@ -39,6 +39,8 @@ pub struct WriteQueue {
     tx: mpsc::UnboundedSender<QueuedEntry>,
     /// Signal to force an immediate flush.
     flush_notify: Arc<Notify>,
+    /// Signal that a flush cycle has completed.
+    flush_done: Arc<Notify>,
     /// Shared state for shutdown coordination.
     state: Arc<Mutex<WriteQueueState>>,
 }
@@ -102,6 +104,7 @@ impl WriteQueue {
     pub fn start() -> Arc<Self> {
         let (tx, rx) = mpsc::unbounded_channel();
         let flush_notify = Arc::new(Notify::new());
+        let flush_done = Arc::new(Notify::new());
         let state = Arc::new(Mutex::new(WriteQueueState {
             buffered_count: 0,
             total_bytes_written: 0,
@@ -112,14 +115,16 @@ impl WriteQueue {
         let queue = Arc::new(Self {
             tx,
             flush_notify: Arc::clone(&flush_notify),
+            flush_done: Arc::clone(&flush_done),
             state: Arc::clone(&state),
         });
 
         // Spawn background drain task
         let flush_notify_clone = Arc::clone(&flush_notify);
+        let flush_done_clone = Arc::clone(&flush_done);
         let state_clone = Arc::clone(&state);
         tokio::spawn(async move {
-            drain_loop(rx, flush_notify_clone, state_clone).await;
+            drain_loop(rx, flush_notify_clone, flush_done_clone, state_clone).await;
         });
 
         queue
@@ -140,11 +145,16 @@ impl WriteQueue {
 
     /// Force an immediate flush of all buffered entries.
     ///
-    /// Call this on graceful shutdown to ensure no data is lost.
+    /// Waits until the drain loop has actually completed the flush (up to 5s).
     pub async fn flush(&self) {
         self.flush_notify.notify_one();
-        // Give the drain loop a moment to process
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait for drain loop to signal completion, with a timeout
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.flush_done.notified(),
+        )
+        .await
+        .ok();
     }
 
     /// Shut down the write queue, flushing remaining entries.
@@ -168,6 +178,7 @@ impl WriteQueue {
 async fn drain_loop(
     mut rx: mpsc::UnboundedReceiver<QueuedEntry>,
     flush_notify: Arc<Notify>,
+    flush_done: Arc<Notify>,
     state: Arc<Mutex<WriteQueueState>>,
 ) {
     let interval = std::time::Duration::from_millis(FLUSH_INTERVAL_MS);
@@ -199,6 +210,8 @@ async fn drain_loop(
         if !buffer.is_empty() {
             flush_buffer(&mut buffer, &state).await;
         }
+        // Signal that this flush cycle is complete
+        flush_done.notify_one();
 
         // Check shutdown
         let shutdown = {

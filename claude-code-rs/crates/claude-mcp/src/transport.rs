@@ -85,7 +85,10 @@ impl StdioTransport {
                     return Ok(resp.result.unwrap_or(Value::Null));
                 }
                 JsonRpcMessage::Notification(_) => continue,
-                _ => continue,
+                other => {
+                    tracing::warn!("MCP protocol desync: expected response id={}, got {:?}", id, other);
+                    anyhow::bail!("MCP protocol desynchronization: unexpected message while waiting for id={}", id);
+                }
             }
         }
     }
@@ -134,7 +137,11 @@ impl StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
+        // Best-effort immediate kill (can't async in Drop).
+        // Callers should call close() explicitly for graceful shutdown.
         let _ = self.child.start_kill();
+        // Attempt non-blocking wait to reap the child and avoid zombies.
+        let _ = self.child.try_wait();
     }
 }
 

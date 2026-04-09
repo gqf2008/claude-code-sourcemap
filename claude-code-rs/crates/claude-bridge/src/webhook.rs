@@ -82,6 +82,9 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
+/// Known valid platform identifiers.
+const VALID_PLATFORMS: &[&str] = &["feishu", "telegram", "wechat", "dingtalk"];
+
 /// Generic webhook handler — routes based on platform path parameter.
 ///
 /// POST /webhook/{platform}
@@ -103,6 +106,12 @@ async fn handle_webhook(
     State(state): State<WebhookState>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    // Validate platform against whitelist
+    if !VALID_PLATFORMS.contains(&platform.as_str()) {
+        tracing::warn!("Rejected webhook for unknown platform: {}", platform);
+        return (StatusCode::BAD_REQUEST, "Unknown platform");
+    }
+
     let channel = body.get("channel_id")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");

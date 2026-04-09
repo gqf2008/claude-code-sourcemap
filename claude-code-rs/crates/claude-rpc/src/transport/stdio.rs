@@ -41,11 +41,17 @@ impl Default for StdioTransport {
 #[async_trait]
 impl Transport for StdioTransport {
     async fn read_message(&mut self) -> Result<Option<RawMessage>, TransportError> {
+        const MAX_LINE_SIZE: usize = 4 * 1024 * 1024; // 4 MB per message
         loop {
             let mut line = String::new();
             let n = self.reader.read_line(&mut line).await?;
             if n == 0 {
                 return Ok(None); // EOF
+            }
+            if line.len() > MAX_LINE_SIZE {
+                return Err(TransportError::Other(
+                    format!("Message exceeds max size ({} > {MAX_LINE_SIZE})", line.len()),
+                ));
             }
             let trimmed = line.trim();
             if trimmed.is_empty() {

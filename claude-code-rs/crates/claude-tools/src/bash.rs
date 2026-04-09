@@ -33,6 +33,11 @@ const BLOCKED_GIT_PATTERNS: &[(&str, &str)] = &[
     ("git config ", "Modifying git config is not allowed unless explicitly requested"),
 ];
 
+/// Check if a byte is a shell command boundary character.
+fn is_command_boundary(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b';' | b'|' | b'&' | b')' | b'>' | b'<')
+}
+
 /// Check if a command matches any dangerous pattern.
 pub(crate) fn check_dangerous(command: &str) -> Option<&'static str> {
     let lower = command.to_lowercase();
@@ -40,7 +45,7 @@ pub(crate) fn check_dangerous(command: &str) -> Option<&'static str> {
         if exact_boundary {
             if let Some(pos) = lower.find(pattern) {
                 let after = pos + pattern.len();
-                if after >= lower.len() || lower.as_bytes()[after] == b' ' {
+                if after >= lower.len() || is_command_boundary(lower.as_bytes()[after]) {
                     return Some(reason);
                 }
             }

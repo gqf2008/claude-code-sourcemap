@@ -156,6 +156,14 @@ impl Tool for GrepTool {
                     }
                 }
 
+                // Skip files larger than 10 MB to prevent DoS via huge files
+                const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if meta.len() > MAX_FILE_SIZE {
+                        continue;
+                    }
+                }
+
                 let content = match std::fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
 
                 if multiline {

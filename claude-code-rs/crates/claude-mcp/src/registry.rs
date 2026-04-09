@@ -248,7 +248,11 @@ impl McpManager {
         for name in &dead {
             warn!("MCP server '{}' is dead, removing", name);
             if let Some(mut client) = servers.remove(name) {
-                let _ = client.close().await;
+                // Timeout to prevent holding write lock indefinitely
+                let close_timeout = std::time::Duration::from_secs(5);
+                if tokio::time::timeout(close_timeout, client.close()).await.is_err() {
+                    warn!("MCP server '{}' close timed out after {}s", name, close_timeout.as_secs());
+                }
             }
         }
     }
