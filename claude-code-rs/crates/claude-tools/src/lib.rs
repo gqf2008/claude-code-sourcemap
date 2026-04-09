@@ -48,8 +48,6 @@ pub mod brief;
 pub mod task;
 pub mod skill_tool;
 pub mod plan_mode;
-pub mod agent_tool;
-
 // ── Management tools ────────────────────────────────────────────────────────
 pub mod todo;
 pub mod config_tool;
