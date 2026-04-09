@@ -55,7 +55,7 @@ pub struct SystemBlock {
 }
 
 /// Cache control metadata for prompt/tool caching (ephemeral, TTL, scope).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub control_type: String,
@@ -69,6 +69,7 @@ pub struct CacheControl {
 
 impl CacheControl {
     /// Standard ephemeral cache control (no TTL/scope).
+    #[must_use] 
     pub fn ephemeral() -> Self {
         Self {
             control_type: "ephemeral".into(),
@@ -78,6 +79,7 @@ impl CacheControl {
     }
 
     /// Ephemeral with global scope (for org-wide cache sharing).
+    #[must_use] 
     pub fn ephemeral_global() -> Self {
         Self {
             control_type: "ephemeral".into(),
@@ -87,6 +89,7 @@ impl CacheControl {
     }
 
     /// Ephemeral with 1-hour TTL and global scope (for eligible users).
+    #[must_use] 
     pub fn ephemeral_1h_global() -> Self {
         Self {
             control_type: "ephemeral".into(),
@@ -185,7 +188,7 @@ pub struct MessagesResponse {
     pub usage: ApiUsage,
 }
 
-/// A content block in the response: text, tool_use, or thinking.
+/// A content block in the response: text, `tool_use`, or thinking.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum ResponseContentBlock {
@@ -255,7 +258,7 @@ pub enum DeltaBlock {
     InputJsonDelta { partial_json: String },
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
-    /// Signature delta (e.g. from Anthropic-compatible APIs like DashScope).
+    /// Signature delta (e.g. from Anthropic-compatible APIs like `DashScope`).
     /// Safely ignored — the signature has no user-facing effect.
     #[serde(rename = "signature_delta")]
     SignatureDelta {

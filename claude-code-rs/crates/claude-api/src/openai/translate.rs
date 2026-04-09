@@ -1,11 +1,11 @@
-//! Format translation between Anthropic Messages API and OpenAI Chat Completions API.
+//! Format translation between Anthropic Messages API and `OpenAI` Chat Completions API.
 
-use crate::types::*;
-use super::types::*;
+use crate::types::{MessagesRequest, ApiMessage, ApiContentBlock, ToolResultContent, MessagesResponse, ResponseContentBlock, ApiUsage, StreamEvent, DeltaBlock, DeltaUsage, MessageDeltaData};
+use super::types::{ChatCompletionRequest, ChatMessage, ChatContent, ChatTool, ChatFunction, ChatContentPart, ImageUrlDetail, ChatToolCall, ChatFunctionCall, ChatCompletionResponse, ChatCompletionChunk};
 // ── Format Translation: Anthropic → OpenAI ───────────────────────────────────
 
-/// Convert an Anthropic `MessagesRequest` into an OpenAI `ChatCompletionRequest`.
-pub(crate) fn to_openai_request(req: &MessagesRequest) -> ChatCompletionRequest {
+/// Convert an Anthropic `MessagesRequest` into an `OpenAI` `ChatCompletionRequest`.
+pub fn to_openai_request(req: &MessagesRequest) -> ChatCompletionRequest {
     let mut messages = Vec::new();
 
     // System prompt → system message
@@ -68,11 +68,11 @@ pub(crate) fn to_openai_request(req: &MessagesRequest) -> ChatCompletionRequest 
     }
 }
 
-/// Convert a single Anthropic `ApiMessage` into one or more OpenAI `ChatMessage`s.
+/// Convert a single Anthropic `ApiMessage` into one or more `OpenAI` `ChatMessage`s.
 ///
-/// Anthropic puts everything in content blocks; OpenAI uses separate fields
-/// (content, tool_calls) and separate messages for tool results.
-pub(crate) fn convert_anthropic_message(msg: &ApiMessage, out: &mut Vec<ChatMessage>) {
+/// Anthropic puts everything in content blocks; `OpenAI` uses separate fields
+/// (content, `tool_calls`) and separate messages for tool results.
+pub fn convert_anthropic_message(msg: &ApiMessage, out: &mut Vec<ChatMessage>) {
     if msg.role == "user" {
         // User messages: collect text + images into content, but tool_results
         // become separate "tool" messages.
@@ -141,7 +141,7 @@ pub(crate) fn convert_anthropic_message(msg: &ApiMessage, out: &mut Vec<ChatMess
         // Emit tool results as separate "tool" messages
         for (tool_use_id, text, is_error) in tool_results {
             let content_text = if is_error {
-                format!("[ERROR] {}", text)
+                format!("[ERROR] {text}")
             } else {
                 text
             };
@@ -198,8 +198,8 @@ pub(crate) fn convert_anthropic_message(msg: &ApiMessage, out: &mut Vec<ChatMess
 
 // ── Format Translation: OpenAI → Anthropic ───────────────────────────────────
 
-/// Convert an OpenAI `ChatCompletionResponse` into an Anthropic `MessagesResponse`.
-pub(crate) fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResponse {
+/// Convert an `OpenAI` `ChatCompletionResponse` into an Anthropic `MessagesResponse`.
+pub fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResponse {
     let choice = resp.choices.into_iter().next();
     let (content, stop_reason) = match choice {
         Some(c) => {
@@ -234,10 +234,10 @@ pub(crate) fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResp
 
             let stop = match c.finish_reason.as_deref() {
                 Some("stop") => Some("end_turn".to_string()),
-                Some("tool_calls") | Some("function_call") => Some("tool_use".to_string()),
+                Some("tool_calls" | "function_call") => Some("tool_use".to_string()),
                 Some("length") => Some("max_tokens".to_string()),
                 Some("content_filter") => Some("end_turn".to_string()),
-                other => other.map(|s| s.to_string()),
+                other => other.map(std::string::ToString::to_string),
             };
 
             (blocks, stop)
@@ -268,12 +268,12 @@ pub(crate) fn from_openai_response(resp: ChatCompletionResponse) -> MessagesResp
     }
 }
 
-/// Tracks streaming state across multiple OpenAI chunks.
+/// Tracks streaming state across multiple `OpenAI` chunks.
 ///
-/// OpenAI streams are stateless chunks, but Anthropic's event model requires
+/// `OpenAI` streams are stateless chunks, but Anthropic's event model requires
 /// matching `ContentBlockStart` / `ContentBlockStop` pairs. This struct tracks
 /// which content blocks have been started so we can emit the right events.
-pub(crate) struct OpenAIStreamState {
+pub struct OpenAIStreamState {
     /// Whether `MessageStart` has been emitted.
     pub(super) message_started: bool,
     /// Whether thinking `ContentBlockStart` (index 0) has been emitted.
@@ -286,7 +286,7 @@ pub(crate) struct OpenAIStreamState {
     text_block_index: usize,
     /// Set of tool call indices that have received `ContentBlockStart`.
     tool_blocks_started: std::collections::HashSet<usize>,
-    /// Model name for the MessageStart event.
+    /// Model name for the `MessageStart` event.
     model: String,
 }
 
@@ -303,7 +303,7 @@ impl OpenAIStreamState {
         }
     }
 
-    /// Process one OpenAI streaming chunk, returning Anthropic `StreamEvent`s.
+    /// Process one `OpenAI` streaming chunk, returning Anthropic `StreamEvent`s.
     pub(super) fn process_chunk(&mut self, chunk: &ChatCompletionChunk) -> Vec<StreamEvent> {
         let mut events = Vec::new();
 
@@ -426,7 +426,7 @@ impl OpenAIStreamState {
                 }
                 let mut tool_indices: Vec<usize> =
                     self.tool_blocks_started.iter().copied().collect();
-                tool_indices.sort();
+                tool_indices.sort_unstable();
                 for idx in tool_indices {
                     events.push(StreamEvent::ContentBlockStop { index: self.next_block_index + idx });
                 }
@@ -456,7 +456,7 @@ impl OpenAIStreamState {
         events
     }
 
-    /// Synthesize closing events if the stream ended without a finish_reason.
+    /// Synthesize closing events if the stream ended without a `finish_reason`.
     pub(super) fn finalize(&mut self) -> Vec<StreamEvent> {
         if !self.message_started {
             return Vec::new();
@@ -475,7 +475,7 @@ impl OpenAIStreamState {
         }
         let mut tool_indices: Vec<usize> =
             self.tool_blocks_started.iter().copied().collect();
-        tool_indices.sort();
+        tool_indices.sort_unstable();
         for idx in tool_indices {
             events.push(StreamEvent::ContentBlockStop { index: self.next_block_index + idx });
         }

@@ -9,7 +9,7 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Stall warning threshold — log a warning if no data received for this long.
 pub const STALL_WARNING_THRESHOLD: Duration = Duration::from_secs(30);
 
-/// Parse a single SSE data line into a StreamEvent.
+/// Parse a single SSE data line into a `StreamEvent`.
 ///
 /// Unknown event types are silently skipped (returns `None`) to ensure
 /// compatibility with Anthropic-compatible APIs that may emit extra events.
@@ -41,7 +41,7 @@ pub fn parse_sse_line(line: &str) -> Option<Result<StreamEvent>> {
                         return None;
                     }
                 }
-                Some(Err(anyhow::anyhow!("Failed to parse SSE: {}", e)))
+                Some(Err(anyhow::anyhow!("Failed to parse SSE: {e}")))
             }
         }
     } else {
@@ -69,6 +69,7 @@ impl Default for StreamWatchdogConfig {
 
 impl StreamWatchdogConfig {
     /// Create from environment variable `CLAUDE_STREAM_IDLE_TIMEOUT_MS`.
+    #[must_use] 
     pub fn from_env() -> Self {
         let mut config = Self::default();
         if let Ok(ms) = std::env::var("CLAUDE_STREAM_IDLE_TIMEOUT_MS") {
@@ -89,6 +90,7 @@ impl StreamWatchdogConfig {
 /// - 90s default idle timeout
 /// - 30s stall detection warning
 /// - Stream terminates on timeout (caller can fallback to non-streaming)
+#[must_use] 
 pub fn with_idle_watchdog(
     inner: Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>>,
     config: StreamWatchdogConfig,
@@ -110,7 +112,7 @@ pub fn with_idle_watchdog(
                         None => break, // stream ended normally
                     }
                 }
-                _ = tokio::time::sleep(config.idle_timeout) => {
+                () = tokio::time::sleep(config.idle_timeout) => {
                     tracing::error!(
                         timeout_secs = config.idle_timeout.as_secs(),
                         "Stream idle timeout — no events received"
@@ -121,7 +123,7 @@ pub fn with_idle_watchdog(
                     ));
                     break;
                 }
-                _ = tokio::time::sleep(config.stall_warning), if !stall_warned => {
+                () = tokio::time::sleep(config.stall_warning), if !stall_warned => {
                     tracing::warn!(
                         threshold_secs = config.stall_warning.as_secs(),
                         "Stream may be stalling — no events received"
@@ -137,6 +139,7 @@ pub fn with_idle_watchdog(
 }
 
 /// Whether a stream error indicates an idle timeout (and should trigger fallback).
+#[must_use] 
 pub fn is_idle_timeout_error(err: &anyhow::Error) -> bool {
     err.to_string().contains("Stream idle timeout")
 }
@@ -146,13 +149,14 @@ pub fn is_idle_timeout_error(err: &anyhow::Error) -> bool {
 /// Convert a raw `reqwest` byte stream into a parsed SSE `StreamEvent` stream.
 ///
 /// This is the common SSE frame parser used by **both** `FirstPartyBackend` and
-/// `OpenAIBackend`. Callers that need to translate events (e.g. OpenAI → Anthropic
+/// `OpenAIBackend`. Callers that need to translate events (e.g. `OpenAI` → Anthropic
 /// format) should use `sse_byte_stream_to_lines` instead and map the chunks themselves.
 ///
 /// Behaviour:
 /// - Buffers bytes until a `\n` is found
 /// - Passes each complete line to [`parse_sse_line`]
 /// - Flushes any trailing buffer on stream end
+#[must_use] 
 pub fn sse_byte_stream_to_events(
     response: reqwest::Response,
 ) -> Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>> {
@@ -174,7 +178,7 @@ pub fn sse_byte_stream_to_events(
                     }
                 }
                 Err(e) => {
-                    yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                    yield Err(anyhow::anyhow!("Stream read error: {e}"));
                     return;
                 }
             }
@@ -190,10 +194,11 @@ pub fn sse_byte_stream_to_events(
     Box::pin(stream)
 }
 
-/// Extract raw SSE data strings from a reqwest byte stream (without parsing into StreamEvent).
+/// Extract raw SSE data strings from a reqwest byte stream (without parsing into `StreamEvent`).
 ///
 /// Returns `(data_string, is_done)` tuples. Callers handle their own JSON parsing
-/// (e.g. OpenAI format → Anthropic format translation).
+/// (e.g. `OpenAI` format → Anthropic format translation).
+#[must_use] 
 pub fn sse_byte_stream_to_lines(
     response: reqwest::Response,
 ) -> Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>> {
@@ -229,7 +234,7 @@ pub fn sse_byte_stream_to_lines(
                     }
                 }
                 Err(e) => {
-                    yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                    yield Err(anyhow::anyhow!("Stream read error: {e}"));
                     return;
                 }
             }

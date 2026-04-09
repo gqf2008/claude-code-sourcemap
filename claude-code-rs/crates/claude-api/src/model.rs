@@ -140,6 +140,7 @@ pub fn all_model_ids() -> Vec<&'static str> {
 }
 
 /// Calculate cost in USD for a given token usage on a specific model.
+#[must_use] 
 pub fn calculate_cost(
     model_id: &str,
     input_tokens: u64,
@@ -161,6 +162,7 @@ pub fn calculate_cost(
 /// Resolve a model ID, accepting common abbreviations.
 ///
 /// E.g. "sonnet" → "claude-sonnet-4-6", "haiku" → "claude-haiku-4-5".
+#[must_use] 
 pub fn resolve_model_id(input: &str) -> &str {
     match input.to_lowercase().as_str() {
         "sonnet" | "sonnet-4" | "sonnet-4-6" => "claude-sonnet-4-6",

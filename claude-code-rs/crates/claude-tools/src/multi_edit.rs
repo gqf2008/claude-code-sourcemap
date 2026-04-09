@@ -10,10 +10,10 @@ pub struct MultiEditTool;
 
 #[async_trait]
 impl Tool for MultiEditTool {
-    fn name(&self) -> &str { "MultiEdit" }
+    fn name(&self) -> &'static str { "MultiEdit" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Perform multiple edits to a single file in one atomic operation. Each edit replaces an \
          exact unique string with new content. Edits are applied sequentially in the given order. \
          Use this instead of multiple Edit calls on the same file."
@@ -57,7 +57,7 @@ impl Tool for MultiEditTool {
 
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };
 
         let edits = input["edits"]
@@ -76,9 +76,9 @@ impl Tool for MultiEditTool {
         for (i, edit) in edits.iter().enumerate() {
             let old_str = edit["old_string"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'old_string'", i))?;
+                .ok_or_else(|| anyhow::anyhow!("Edit {i} missing 'old_string'"))?;
             if old_str.is_empty() {
-                return Ok(ToolResult::error(format!("Edit {}: old_string must not be empty", i)));
+                return Ok(ToolResult::error(format!("Edit {i}: old_string must not be empty")));
             }
             let count = original.matches(old_str).count();
             if count == 0 {
@@ -114,10 +114,10 @@ impl Tool for MultiEditTool {
         let mut content = original.clone();
         for (i, edit) in edits.iter().enumerate() {
             let old_str = edit["old_string"].as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'old_string'", i))?;
+                .ok_or_else(|| anyhow::anyhow!("Edit {i} missing 'old_string'"))?;
             let new_str = edit["new_string"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", i))?;
+                .ok_or_else(|| anyhow::anyhow!("Edit {i} missing 'new_string'"))?;
             content = content.replacen(old_str, new_str, 1);
         }
 

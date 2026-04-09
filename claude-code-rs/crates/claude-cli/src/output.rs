@@ -764,7 +764,6 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
             TaskProgress::TurnStart { turn } if turn > 0 => {
                 eprintln!("\x1b[2m── turn {} ──\x1b[0m", turn);
             }
-            TaskProgress::TurnStart { .. } => {}
             TaskProgress::Text(t) => {
                 print!("{}", t);
                 std::io::stdout().flush().ok();
@@ -785,8 +784,9 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
                     }
                 }
             }
-            TaskProgress::Tokens { .. } => {}
-            TaskProgress::Done(_) => {}
+            TaskProgress::TurnStart { .. }
+            | TaskProgress::Tokens { .. }
+            | TaskProgress::Done(_) => {}
         }
     }).await;
 

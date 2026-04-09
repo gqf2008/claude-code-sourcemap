@@ -8,10 +8,10 @@ pub struct GlobTool;
 
 #[async_trait]
 impl Tool for GlobTool {
-    fn name(&self) -> &str { "Glob" }
+    fn name(&self) -> &'static str { "Glob" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Fast file pattern matching tool that works with any codebase size. Supports glob \
          patterns like \"**/*.js\" or \"src/**/*.ts\". Returns matching file paths sorted by \
          modification time. Use when you need to find files by name patterns. For open-ended \
@@ -42,13 +42,13 @@ impl Tool for GlobTool {
         let search_dir = match input["path"].as_str() {
             Some(p) => match path_util::resolve_path(p, &context.cwd) {
                 Ok(resolved) => resolved,
-                Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+                Err(e) => return Ok(ToolResult::error(format!("{e}"))),
             },
             None => context.cwd.clone(),
         };
         let full = search_dir.join(pattern).to_string_lossy().to_string();
         let mut matches: Vec<String> = Vec::new();
-        for entry in glob::glob(&full).map_err(|e| anyhow::anyhow!("Bad glob: {}", e))? {
+        for entry in glob::glob(&full).map_err(|e| anyhow::anyhow!("Bad glob: {e}"))? {
             match entry {
                 Ok(path) => {
                     // Resolve symlinks and verify the result stays within the search directory

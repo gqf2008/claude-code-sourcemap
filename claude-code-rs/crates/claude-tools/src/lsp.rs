@@ -1,4 +1,4 @@
-//! LSPTool — Language Server Protocol integration for code intelligence.
+//! `LSPTool` — Language Server Protocol integration for code intelligence.
 //!
 //! Aligned with TS `LSPTool`. Provides go-to-definition, find-references,
 //! hover, and symbol lookup via language server processes.
@@ -18,7 +18,7 @@ pub struct LspTool;
 /// Default timeout for ripgrep searches (10 seconds).
 const RG_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Run ripgrep with a timeout. Returns stdout on success, or an error ToolResult.
+/// Run ripgrep with a timeout. Returns stdout on success, or an error `ToolResult`.
 async fn run_rg(cwd: &Path, args: &[&str]) -> Result<String, ToolResult> {
     let output = tokio::time::timeout(
         RG_TIMEOUT,
@@ -42,10 +42,10 @@ async fn run_rg(cwd: &Path, args: &[&str]) -> Result<String, ToolResult> {
 
 #[async_trait]
 impl Tool for LspTool {
-    fn name(&self) -> &str { "LSP" }
+    fn name(&self) -> &'static str { "LSP" }
     fn category(&self) -> ToolCategory { ToolCategory::Code }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Interact with language servers for code intelligence. \
          Supports operations: goToDefinition, findReferences, hover, documentSymbol, \
          workspaceSymbol. Requires a language server to be available for the file type."
@@ -113,12 +113,11 @@ impl Tool for LspTool {
                     "findReferences" => find_references(cwd, &word).await,
                     "hover" => get_hover_info(&abs_path, line, &word),
                     "goToImplementation" => find_implementations(cwd, &word).await,
-                    _ => Ok(ToolResult::error(format!("Operation '{}' not yet supported.", operation))),
+                    _ => Ok(ToolResult::error(format!("Operation '{operation}' not yet supported."))),
                 }
             }
             _ => Ok(ToolResult::error(format!(
-                "Unknown operation: '{}'. Supported: goToDefinition, goToImplementation, findReferences, hover, documentSymbol, workspaceSymbol",
-                operation
+                "Unknown operation: '{operation}'. Supported: goToDefinition, goToImplementation, findReferences, hover, documentSymbol, workspaceSymbol"
             ))),
         }
     }
@@ -133,7 +132,7 @@ fn get_word_at_position(path: &Path, line: usize, character: usize) -> anyhow::R
     let content = std::fs::read_to_string(path)?;
 
     let target_line = content.lines().nth(line.saturating_sub(1))
-        .ok_or_else(|| anyhow::anyhow!("Line {} out of range", line))?;
+        .ok_or_else(|| anyhow::anyhow!("Line {line} out of range"))?;
 
     let col = character.saturating_sub(1).min(target_line.len());
     let chars: Vec<char> = target_line.chars().collect();
@@ -148,7 +147,7 @@ fn get_word_at_position(path: &Path, line: usize, character: usize) -> anyhow::R
     }
 
     if start == end {
-        anyhow::bail!("No identifier at line {}, character {}", line, character);
+        anyhow::bail!("No identifier at line {line}, character {character}");
     }
 
     Ok(chars[start..end].iter().collect())
@@ -326,7 +325,7 @@ async fn search_workspace_symbols(cwd: &Path, query: &str) -> anyhow::Result<Too
     };
 
     if result.is_empty() {
-        Ok(ToolResult::text(format!("No symbols matching '{}' found.", query)))
+        Ok(ToolResult::text(format!("No symbols matching '{query}' found.")))
     } else {
         Ok(ToolResult::text(format!("Symbols matching '{}':\n{}", query, result.trim())))
     }
@@ -353,7 +352,7 @@ async fn find_definition(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
     }
 
     if results.is_empty() {
-        Ok(ToolResult::text(format!("No definition found for '{}'.", word)))
+        Ok(ToolResult::text(format!("No definition found for '{word}'.")))
     } else {
         results.truncate(20);
         Ok(ToolResult::text(format!("Possible definitions of '{}':\n{}", word, results.join("\n"))))
@@ -369,7 +368,7 @@ async fn find_references(cwd: &Path, word: &str) -> anyhow::Result<ToolResult> {
     let count = text.lines().count();
 
     if count == 0 {
-        Ok(ToolResult::text(format!("No references found for '{}'.", word)))
+        Ok(ToolResult::text(format!("No references found for '{word}'.")))
     } else {
         Ok(ToolResult::text(format!("References to '{}' ({} found):\n{}", word, count, text.trim())))
     }
@@ -380,13 +379,13 @@ async fn find_implementations(cwd: &Path, word: &str) -> anyhow::Result<ToolResu
     let escaped = regex::escape(word);
     let patterns = [
         // Rust: impl Trait for Type, impl Type
-        format!(r"impl\s+({esc}\s+for\s+\w+|\w+<[^>]*>\s+for\s+\w+|{esc})\b", esc = escaped),
+        format!(r"impl\s+({escaped}\s+for\s+\w+|\w+<[^>]*>\s+for\s+\w+|{escaped})\b"),
         // TS/Java: class X implements Y, class X extends Y
-        format!(r"class\s+\w+\s+(implements|extends)\s+.*\b{}\b", escaped),
+        format!(r"class\s+\w+\s+(implements|extends)\s+.*\b{escaped}\b"),
         // Python: class X(Y)
-        format!(r"class\s+\w+\([^)]*\b{}\b", escaped),
+        format!(r"class\s+\w+\([^)]*\b{escaped}\b"),
         // Go: func (r *Type) MethodName
-        format!(r"func\s+\([^)]+\)\s+{}\b", escaped),
+        format!(r"func\s+\([^)]+\)\s+{escaped}\b"),
     ];
 
     let mut results = Vec::new();
@@ -403,7 +402,7 @@ async fn find_implementations(cwd: &Path, word: &str) -> anyhow::Result<ToolResu
     }
 
     if results.is_empty() {
-        Ok(ToolResult::text(format!("No implementations found for '{}'.", word)))
+        Ok(ToolResult::text(format!("No implementations found for '{word}'.")))
     } else {
         Ok(ToolResult::text(format!(
             "Implementations of '{}' ({} found):\n{}",

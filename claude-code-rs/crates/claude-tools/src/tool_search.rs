@@ -1,4 +1,4 @@
-//! ToolSearchTool — lets the agent search available tools by keyword.
+//! `ToolSearchTool` — lets the agent search available tools by keyword.
 //!
 //! Aligned with TS `ToolSearchTool.ts`.  This is useful when the agent has
 //! many tools available and needs to discover which one fits a particular need.
@@ -12,10 +12,10 @@ pub struct ToolSearchTool;
 
 #[async_trait]
 impl Tool for ToolSearchTool {
-    fn name(&self) -> &str { "ToolSearch" }
+    fn name(&self) -> &'static str { "ToolSearch" }
     fn category(&self) -> ToolCategory { ToolCategory::Code }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Search for available tools by keyword. Use this when you're unsure which \
          tool to use for a task. Searches tool names and descriptions."
     }
@@ -57,14 +57,13 @@ impl Tool for ToolSearchTool {
 
         if matches.is_empty() {
             return Ok(ToolResult::text(format!(
-                "No tools found matching '{}'. Try a broader search term.",
-                query
+                "No tools found matching '{query}'. Try a broader search term."
             )));
         }
 
         let mut out = format!("Found {} tool(s) matching '{}':\n\n", matches.len(), query);
         for (name, desc) in &matches {
-            out.push_str(&format!("  \x1b[1m{}\x1b[0m\n    {}\n\n", name, desc));
+            out.push_str(&format!("  \x1b[1m{name}\x1b[0m\n    {desc}\n\n"));
         }
 
         Ok(ToolResult::text(out))

@@ -13,10 +13,10 @@ const MAX_WRITE_BYTES: usize = 10 * 1024 * 1024;
 
 #[async_trait]
 impl Tool for FileWriteTool {
-    fn name(&self) -> &str { "Write" }
+    fn name(&self) -> &'static str { "Write" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Writes a file to the local filesystem. Overwrites existing files if present. \
          If this is an existing file, you MUST use Read first. Prefer Edit for modifying \
          existing files — it only sends the diff. Use Write for new files or complete rewrites. \
@@ -49,7 +49,7 @@ impl Tool for FileWriteTool {
             Ok(p) => p,
             Err(e) => {
                 warn!(file_path, error = %e, "Write path resolution rejected");
-                return Ok(ToolResult::error(format!("{}", e)));
+                return Ok(ToolResult::error(format!("{e}")));
             }
         };
 
@@ -82,7 +82,7 @@ impl Tool for FileWriteTool {
             }
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "Cannot read existing file for diff");
-                Ok(ToolResult::error(format!("Cannot read existing file: {}", e)))
+                Ok(ToolResult::error(format!("Cannot read existing file: {e}")))
             }
         }
     }

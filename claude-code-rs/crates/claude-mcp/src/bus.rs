@@ -1,4 +1,4 @@
-//! MCP Bus Adapter — bridges McpManager to the EventBus.
+//! MCP Bus Adapter — bridges `McpManager` to the `EventBus`.
 //!
 //! `McpBusAdapter` is used by the `AgentCoreAdapter` to handle MCP-related
 //! `AgentRequest` variants and emit `AgentNotification`s for MCP lifecycle events.
@@ -16,7 +16,7 @@ use claude_bus::events::{AgentNotification, McpServerInfo};
 use crate::registry::McpManager;
 use crate::types::McpServerConfig;
 
-/// Bridges MCP operations to the EventBus notification system.
+/// Bridges MCP operations to the `EventBus` notification system.
 ///
 /// The adapter owns an `McpManager` and provides methods that:
 /// 1. Execute MCP operations (connect, disconnect, list)
@@ -26,8 +26,9 @@ pub struct McpBusAdapter {
 }
 
 impl McpBusAdapter {
-    /// Create a new adapter wrapping an McpManager.
-    pub fn new(manager: McpManager) -> Self {
+    /// Create a new adapter wrapping an `McpManager`.
+    #[must_use] 
+    pub const fn new(manager: McpManager) -> Self {
         Self { manager }
     }
 
@@ -77,7 +78,7 @@ impl McpBusAdapter {
                 error!("Failed to connect MCP server '{}': {}", name, e);
                 AgentNotification::McpServerError {
                     name: name.to_string(),
-                    error: format!("{:#}", e),
+                    error: format!("{e:#}"),
                 }
             }
         }
@@ -96,7 +97,7 @@ impl McpBusAdapter {
                 error!("Failed to disconnect MCP server '{}': {}", name, e);
                 AgentNotification::McpServerError {
                     name: name.to_string(),
-                    error: format!("{:#}", e),
+                    error: format!("{e:#}"),
                 }
             }
         }
@@ -137,7 +138,7 @@ impl McpBusAdapter {
         if let Err(e) = self.manager.start_all().await {
             notifications.push(AgentNotification::McpServerError {
                 name: "*".to_string(),
-                error: format!("Failed to start MCP servers: {:#}", e),
+                error: format!("Failed to start MCP servers: {e:#}"),
             });
             return notifications;
         }
@@ -173,7 +174,7 @@ impl McpBusAdapter {
         if let Err(e) = self.manager.stop_all().await {
             notifications.push(AgentNotification::McpServerError {
                 name: "*".to_string(),
-                error: format!("Failed to stop MCP servers: {:#}", e),
+                error: format!("Failed to stop MCP servers: {e:#}"),
             });
         } else {
             for name in names {
@@ -202,8 +203,9 @@ impl McpBusAdapter {
         notifications
     }
 
-    /// Get a reference to the underlying McpManager.
-    pub fn manager(&self) -> &McpManager {
+    /// Get a reference to the underlying `McpManager`.
+    #[must_use] 
+    pub const fn manager(&self) -> &McpManager {
         &self.manager
     }
 
@@ -248,7 +250,7 @@ mod tests {
             AgentNotification::McpServerList { servers } => {
                 assert!(servers.is_empty());
             }
-            other => panic!("Expected McpServerList, got {:?}", other),
+            other => panic!("Expected McpServerList, got {other:?}"),
         }
     }
 
@@ -276,7 +278,7 @@ mod tests {
                 assert_eq!(name, "fake");
                 assert!(!error.is_empty());
             }
-            other => panic!("Expected McpServerError, got {:?}", other),
+            other => panic!("Expected McpServerError, got {other:?}"),
         }
     }
 
@@ -289,7 +291,7 @@ mod tests {
             AgentNotification::McpServerDisconnected { name } => {
                 assert_eq!(name, "nonexistent");
             }
-            other => panic!("Expected McpServerDisconnected, got {:?}", other),
+            other => panic!("Expected McpServerDisconnected, got {other:?}"),
         }
     }
 

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::transport::StdioTransport;
-use crate::types::*;
+use crate::types::{ServerInfo, ServerCapabilities, McpToolDef, McpServerConfig, McpToolResult, McpResource, McpContent};
 
 /// MCP client wrapping a transport with protocol-level operations.
 pub struct McpClient {
@@ -108,7 +108,7 @@ impl McpClient {
                 })),
             )
             .await
-            .with_context(|| format!("MCP tools/call '{}' failed", tool_name))?;
+            .with_context(|| format!("MCP tools/call '{tool_name}' failed"))?;
 
         let tool_result: McpToolResult = serde_json::from_value(result)
             .context("Failed to parse MCP tool result")?;
@@ -146,7 +146,7 @@ impl McpClient {
             .transport
             .request("resources/read", Some(json!({ "uri": uri })))
             .await
-            .with_context(|| format!("MCP resources/read '{}' failed", uri))?;
+            .with_context(|| format!("MCP resources/read '{uri}' failed"))?;
 
         let contents: Vec<McpContent> = serde_json::from_value(
             result.get("contents").cloned().unwrap_or(Value::Array(vec![])),

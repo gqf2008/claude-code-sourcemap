@@ -1,4 +1,4 @@
-//! EnterWorktreeTool / ExitWorktreeTool — git worktree isolation for agents.
+//! `EnterWorktreeTool` / `ExitWorktreeTool` — git worktree isolation for agents.
 //!
 //! Aligned with TS `EnterWorktreeTool` and `ExitWorktreeTool`.
 //! Creates isolated git worktrees so agents can work on separate branches
@@ -15,9 +15,9 @@ pub struct EnterWorktreeTool;
 
 #[async_trait]
 impl Tool for EnterWorktreeTool {
-    fn name(&self) -> &str { "EnterWorktree" }
+    fn name(&self) -> &'static str { "EnterWorktree" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Create an isolated git worktree and switch the session into it. \
          This lets you work on a separate branch without affecting the main working tree. \
          Each worktree has its own index and working directory."
@@ -48,13 +48,13 @@ impl Tool for EnterWorktreeTool {
         let slug = match input["name"].as_str() {
             Some(name) => {
                 validate_worktree_name(name)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                 name.to_string()
             }
             None => generate_worktree_slug(),
         };
 
-        let branch_name = format!("claude/{}", slug);
+        let branch_name = format!("claude/{slug}");
         let worktree_dir = git_root.join(".claude").join("worktrees").join(&slug);
 
         // Create .claude/worktrees/ directory
@@ -103,9 +103,9 @@ pub struct ExitWorktreeTool;
 
 #[async_trait]
 impl Tool for ExitWorktreeTool {
-    fn name(&self) -> &str { "ExitWorktree" }
+    fn name(&self) -> &'static str { "ExitWorktree" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Exit the current worktree session and return to the original working directory. \
          Use action='keep' to preserve the worktree and branch, or action='remove' to delete them."
     }
@@ -177,8 +177,7 @@ impl Tool for ExitWorktreeTool {
 
                 if change_count > 0 && !discard {
                     return Ok(ToolResult::error(format!(
-                        "Worktree has {} uncommitted file(s). Set discard_changes=true to confirm removal.",
-                        change_count
+                        "Worktree has {change_count} uncommitted file(s). Set discard_changes=true to confirm removal."
                     )));
                 }
 
@@ -252,7 +251,7 @@ fn validate_worktree_name(name: &str) -> Result<(), String> {
     // Allow letters, digits, dots, underscores, dashes, and slashes
     for ch in name.chars() {
         if !ch.is_alphanumeric() && ch != '.' && ch != '_' && ch != '-' && ch != '/' {
-            return Err(format!("Invalid character '{}' in worktree name.", ch));
+            return Err(format!("Invalid character '{ch}' in worktree name."));
         }
     }
     Ok(())
@@ -313,7 +312,7 @@ mod tests {
     #[test]
     fn validate_name_special_chars_rejected() {
         for ch in [' ', '@', '#', '!', '$', '%', '^', '&', '*'] {
-            let name = format!("bad{}name", ch);
+            let name = format!("bad{ch}name");
             let result = validate_worktree_name(&name);
             assert!(result.is_err(), "should reject '{ch}'");
             assert!(

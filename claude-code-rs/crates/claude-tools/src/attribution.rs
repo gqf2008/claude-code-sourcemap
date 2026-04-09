@@ -22,8 +22,9 @@ pub struct Attribution {
 
 impl Attribution {
     /// Create attribution from a model ID.
+    #[must_use] 
     pub fn from_model(model_id: &str) -> Self {
-        let model_name = claude_core::model::display_name_any(model_id).to_string();
+        let model_name = claude_core::model::display_name_any(model_id);
         Self {
             model_id: model_id.to_string(),
             model_name,
@@ -32,6 +33,7 @@ impl Attribution {
     }
 
     /// Generate a Co-Authored-By line for git commits.
+    #[must_use] 
     pub fn co_authored_by(&self) -> String {
         format!(
             "Co-Authored-By: {} <noreply@anthropic.com>",
@@ -40,10 +42,11 @@ impl Attribution {
     }
 
     /// Generate an attribution block for PR descriptions.
+    #[must_use] 
     pub fn pr_attribution_block(&self) -> String {
         let mut block = format!("---\n_Generated with {}._", self.model_name);
         if let Some(ref url) = self.session_url {
-            block.push_str(&format!(" [Session]({})", url));
+            block.push_str(&format!(" [Session]({url})"));
         }
         block
     }
@@ -86,8 +89,9 @@ impl GitDiffResult {
     const MAX_LINES_PER_FILE: usize = 400;
 
     /// Parse output of `git diff --numstat` into structured stats.
+    #[must_use] 
     pub fn parse_numstat(numstat_output: &str) -> Self {
-        let mut result = GitDiffResult::default();
+        let mut result = Self::default();
 
         for line in numstat_output.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
@@ -154,6 +158,7 @@ impl GitDiffResult {
     }
 
     /// Format as a compact summary string.
+    #[must_use] 
     pub fn summary(&self) -> String {
         let mut out = format!(
             "{} file(s) changed, {} insertion(s)(+), {} deletion(s)(-)",
@@ -161,7 +166,7 @@ impl GitDiffResult {
         );
         if self.truncated {
             if let Some(ref reason) = self.truncation_reason {
-                out.push_str(&format!(" [truncated: {}]", reason));
+                out.push_str(&format!(" [truncated: {reason}]"));
             }
         }
         out
@@ -240,7 +245,7 @@ mod tests {
     fn parse_numstat_truncation_at_limit() {
         let mut input = String::new();
         for i in 0..55 {
-            input.push_str(&format!("1\t0\tfile{}.rs\n", i));
+            input.push_str(&format!("1\t0\tfile{i}.rs\n"));
         }
         let result = GitDiffResult::parse_numstat(&input);
         assert_eq!(result.file_stats.len(), 50);

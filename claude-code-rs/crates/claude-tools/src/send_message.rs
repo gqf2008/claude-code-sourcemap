@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
-/// SendUserMessageTool — send a message or notification to the user.
+/// `SendUserMessageTool` — send a message or notification to the user.
 ///
-/// In the TS codebase this is called BriefTool / SendUserMessage.  It lets
+/// In the TS codebase this is called `BriefTool` / `SendUserMessage`.  It lets
 /// the model proactively push messages (e.g. status updates, completion
 /// notices, or "FYI" messages) outside the normal assistant response flow.
 ///
@@ -14,10 +14,10 @@ pub struct SendUserMessageTool;
 
 #[async_trait]
 impl Tool for SendUserMessageTool {
-    fn name(&self) -> &str { "SendUserMessage" }
+    fn name(&self) -> &'static str { "SendUserMessage" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Send a message to the user. Use for proactive status updates, completion notices, \
          or important information the user should see immediately. Supports markdown formatting."
     }
@@ -54,7 +54,7 @@ impl Tool for SendUserMessageTool {
 
         // In CLI mode, print the message to stderr (separate from the response stream)
         let prefix = if status == "proactive" { "📢 " } else { "💬 " };
-        eprintln!("\n\x1b[36m{}{}\x1b[0m", prefix, message);
+        eprintln!("\n\x1b[36m{prefix}{message}\x1b[0m");
 
         let result = json!({
             "message": message,

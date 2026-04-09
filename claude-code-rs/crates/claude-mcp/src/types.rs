@@ -92,6 +92,7 @@ pub struct McpToolResult {
 
 impl McpToolResult {
     /// Extract concatenated text content from the result.
+    #[must_use] 
     pub fn text(&self) -> String {
         self.content
             .iter()
@@ -117,7 +118,7 @@ pub struct McpServerConfig {
 /// Configuration for connecting to an MCP server via SSE.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpSseConfig {
-    /// SSE endpoint URL (e.g. "https://mcp.example.com/sse").
+    /// SSE endpoint URL (e.g. "<https://mcp.example.com/sse>").
     pub url: String,
     /// Optional HTTP headers (for auth, etc.).
     #[serde(default)]

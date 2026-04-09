@@ -1,7 +1,7 @@
 //! Exponential-backoff retry for Anthropic API calls.
 //!
 //! Aligned with the TypeScript `withRetry.ts` implementation:
-//! - Exponential delay: BASE_DELAY * 2^(attempt-1), capped at MAX_DELAY
+//! - Exponential delay: `BASE_DELAY` * 2^(attempt-1), capped at `MAX_DELAY`
 //! - 25% jitter to prevent thundering herd
 //! - Honors `Retry-After` response header
 //! - Retryable: 429 (rate-limit), 529 (overloaded), 500/502/503 (transient)
@@ -34,17 +34,20 @@ impl Default for RetryConfig {
 }
 
 /// Whether an HTTP status code is retryable.
-pub fn is_retryable_status(status: u16) -> bool {
+#[must_use] 
+pub const fn is_retryable_status(status: u16) -> bool {
     matches!(status, 429 | 529 | 500 | 502 | 503)
 }
 
 /// Whether an HTTP status code is an overloaded error.
-pub fn is_overloaded(status: u16) -> bool {
+#[must_use] 
+pub const fn is_overloaded(status: u16) -> bool {
     status == 529
 }
 
 /// Whether an HTTP status code is a rate-limit error.
-pub fn is_rate_limited(status: u16) -> bool {
+#[must_use] 
+pub const fn is_rate_limited(status: u16) -> bool {
     status == 429
 }
 
@@ -52,6 +55,7 @@ pub fn is_rate_limited(status: u16) -> bool {
 ///
 /// If the server sent `Retry-After` (in seconds), we honour it.
 /// Otherwise: `min(base * 2^(attempt-1), max_delay) + jitter(0..25%)`.
+#[must_use] 
 pub fn retry_delay(attempt: u32, retry_after_secs: Option<u64>, config: &RetryConfig) -> Duration {
     if let Some(secs) = retry_after_secs {
         return Duration::from_secs(secs);
@@ -59,7 +63,7 @@ pub fn retry_delay(attempt: u32, retry_after_secs: Option<u64>, config: &RetryCo
     let exp = config.base_delay_ms.saturating_mul(1u64 << (attempt - 1).min(20));
     let base = exp.min(config.max_delay_ms);
     // Deterministic jitter: use attempt number to get ~12.5% average jitter
-    let jitter = (base / 8).wrapping_mul(((attempt as u64).wrapping_mul(7) + 3) % 4);
+    let jitter = (base / 8).wrapping_mul((u64::from(attempt).wrapping_mul(7) + 3) % 4);
     Duration::from_millis(base.saturating_add(jitter))
 }
 
@@ -94,8 +98,9 @@ pub struct RateLimitInfo {
 
 impl RateLimitInfo {
     /// Parse rate limit headers from a header map.
+    #[must_use] 
     pub fn from_headers(headers: &[(String, String)]) -> Option<Self> {
-        let mut info = RateLimitInfo::default();
+        let mut info = Self::default();
         let mut found = false;
         for (key, value) in headers {
             let k = key.to_lowercase();
@@ -131,13 +136,14 @@ impl RateLimitInfo {
     }
 
     /// Summary string for display.
+    #[must_use] 
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if let (Some(rem), Some(lim)) = (self.remaining_requests, self.limit_requests) {
-            parts.push(format!("requests: {}/{}", rem, lim));
+            parts.push(format!("requests: {rem}/{lim}"));
         }
         if let (Some(rem), Some(lim)) = (self.remaining_tokens, self.limit_tokens) {
-            parts.push(format!("tokens: {}/{}", rem, lim));
+            parts.push(format!("tokens: {rem}/{lim}"));
         }
         if parts.is_empty() {
             "no rate limit data".into()
@@ -150,8 +156,9 @@ impl RateLimitInfo {
 impl ApiHttpError {
     /// Extract a human-readable error message from the response body.
     /// Anthropic API returns `{"error":{"type":"...","message":"..."}}`.
-    /// OpenAI returns `{"error":{"message":"...","type":"...","code":"..."}}`.
+    /// `OpenAI` returns `{"error":{"message":"...","type":"...","code":"..."}}`.
     /// Falls back to the raw body if not parseable.
+    #[must_use] 
     pub fn user_message(&self) -> String {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.body) {
             if let Some(msg) = v["error"]["message"].as_str() {
@@ -205,7 +212,7 @@ where
             Ok(val) => return Ok(val),
             Err(err) => {
                 if attempt > config.max_retries || !is_retryable_status(err.status) {
-                    return Err(anyhow::anyhow!("{}", err));
+                    return Err(anyhow::anyhow!("{err}"));
                 }
 
                 let delay = retry_delay(attempt, err.retry_after, config);

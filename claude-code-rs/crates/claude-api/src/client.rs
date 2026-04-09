@@ -6,7 +6,7 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use tracing::info;
 use crate::provider::ApiBackend;
 use crate::retry::{ApiHttpError, RetryConfig, with_retry};
-use crate::types::*;
+use crate::types::{MessagesRequest, ApiMessage, ApiContentBlock, MessagesResponse, StreamEvent, SystemBlock, ToolDefinition, ResponseContentBlock, DeltaBlock, MessageDeltaData};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
@@ -53,26 +53,30 @@ impl ApiClient {
         self
     }
 
-    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+    #[must_use] 
+    pub const fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
     }
 
-    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+    #[must_use] 
+    pub const fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
     }
 
-    /// Plug in a custom API backend (Bedrock, Vertex, OpenAI, etc.).
+    /// Plug in a custom API backend (Bedrock, Vertex, `OpenAI`, etc.).
     ///
     /// When set, `messages()` and `messages_stream()` delegate to this backend
     /// with retry wrapping. The backend handles auth, URL, and model ID mapping.
+    #[must_use] 
     pub fn with_backend(mut self, backend: Box<dyn ApiBackend>) -> Self {
         self.backend = Some(Arc::from(backend));
         self
     }
 
     /// Returns the active provider name ("firstParty", "bedrock", "vertex").
+    #[must_use] 
     pub fn provider_name(&self) -> &str {
         match &self.backend {
             Some(b) => b.provider_name(),
@@ -109,7 +113,7 @@ impl ApiClient {
     }
 
     /// Quick connectivity check: send a minimal request to verify the API key
-    /// and network. Returns Ok(model_name) on success, or an error describing
+    /// and network. Returns `Ok(model_name)` on success, or an error describing
     /// the problem (auth, network, etc.).
     pub async fn test_connection(&self) -> Result<String> {
         let req = MessagesRequest {
@@ -155,8 +159,8 @@ impl ApiClient {
                         .send()
                         .await
                         .map_err(|e| ApiHttpError {
-                            status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-                            body: format!("Request failed: {}", e),
+                            status: e.status().map_or(0, |s| s.as_u16()),
+                            body: format!("Request failed: {e}"),
                             retry_after: None,
                             rate_limit_info: None,
                         })?;
@@ -170,7 +174,7 @@ impl ApiClient {
 
                     response.json::<MessagesResponse>().await.map_err(|e| ApiHttpError {
                         status: 0,
-                        body: format!("Failed to parse response: {}", e),
+                        body: format!("Failed to parse response: {e}"),
                         retry_after: None,
                         rate_limit_info: None,
                     })
@@ -182,7 +186,7 @@ impl ApiClient {
                     attempt, self.retry_config.max_retries, status, delay.as_secs_f64()
                 );
                 info!("{}", msg);
-                eprintln!("\x1b[33m⟳ {}\x1b[0m", msg);
+                eprintln!("\x1b[33m⟳ {msg}\x1b[0m");
             },
         )
         .await
@@ -220,8 +224,8 @@ impl ApiClient {
                         .send()
                         .await
                         .map_err(|e| ApiHttpError {
-                            status: e.status().map(|s| s.as_u16()).unwrap_or(0),
-                            body: format!("Request failed: {}", e),
+                            status: e.status().map_or(0, |s| s.as_u16()),
+                            body: format!("Request failed: {e}"),
                             retry_after: None,
                             rate_limit_info: None,
                         })?;
@@ -242,7 +246,7 @@ impl ApiClient {
                     attempt, self.retry_config.max_retries, status, delay.as_secs_f64()
                 );
                 info!("{}", msg);
-                eprintln!("\x1b[33m⟳ {}\x1b[0m", msg);
+                eprintln!("\x1b[33m⟳ {msg}\x1b[0m");
             },
         )
         .await
@@ -267,7 +271,7 @@ impl ApiClient {
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        yield Err(anyhow::anyhow!("Stream read error: {}", e));
+                        yield Err(anyhow::anyhow!("Stream read error: {e}"));
                         return;
                     }
                     Ok(None) => {
@@ -290,7 +294,8 @@ impl ApiClient {
         Ok(Box::pin(stream))
     }
 
-    /// Convenience: build a MessagesRequest with defaults
+    /// Convenience: build a `MessagesRequest` with defaults
+    #[must_use] 
     pub fn build_request(
         &self,
         messages: Vec<ApiMessage>,
@@ -354,7 +359,7 @@ impl ApiClient {
                         }
                     }
                     Err(e) => {
-                        yield Err(anyhow::anyhow!("Non-streaming fallback failed: {}", e));
+                        yield Err(anyhow::anyhow!("Non-streaming fallback failed: {e}"));
                     }
                 }
             }
@@ -366,8 +371,8 @@ impl ApiClient {
     /// Create a lightweight clone for fallback requests.
     ///
     /// Preserves the backend so fallback uses the same provider.
-    fn clone_for_fallback(&self) -> ApiClient {
-        ApiClient {
+    fn clone_for_fallback(&self) -> Self {
+        Self {
             http: self.http.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
@@ -451,6 +456,7 @@ fn synthesize_stream_events(response: MessagesResponse) -> Vec<StreamEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ApiUsage;
 
     #[test]
     fn client_default_constructor() {

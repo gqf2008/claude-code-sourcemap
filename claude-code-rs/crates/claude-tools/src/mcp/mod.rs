@@ -32,10 +32,10 @@ pub struct ListMcpResourcesTool {
 
 #[async_trait]
 impl Tool for ListMcpResourcesTool {
-    fn name(&self) -> &str { "mcp_list_resources" }
+    fn name(&self) -> &'static str { "mcp_list_resources" }
     fn category(&self) -> ToolCategory { ToolCategory::Mcp }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "List resources available from connected MCP servers. Resources are \
          data items (files, database entries, etc.) that MCP servers expose. \
          Set format to 'json' for structured output."
@@ -107,12 +107,12 @@ impl Tool for ListMcpResourcesTool {
                 match manager.list_resources_for(name).await {
                     Ok(resources) => {
                         if resources.is_empty() {
-                            output.push_str(&format!("## {} — no resources\n\n", name));
+                            output.push_str(&format!("## {name} — no resources\n\n"));
                         } else {
                             output.push_str(&format!("## {} — {} resources\n", name, resources.len()));
                             for res in &resources {
                                 let mime = res.mime_type.as_deref()
-                                    .map(|m| format!(" [{}]", m))
+                                    .map(|m| format!(" [{m}]"))
                                     .unwrap_or_default();
                                 output.push_str(&format!(
                                     "- **{}** (`{}`){}{}\n",
@@ -121,7 +121,7 @@ impl Tool for ListMcpResourcesTool {
                                     mime,
                                     res.description
                                         .as_deref()
-                                        .map(|d| format!(" — {}", d))
+                                        .map(|d| format!(" — {d}"))
                                         .unwrap_or_default()
                                 ));
                             }
@@ -129,7 +129,7 @@ impl Tool for ListMcpResourcesTool {
                         }
                     }
                     Err(e) => {
-                        output.push_str(&format!("## {} — error: {}\n\n", name, e));
+                        output.push_str(&format!("## {name} — error: {e}\n\n"));
                     }
                 }
             }
@@ -147,10 +147,10 @@ pub struct ReadMcpResourceTool {
 
 #[async_trait]
 impl Tool for ReadMcpResourceTool {
-    fn name(&self) -> &str { "mcp_read_resource" }
+    fn name(&self) -> &'static str { "mcp_read_resource" }
     fn category(&self) -> ToolCategory { ToolCategory::Mcp }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Read a specific resource from an MCP server by its URI. \
          Handles both text and binary content. For binary resources, \
          set save_to to write the decoded data to a file."
@@ -223,14 +223,13 @@ impl Tool for ReadMcpResourceTool {
                             }
                         }
                         Err(e) => {
-                            text_parts.push(format!("[Binary blob ({}) — base64 decode error: {}]", mime, e));
+                            text_parts.push(format!("[Binary blob ({mime}) — base64 decode error: {e}]"));
                         }
                     }
                 } else {
                     let size_hint = data.len() * 3 / 4;
                     text_parts.push(format!(
-                        "[Binary blob: {} ({}, ~{} bytes). Use save_to to write to disk.]",
-                        uri, mime, size_hint
+                        "[Binary blob: {uri} ({mime}, ~{size_hint} bytes). Use save_to to write to disk.]"
                     ));
                 }
             }
@@ -239,10 +238,10 @@ impl Tool for ReadMcpResourceTool {
         if text_parts.is_empty() {
             if blob_count > 0 {
                 Ok(ToolResult::text(format!(
-                    "Resource '{}' contains {} binary blob(s) but no text content.", uri, blob_count
+                    "Resource '{uri}' contains {blob_count} binary blob(s) but no text content."
                 )))
             } else {
-                Ok(ToolResult::text(format!("Resource '{}' returned no content.", uri)))
+                Ok(ToolResult::text(format!("Resource '{uri}' returned no content.")))
             }
         } else {
             Ok(ToolResult::text(text_parts.join("\n")))
@@ -295,7 +294,7 @@ impl Tool for McpToolProxy {
     }
 }
 
-/// Create McpToolProxy instances for all tools discovered from connected servers.
+/// Create `McpToolProxy` instances for all tools discovered from connected servers.
 pub async fn create_mcp_tool_proxies(
     manager: Arc<RwLock<McpManager>>,
 ) -> anyhow::Result<Vec<McpToolProxy>> {

@@ -4,9 +4,9 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 
-/// REPLTool — execute code in a Python, Node.js, or Bash interpreter.
+/// `REPLTool` — execute code in a Python, Node.js, or Bash interpreter.
 ///
-/// Mirrors the TS REPLTool: runs code snippets in an ephemeral subprocess and
+/// Mirrors the TS `REPLTool`: runs code snippets in an ephemeral subprocess and
 /// returns stdout/stderr.  Each call starts a fresh process (no persistent state
 /// across calls) for simplicity.  A future enhancement could keep a long-running
 /// REPL process alive.
@@ -14,10 +14,10 @@ pub struct ReplTool;
 
 #[async_trait]
 impl Tool for ReplTool {
-    fn name(&self) -> &str { "REPL" }
+    fn name(&self) -> &'static str { "REPL" }
     fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Execute code in a REPL (Python, Node.js, or Bash). \
          Each invocation runs the code in a fresh subprocess. \
          Use this for quick computations, data exploration, or testing snippets."
@@ -92,7 +92,7 @@ impl Tool for ReplTool {
             }
             other => {
                 return Ok(ToolResult::error(format!(
-                    "Unsupported language: '{}'. Use python, node, or bash.", other
+                    "Unsupported language: '{other}'. Use python, node, or bash."
                 )));
             }
         };
@@ -156,7 +156,7 @@ impl Tool for ReplTool {
                     text.push_str(&stderr);
                 }
                 if text.is_empty() {
-                    text = format!("(process exited with code {})", exit_code);
+                    text = format!("(process exited with code {exit_code})");
                 }
 
                 // Truncate very large outputs
@@ -168,10 +168,10 @@ impl Tool for ReplTool {
                 if output.status.success() {
                     Ok(ToolResult::text(text))
                 } else {
-                    Ok(ToolResult::error(format!("Exit code {}\n{}", exit_code, text)))
+                    Ok(ToolResult::error(format!("Exit code {exit_code}\n{text}")))
                 }
             }
-            Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {}", e))),
+            Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {e}"))),
             Err(_) => {
                 // Timeout — kill the child process
                 if let Some(pid) = child_pid {
@@ -187,7 +187,7 @@ impl Tool for ReplTool {
                     }
                 }
                 Ok(ToolResult::error(format!(
-                    "Execution timed out after {}s (process killed)", timeout_secs
+                    "Execution timed out after {timeout_secs}s (process killed)"
                 )))
             }
         }

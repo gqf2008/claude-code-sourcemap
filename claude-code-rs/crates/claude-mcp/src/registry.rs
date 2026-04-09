@@ -3,7 +3,7 @@
 //! Extracted from `claude-tools/src/mcp/server.rs`. Provides:
 //! - Config discovery from CLAUDE.md and settings
 //! - Server startup / shutdown
-//! - Tool name mapping (mcp__server__tool)
+//! - Tool name mapping (`mcp__server__tool`)
 //! - Health monitoring
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::client::McpClient;
-use crate::types::*;
+use crate::types::{McpServerConfig, McpToolDef, McpToolResult, McpResource, McpContent};
 
 /// Prefix for MCP tool proxy names: `mcp__<server>__<tool>`.
 pub const MCP_TOOL_PREFIX: &str = "mcp__";
@@ -32,6 +32,7 @@ impl Default for McpManager {
 }
 
 impl McpManager {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
@@ -132,7 +133,7 @@ impl McpManager {
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(&server_name)
-            .with_context(|| format!("MCP server '{}' not found or not running", server_name))?;
+            .with_context(|| format!("MCP server '{server_name}' not found or not running"))?;
 
         client.call_tool(&tool_name, arguments).await
     }
@@ -163,7 +164,7 @@ impl McpManager {
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
-            .with_context(|| format!("MCP server '{}' not found", server_name))?;
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
 
         client.read_resource(uri).await
     }
@@ -189,7 +190,7 @@ impl McpManager {
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
-            .with_context(|| format!("MCP server '{}' not found or not running", server_name))?;
+            .with_context(|| format!("MCP server '{server_name}' not found or not running"))?;
 
         client.call_tool(tool_name, arguments).await
     }
@@ -199,7 +200,7 @@ impl McpManager {
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
-            .with_context(|| format!("MCP server '{}' not found", server_name))?;
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
 
         client.list_resources().await
     }
@@ -252,12 +253,12 @@ impl McpManager {
         }
     }
 
-    /// Refresh tools for a specific server (after list_changed notification).
+    /// Refresh tools for a specific server (after `list_changed` notification).
     pub async fn refresh_tools(&self, server_name: &str) -> Result<Vec<McpToolDef>> {
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
-            .with_context(|| format!("MCP server '{}' not found", server_name))?;
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
 
         client.handle_tool_list_changed().await
     }
@@ -266,11 +267,13 @@ impl McpManager {
 // ── Tool name utilities ──────────────────────────────────────────────────────
 
 /// Format an MCP tool name: `mcp__<server>__<tool>`.
+#[must_use] 
 pub fn format_mcp_tool_name(server_name: &str, tool_name: &str) -> String {
-    format!("{}{}__{}", MCP_TOOL_PREFIX, server_name, tool_name)
+    format!("{MCP_TOOL_PREFIX}{server_name}__{tool_name}")
 }
 
 /// Parse an MCP tool name: `mcp__<server>__<tool>` → (server, tool).
+#[must_use] 
 pub fn parse_mcp_tool_name(prefixed: &str) -> Option<(String, String)> {
     let rest = prefixed.strip_prefix(MCP_TOOL_PREFIX)?;
     let sep_pos = rest.find("__")?;
@@ -283,6 +286,7 @@ pub fn parse_mcp_tool_name(prefixed: &str) -> Option<(String, String)> {
 }
 
 /// Check if a tool name is an MCP proxy tool.
+#[must_use] 
 pub fn is_mcp_tool(name: &str) -> bool {
     name.starts_with(MCP_TOOL_PREFIX)
 }
@@ -306,7 +310,7 @@ pub fn load_mcp_configs(path: &std::path::Path) -> Result<Vec<McpServerConfig>> 
     for (name, config) in servers {
         let command = config["command"]
             .as_str()
-            .with_context(|| format!("Missing 'command' for MCP server '{}'", name))?
+            .with_context(|| format!("Missing 'command' for MCP server '{name}'"))?
             .to_string();
 
         let args: Vec<String> = config
@@ -342,6 +346,7 @@ pub fn load_mcp_configs(path: &std::path::Path) -> Result<Vec<McpServerConfig>> 
 }
 
 /// Discover `.mcp.json` files in standard locations.
+#[must_use] 
 pub fn discover_mcp_configs(cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
 

@@ -25,8 +25,8 @@ pub fn print_diff(label: &str, old: &str, new: &str) {
     }
 
     // Header
-    eprintln!("{}--- a/{}{}", RED, label, RESET);
-    eprintln!("{}+++ b/{}{}", GREEN, label, RESET);
+    eprintln!("{RED}--- a/{label}{RESET}");
+    eprintln!("{GREEN}+++ b/{label}{RESET}");
 
     for group in diff.grouped_ops(CONTEXT_LINES) {
         // Hunk header: @@ -old_start,old_len +new_start,new_len @@
@@ -36,8 +36,7 @@ pub fn print_diff(label: &str, old: &str, new: &str) {
         let new_start = first.new_range().start + 1;
         let new_len: usize = group.iter().map(|op| op.new_range().len()).sum();
         eprintln!(
-            "{}@@ -{},{} +{},{} @@{}",
-            CYAN, old_start, old_len, new_start, new_len, RESET
+            "{CYAN}@@ -{old_start},{old_len} +{new_start},{new_len} @@{RESET}"
         );
 
         for op in &group {
@@ -50,7 +49,7 @@ pub fn print_diff(label: &str, old: &str, new: &str) {
                 let line = change.value();
                 // Suppress final newline on the last line to avoid double blank lines
                 let line = line.trim_end_matches('\n');
-                eprintln!("{}{}{}{}", color, prefix, line, RESET);
+                eprintln!("{color}{prefix}{line}{RESET}");
             }
         }
     }
@@ -58,10 +57,10 @@ pub fn print_diff(label: &str, old: &str, new: &str) {
 
 /// Print a "created file" diff (all lines added).
 pub fn print_create_diff(label: &str, content: &str) {
-    eprintln!("{}+++ b/{}{}", GREEN, label, RESET);
+    eprintln!("{GREEN}+++ b/{label}{RESET}");
     eprintln!("{}@@ -0,0 +1,{} @@{}", CYAN, content.lines().count(), RESET);
     for line in content.lines() {
-        eprintln!("{}+{}{}", GREEN, line, RESET);
+        eprintln!("{GREEN}+{line}{RESET}");
     }
 }
 

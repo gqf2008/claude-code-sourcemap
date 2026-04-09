@@ -35,6 +35,7 @@ pub struct OAuthToken {
 }
 
 impl OAuthToken {
+    #[must_use] 
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now = std::time::SystemTime::now()
@@ -74,12 +75,14 @@ pub struct OAuthFlow {
 }
 
 impl OAuthFlow {
-    pub fn new(config: OAuthConfig) -> Self {
+    #[must_use] 
+    pub const fn new(config: OAuthConfig) -> Self {
         Self { config }
     }
 
     /// Build the authorization URL the user should open in a browser.
     /// Returns `(url, code_verifier)`.
+    #[must_use] 
     pub fn build_auth_url(&self) -> (String, String) {
         let verifier = generate_code_verifier();
         let challenge = code_challenge(&verifier);

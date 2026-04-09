@@ -16,7 +16,7 @@
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
-use crate::events::*;
+use crate::events::{AgentNotification, AgentRequest, PermissionRequest, PermissionResponse, RiskLevel};
 
 // ── EventBus ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +34,7 @@ impl EventBus {
     ///
     /// Returns `(core_handle, client_handle)`.
     #[allow(clippy::new_ret_no_self)]
+    #[must_use] 
     pub fn new(capacity: usize) -> (BusHandle, ClientHandle) {
         let (notify_tx, notify_rx) = broadcast::channel(capacity);
         let (request_tx, request_rx) = mpsc::unbounded_channel();
@@ -165,20 +166,18 @@ impl BusHandle {
             None // Channel closed
         };
 
-        match tokio::time::timeout(timeout, wait).await {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::warn!(
-                    "Permission request timed out for tool '{}' after {:?}, auto-denying",
-                    tool_name,
-                    timeout,
-                );
-                None
-            }
+        if let Ok(result) = tokio::time::timeout(timeout, wait).await { result } else {
+            tracing::warn!(
+                "Permission request timed out for tool '{}' after {:?}, auto-denying",
+                tool_name,
+                timeout,
+            );
+            None
         }
     }
 
     /// Get the notification sender (for cloning to sub-agents).
+    #[must_use] 
     pub fn notify_sender(&self) -> broadcast::Sender<AgentNotification> {
         self.notify_tx.clone()
     }
@@ -188,6 +187,7 @@ impl BusHandle {
     /// Multiple clients can coexist — all receive notifications (broadcast),
     /// and all share the same request channel (mpsc to core).
     /// Permission channels are shared (first responder wins).
+    #[must_use] 
     pub fn new_client(&self) -> ClientHandle {
         ClientHandle {
             notify_rx: self.notify_tx.subscribe(),
@@ -200,9 +200,10 @@ impl BusHandle {
 
     /// Subscribe to the request channel as a receiver (for testing).
     ///
-    /// NOTE: The primary request receiver is held by BusHandle itself
+    /// NOTE: The primary request receiver is held by `BusHandle` itself
     /// (via `recv_request`). This creates a *notification* subscription
     /// for the purpose of observing requests in tests.
+    #[must_use] 
     pub fn subscribe_requests(&self) -> mpsc::UnboundedReceiver<AgentRequest> {
         // This is a workaround: we can't really "subscribe" to mpsc.
         // For tests, create a new channel pair and swap in the new receiver.
@@ -236,7 +237,7 @@ impl ClientHandle {
     /// Receive the next notification from the Agent Core.
     ///
     /// If the client falls behind, intermediate messages are skipped
-    /// (broadcast::Lagged) and this returns the next available message.
+    /// (`broadcast::Lagged`) and this returns the next available message.
     pub async fn recv_notification(&mut self) -> Option<AgentNotification> {
         loop {
             match self.notify_rx.recv().await {
@@ -300,6 +301,7 @@ impl ClientHandle {
     ///
     /// Useful for spawning multiple consumers (e.g., one for display,
     /// one for logging).
+    #[must_use] 
     pub fn subscribe_notifications(&self) -> broadcast::Receiver<AgentNotification> {
         self._notify_tx.subscribe()
     }
@@ -339,11 +341,11 @@ mod tests {
 
         match e1 {
             AgentNotification::TextDelta { text } => assert_eq!(text, "Hello"),
-            other => panic!("Expected TextDelta, got {:?}", other),
+            other => panic!("Expected TextDelta, got {other:?}"),
         }
         match e2 {
             AgentNotification::TextDelta { text } => assert_eq!(text, " world"),
-            other => panic!("Expected TextDelta, got {:?}", other),
+            other => panic!("Expected TextDelta, got {other:?}"),
         }
     }
 
@@ -361,7 +363,7 @@ mod tests {
         let req = bus.recv_request().await.unwrap();
         match req {
             AgentRequest::Submit { text, .. } => assert_eq!(text, "Fix bug"),
-            other => panic!("Expected Submit, got {:?}", other),
+            other => panic!("Expected Submit, got {other:?}"),
         }
     }
 
@@ -435,7 +437,7 @@ mod tests {
             AgentNotification::SessionStart { session_id, .. } => {
                 assert_eq!(session_id, "s1");
             }
-            other => panic!("Expected SessionStart, got {:?}", other),
+            other => panic!("Expected SessionStart, got {other:?}"),
         }
     }
 
@@ -465,7 +467,7 @@ mod tests {
                 assert_eq!(text, "Hello there");
                 assert!(images.is_empty());
             }
-            other => panic!("Expected Submit, got {:?}", other),
+            other => panic!("Expected Submit, got {other:?}"),
         }
     }
 
@@ -495,7 +497,7 @@ mod tests {
         // Send 500 notifications rapidly
         for i in 0..500 {
             bus.notify(AgentNotification::TextDelta {
-                text: format!("chunk-{}", i),
+                text: format!("chunk-{i}"),
             });
         }
 
@@ -504,9 +506,9 @@ mod tests {
             let event = client.recv_notification().await.unwrap();
             match event {
                 AgentNotification::TextDelta { text } => {
-                    assert_eq!(text, format!("chunk-{}", i));
+                    assert_eq!(text, format!("chunk-{i}"));
                 }
-                other => panic!("Expected TextDelta, got {:?}", other),
+                other => panic!("Expected TextDelta, got {other:?}"),
             }
         }
     }

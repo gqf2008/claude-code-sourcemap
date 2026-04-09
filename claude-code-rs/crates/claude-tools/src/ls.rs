@@ -8,12 +8,12 @@ pub struct LsTool;
 
 #[async_trait]
 impl Tool for LsTool {
-    fn name(&self) -> &str { "LS" }
+    fn name(&self) -> &'static str { "LS" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
     fn is_read_only(&self) -> bool { true }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Lists files and directories in a given path. Use this to explore project structure \
          and discover files. Prefer this over shell 'ls' for directory exploration."
     }
@@ -45,7 +45,7 @@ impl Tool for LsTool {
 
         let dir = match path_util::resolve_path(raw_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };
 
         if !dir.exists() {
@@ -84,7 +84,7 @@ impl Tool for LsTool {
         let mut lines = vec![format!("{}:", dir.display())];
         for (name, kind, size) in &entries {
             if *kind == "dir" {
-                lines.push(format!("  {}/", name));
+                lines.push(format!("  {name}/"));
             } else {
                 lines.push(format!("  {}  ({})", name, human_size(*size)));
             }
@@ -106,7 +106,7 @@ fn human_size(bytes: u64) -> String {
         b if b >= GB => format!("{:.1}GB", b as f64 / GB as f64),
         b if b >= MB => format!("{:.1}MB", b as f64 / MB as f64),
         b if b >= KB => format!("{:.1}KB", b as f64 / KB as f64),
-        b => format!("{}B", b),
+        b => format!("{b}B"),
     }
 }
 

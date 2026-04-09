@@ -30,6 +30,7 @@ pub struct UsageTracker {
 }
 
 impl UsageTracker {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -53,38 +54,45 @@ impl UsageTracker {
     }
 
     /// Total cost across all models.
+    #[must_use] 
     pub fn total_cost(&self) -> f64 {
         self.per_model.values().map(|s| s.cost_usd).sum()
     }
 
     /// Total input tokens across all models.
+    #[must_use] 
     pub fn total_input_tokens(&self) -> u64 {
         self.per_model.values().map(|s| s.input_tokens).sum()
     }
 
     /// Total output tokens across all models.
+    #[must_use] 
     pub fn total_output_tokens(&self) -> u64 {
         self.per_model.values().map(|s| s.output_tokens).sum()
     }
 
     /// Total API calls.
-    pub fn total_calls(&self) -> u32 {
+    #[must_use] 
+    pub const fn total_calls(&self) -> u32 {
         self.total_calls
     }
 
     /// Get stats for a specific model.
+    #[must_use] 
     pub fn model_stats(&self, model: &str) -> Option<&ModelUsageStats> {
         self.per_model.get(model)
     }
 
     /// Get all per-model stats.
-    pub fn all_model_stats(&self) -> &HashMap<String, ModelUsageStats> {
+    #[must_use] 
+    pub const fn all_model_stats(&self) -> &HashMap<String, ModelUsageStats> {
         &self.per_model
     }
 
     /// Format a compact usage summary for display.
     ///
     /// Example: "📊 3 calls | 12.5K in / 3.2K out | $0.0523"
+    #[must_use] 
     pub fn format_summary(&self) -> String {
         let total_in = self.total_input_tokens();
         let total_out = self.total_output_tokens();
@@ -101,6 +109,7 @@ impl UsageTracker {
     }
 
     /// Format a detailed per-model breakdown.
+    #[must_use] 
     pub fn format_detailed(&self) -> String {
         if self.per_model.is_empty() {
             return "No API usage recorded.".to_string();
@@ -134,11 +143,13 @@ impl UsageTracker {
     }
 
     /// Export per-model stats as a serializable map (for session persistence).
+    #[must_use] 
     pub fn to_session_usage(&self) -> HashMap<String, ModelUsageStats> {
         self.per_model.clone()
     }
 
     /// Restore from previously saved session usage.
+    #[must_use] 
     pub fn from_session_usage(saved: HashMap<String, ModelUsageStats>) -> Self {
         let total_calls = saved.values().map(|s| s.api_calls).sum();
         Self {

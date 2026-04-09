@@ -410,7 +410,8 @@ fn read_oauth_credentials() -> Option<String> {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as i64;
+            .as_millis();
+        let now_ms = i64::try_from(now_ms).unwrap_or(i64::MAX);
         if now_ms > expires_at {
             tracing::debug!("OAuth token expired (expiresAt={})", expires_at);
             return None;
@@ -499,9 +500,9 @@ fn resolve_api_key(
         }
         "openai" | "together" | "groq" => {
             let env_var = match provider {
-                "openai" => "OPENAI_API_KEY",
                 "together" => "TOGETHER_API_KEY",
                 "groq" => "GROQ_API_KEY",
+                // "openai" and any future variant
                 _ => "OPENAI_API_KEY",
             };
             std::env::var(env_var).or_else(|_| {
@@ -851,10 +852,13 @@ mod tests {
     fn test_read_oauth_credentials_valid() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let cred_path = tmp.path().join(".credentials.json");
-        let expires = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
+        let expires = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX)
             + 3_600_000; // 1 hour from now
         std::fs::write(
             &cred_path,
@@ -886,10 +890,13 @@ mod tests {
         let expired_json = r#"{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000}}"#;
         let json: serde_json::Value = serde_json::from_str(expired_json).unwrap();
         let expires_at = json["claudeAiOauth"]["expiresAt"].as_i64().unwrap();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+        let now_ms = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
         assert!(now_ms > expires_at, "token should be expired");
     }
 

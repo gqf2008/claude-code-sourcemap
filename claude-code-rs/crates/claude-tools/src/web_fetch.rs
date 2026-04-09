@@ -115,7 +115,7 @@ fn extract_main_content(html: &str) -> String {
     let lower = html.to_lowercase();
     for tag in &["<article", "<main", "<div role=\"main\""] {
         if let Some(start) = lower.find(tag) {
-            let content_start = html[start..].find('>').map(|i| start + i + 1).unwrap_or(start);
+            let content_start = html[start..].find('>').map_or(start, |i| start + i + 1);
             let close_tag = match *tag {
                 "<article" => "</article>",
                 "<main" => "</main>",
@@ -128,7 +128,7 @@ fn extract_main_content(html: &str) -> String {
     }
     // Fallback: try <body>
     if let Some(start) = lower.find("<body") {
-        let content_start = html[start..].find('>').map(|i| start + i + 1).unwrap_or(start);
+        let content_start = html[start..].find('>').map_or(start, |i| start + i + 1);
         if let Some(end) = lower[content_start..].find("</body>") {
             return html_to_markdown(&html[content_start..content_start + end]);
         }
@@ -141,9 +141,9 @@ pub struct WebFetchTool;
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "WebFetch" }
+    fn name(&self) -> &'static str { "WebFetch" }
     fn category(&self) -> ToolCategory { ToolCategory::Web }
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Fetch a URL and return its content. Converts HTML to readable markdown by default. \
          Set raw=true to get raw HTML. Set extract_main_content=true to extract the main \
          article/body content."
@@ -225,7 +225,7 @@ impl Tool for WebFetchTool {
         if status.is_success() {
             Ok(ToolResult::text(truncated))
         } else {
-            Ok(ToolResult::error(format!("HTTP {}: {}", status, truncated)))
+            Ok(ToolResult::error(format!("HTTP {status}: {truncated}")))
         }
     }
 }
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn extract_article_tag() {
-        let html = r#"<html><body><nav>nav</nav><article><p>Main text</p></article></body></html>"#;
+        let html = r"<html><body><nav>nav</nav><article><p>Main text</p></article></body></html>";
         let content = extract_main_content(html);
         assert!(content.contains("Main text"));
         assert!(!content.contains("nav"));
@@ -338,14 +338,14 @@ mod tests {
 
     #[test]
     fn extract_main_tag() {
-        let html = r#"<html><body><header>H</header><main><p>Content</p></main></body></html>"#;
+        let html = r"<html><body><header>H</header><main><p>Content</p></main></body></html>";
         let content = extract_main_content(html);
         assert!(content.contains("Content"));
     }
 
     #[test]
     fn fallback_to_body() {
-        let html = r#"<html><body><p>Body text</p></body></html>"#;
+        let html = r"<html><body><p>Body text</p></body></html>";
         let content = extract_main_content(html);
         assert!(content.contains("Body text"));
     }

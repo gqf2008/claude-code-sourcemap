@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, Command};
 
-use crate::protocol::*;
+use crate::protocol::{JsonRpcRequest, JsonRpcMessage, JsonRpcNotification};
 
 /// Manages a child process and communicates via newline-delimited JSON-RPC.
 pub struct StdioTransport {
@@ -114,7 +114,7 @@ impl StdioTransport {
                 continue;
             }
             let msg: JsonRpcMessage = serde_json::from_str(trimmed)
-                .with_context(|| format!("Invalid JSON-RPC from MCP server: {}", trimmed))?;
+                .with_context(|| format!("Invalid JSON-RPC from MCP server: {trimmed}"))?;
             return Ok(msg);
         }
     }

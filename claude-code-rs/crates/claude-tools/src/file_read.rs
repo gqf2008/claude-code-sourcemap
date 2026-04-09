@@ -110,10 +110,10 @@ pub struct FileReadTool;
 
 #[async_trait]
 impl Tool for FileReadTool {
-    fn name(&self) -> &str { "Read" }
+    fn name(&self) -> &'static str { "Read" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Reads a file from the local filesystem. The file_path must be an absolute path. \
          By default reads up to 2000 lines from the beginning. Use offset/limit to read \
          specific portions. Results use cat -n format with line numbers starting at 1. \
@@ -144,7 +144,7 @@ impl Tool for FileReadTool {
         for blocked in BLOCKED_DEVICE_PATHS {
             if file_path.starts_with(blocked) {
                 return Ok(ToolResult::error(format!(
-                    "Cannot read device file: {} — this would hang or produce infinite output", file_path
+                    "Cannot read device file: {file_path} — this would hang or produce infinite output"
                 )));
             }
         }
@@ -153,7 +153,7 @@ impl Tool for FileReadTool {
             Ok(p) => p,
             Err(e) => {
                 warn!(file_path, error = %e, "Path resolution rejected");
-                return Ok(ToolResult::error(format!("{}", e)));
+                return Ok(ToolResult::error(format!("{e}")));
             }
         };
         if !path.exists() {
@@ -176,7 +176,7 @@ impl Tool for FileReadTool {
         // Check for image files — return base64
         let ext = path.extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         // Check file size before reading into memory (applies to ALL file types)
@@ -236,7 +236,7 @@ impl Tool for FileReadTool {
         let mtime = format_mtime(&path).unwrap_or_default();
         let mut header = format!("File: {} ({} lines", path.display(), total_lines);
         if !mtime.is_empty() {
-            header.push_str(&format!(", modified {}", mtime));
+            header.push_str(&format!(", modified {mtime}"));
         }
         header.push(')');
         if end < total_lines {
@@ -253,9 +253,9 @@ async fn read_directory(path: &Path) -> anyhow::Result<ToolResult> {
     while let Some(entry) = dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
         if entry.file_type().await?.is_dir() {
-            entries.push(format!("  {}/", name));
+            entries.push(format!("  {name}/"));
         } else {
-            entries.push(format!("  {}", name));
+            entries.push(format!("  {name}"));
         }
     }
     entries.sort();
@@ -288,7 +288,7 @@ async fn read_image(path: &Path, ext: &str) -> anyhow::Result<ToolResult> {
 async fn read_notebook(path: &Path) -> anyhow::Result<ToolResult> {
     let content = tokio::fs::read_to_string(path).await?;
     let notebook: Value = serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Invalid notebook JSON: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid notebook JSON: {e}"))?;
 
     let mut output = String::new();
     output.push_str(&format!("# Notebook: {}\n\n", path.file_name().unwrap_or_default().to_string_lossy()));
@@ -365,25 +365,25 @@ mod tests {
     #[test]
     fn test_similarity_same_extension() {
         let score = similarity_score("bar.rs", "baz.rs");
-        assert!(score > 0, "same extension should give non-zero score, got {}", score);
+        assert!(score > 0, "same extension should give non-zero score, got {score}");
     }
 
     #[test]
     fn test_similarity_contains() {
         let score = similarity_score("main", "main.rs");
-        assert!(score > 5, "contains should give high score, got {}", score);
+        assert!(score > 5, "contains should give high score, got {score}");
     }
 
     #[test]
     fn test_similarity_totally_different() {
         let score = similarity_score("xyz", "abc");
         // No prefix, no extension match, no stem match, no contains
-        assert!(score <= 5, "totally different should give very low score, got {}", score);
+        assert!(score <= 5, "totally different should give very low score, got {score}");
     }
 
     #[test]
     fn test_similarity_same_stem() {
         let score = similarity_score("foo.rs", "foo.ts");
-        assert!(score > 0, "same stem should give non-zero score, got {}", score);
+        assert!(score > 0, "same stem should give non-zero score, got {score}");
     }
 }

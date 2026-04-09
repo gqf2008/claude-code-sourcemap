@@ -1,4 +1,4 @@
-//! Plan mode tools — EnterPlanMode / ExitPlanMode.
+//! Plan mode tools — `EnterPlanMode` / `ExitPlanMode`.
 //!
 //! Aligned with TS `EnterPlanModeTool.ts` and `ExitPlanModeV2Tool.ts`.
 //! Plan mode restricts the agent to read-only operations for exploration
@@ -14,9 +14,9 @@ pub struct EnterPlanModeTool;
 
 #[async_trait]
 impl Tool for EnterPlanModeTool {
-    fn name(&self) -> &str { "EnterPlanMode" }
+    fn name(&self) -> &'static str { "EnterPlanMode" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Enter plan mode for complex tasks requiring exploration and design. \
          In plan mode, only read-only tools are available. Use this when you need \
          to understand the codebase before making changes."
@@ -52,9 +52,9 @@ pub struct ExitPlanModeTool;
 
 #[async_trait]
 impl Tool for ExitPlanModeTool {
-    fn name(&self) -> &str { "ExitPlanMode" }
+    fn name(&self) -> &'static str { "ExitPlanMode" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Exit plan mode and begin implementation. Call this after you have explored \
          the codebase and designed your approach. All tools will become available again."
     }
@@ -80,9 +80,8 @@ impl Tool for ExitPlanModeTool {
 
         Ok(ToolResult::text(format!(
             "Plan mode deactivated. All tools are now available.\n\n\
-             Plan summary: {}\n\n\
-             You may now proceed with implementation.",
-            summary
+             Plan summary: {summary}\n\n\
+             You may now proceed with implementation."
         )))
     }
 }

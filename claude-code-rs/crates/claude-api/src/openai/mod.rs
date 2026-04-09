@@ -1,8 +1,8 @@
 //! OpenAI-compatible API backend.
 //!
-//! Translates Anthropic Messages API format ↔ OpenAI Chat Completions format,
-//! enabling use of any OpenAI-compatible endpoint (OpenAI, DeepSeek, Ollama,
-//! vLLM, LiteLLM, etc.) through the existing [`ApiBackend`] trait.
+//! Translates Anthropic Messages API format ↔ `OpenAI` Chat Completions format,
+//! enabling use of any OpenAI-compatible endpoint (`OpenAI`, `DeepSeek`, Ollama,
+//! vLLM, `LiteLLM`, etc.) through the existing [`ApiBackend`] trait.
 //!
 //! # Format Mapping
 //!
@@ -29,14 +29,14 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use tracing::{debug, warn};
 
 use crate::provider::ApiBackend;
-use crate::types::*;
+use crate::types::{MessagesRequest, MessagesResponse, StreamEvent};
 use translate::{to_openai_request, from_openai_response, OpenAIStreamState};
 use types::{ChatCompletionChunk, ChatCompletionResponse};
 // ── OpenAI-Compatible Backend ────────────────────────────────────────────────
 
-/// Backend for any OpenAI Chat Completions–compatible API.
+/// Backend for any `OpenAI` Chat Completions–compatible API.
 ///
-/// Works with OpenAI, DeepSeek, Ollama, vLLM, LiteLLM, Together AI,
+/// Works with `OpenAI`, `DeepSeek`, Ollama, vLLM, `LiteLLM`, Together AI,
 /// Groq, and any other provider implementing the Chat Completions format.
 ///
 /// # Usage
@@ -87,6 +87,7 @@ impl OpenAIBackend {
     }
 
     /// Detect provider from base URL and set appropriate name.
+    #[must_use] 
     pub fn auto_detect_provider(mut self) -> Self {
         let url = self.base_url.to_lowercase();
         self.provider = if url.contains("openai.com") {

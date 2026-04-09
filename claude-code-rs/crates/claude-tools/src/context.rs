@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
-/// ContextInspectTool — inspect the current conversation context.
+/// `ContextInspectTool` — inspect the current conversation context.
 ///
 /// Returns token counts, message count, tool list, and other metadata.
 /// Useful for the model to understand its own context limits and state.
@@ -10,9 +10,9 @@ pub struct ContextInspectTool;
 
 #[async_trait]
 impl Tool for ContextInspectTool {
-    fn name(&self) -> &str { "ContextInspect" }
+    fn name(&self) -> &'static str { "ContextInspect" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Inspect the current conversation context: message count, estimated tokens, \
          available tools, and working directory. Use when you need to understand your \
          context size or debug tool availability."
@@ -51,7 +51,7 @@ impl Tool for ContextInspectTool {
     }
 }
 
-/// VerifyChecksumTool — verify that file content matches expectations.
+/// `VerifyChecksumTool` — verify that file content matches expectations.
 ///
 /// After editing a file, the model can use this tool to verify the file
 /// was written correctly by checking its content against expected snippets.
@@ -59,9 +59,9 @@ pub struct VerifyTool;
 
 #[async_trait]
 impl Tool for VerifyTool {
-    fn name(&self) -> &str { "Verify" }
+    fn name(&self) -> &'static str { "Verify" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Verify that a file contains expected content after an edit. \
          Returns whether all expected snippets are found in the file. \
          Use after FileEdit or FileWrite to confirm changes were applied correctly."
@@ -106,7 +106,7 @@ impl Tool for VerifyTool {
 
         let content = match tokio::fs::read_to_string(&full_path).await {
             Ok(c) => c,
-            Err(e) => return Ok(ToolResult::error(format!("Cannot read file: {}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("Cannot read file: {e}"))),
         };
 
         let expected: Vec<&str> = input["expected_snippets"]
@@ -122,12 +122,12 @@ impl Tool for VerifyTool {
         let mut issues = Vec::new();
         for snippet in &expected {
             if !content.contains(snippet) {
-                issues.push(format!("MISSING: \"{}\"", snippet));
+                issues.push(format!("MISSING: \"{snippet}\""));
             }
         }
         for snippet in &unexpected {
             if content.contains(snippet) {
-                issues.push(format!("UNEXPECTED: \"{}\"", snippet));
+                issues.push(format!("UNEXPECTED: \"{snippet}\""));
             }
         }
 

@@ -36,13 +36,14 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct FilesApiConfig {
     /// OAuth token for Bearer authentication.
     pub oauth_token: String,
-    /// API base URL (default: https://api.anthropic.com).
+    /// API base URL (default: <https://api.anthropic.com>).
     pub base_url: String,
     /// Session ID for workspace directory isolation.
     pub session_id: String,
 }
 
 impl FilesApiConfig {
+    #[must_use] 
     pub fn new(oauth_token: String, session_id: String) -> Self {
         Self {
             oauth_token,
@@ -51,6 +52,7 @@ impl FilesApiConfig {
         }
     }
 
+    #[must_use] 
     pub fn with_base_url(mut self, url: String) -> Self {
         self.base_url = url;
         self
@@ -144,11 +146,11 @@ where
                 }
             }
             RetryResult::Fatal(err) => {
-                return Err(anyhow::anyhow!("[files-api] {}: {}", operation, err));
+                return Err(anyhow::anyhow!("[files-api] {operation}: {err}"));
             }
         }
     }
-    Err(anyhow::anyhow!("[files-api] {} failed after {} attempts: {}", operation, MAX_RETRIES, last_error))
+    Err(anyhow::anyhow!("[files-api] {operation} failed after {MAX_RETRIES} attempts: {last_error}"))
 }
 
 /// Retry control flow.
@@ -159,7 +161,7 @@ enum RetryResult<T> {
 }
 
 /// Check if an HTTP status is non-retryable.
-fn is_non_retryable(status: u16) -> bool {
+const fn is_non_retryable(status: u16) -> bool {
     matches!(status, 401 | 403 | 404 | 413)
 }
 
@@ -197,10 +199,10 @@ pub async fn download_file(
                 }
             } else if is_non_retryable(status) {
                 let body = resp.text().await.unwrap_or_default();
-                RetryResult::Fatal(format!("HTTP {}: {}", status, body))
+                RetryResult::Fatal(format!("HTTP {status}: {body}"))
             } else {
                 let body = resp.text().await.unwrap_or_default();
-                RetryResult::Retry(Some(format!("HTTP {}: {}", status, body)))
+                RetryResult::Retry(Some(format!("HTTP {status}: {body}")))
             }
         }
     })
@@ -217,7 +219,7 @@ pub fn build_download_path(
 
     // Reject paths that traverse above workspace
     for component in normalized.components() {
-        if let std::path::Component::ParentDir = component {
+        if component == std::path::Component::ParentDir {
             warn!("Invalid file path: {}. Path must not traverse above workspace", relative_path);
             return None;
         }
@@ -272,7 +274,7 @@ pub async fn download_and_save_file(
                 file_id: attachment.file_id.clone(),
                 path: full_path.to_string_lossy().to_string(),
                 success: false,
-                error: Some(format!("Failed to create directory: {}", e)),
+                error: Some(format!("Failed to create directory: {e}")),
                 bytes_written: None,
             };
         }
@@ -284,7 +286,7 @@ pub async fn download_and_save_file(
             file_id: attachment.file_id.clone(),
             path: full_path.to_string_lossy().to_string(),
             success: false,
-            error: Some(format!("Failed to write file: {}", e)),
+            error: Some(format!("Failed to write file: {e}")),
             bytes_written: None,
         };
     }
@@ -339,7 +341,7 @@ pub async fn download_session_files(
                 file_id: String::new(),
                 path: String::new(),
                 success: false,
-                error: Some(format!("Task panicked: {}", e)),
+                error: Some(format!("Task panicked: {e}")),
                 bytes_written: None,
             }),
         }
@@ -368,7 +370,7 @@ pub async fn upload_file(
                 success: false,
                 file_id: None,
                 size: None,
-                error: Some(format!("Failed to read file: {}", e)),
+                error: Some(format!("Failed to read file: {e}")),
             };
         }
     };
@@ -389,9 +391,7 @@ pub async fn upload_file(
     }
 
     let filename = file_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".to_string());
+        .file_name().map_or_else(|| "file".to_string(), |n| n.to_string_lossy().to_string());
 
     let url = format!("{}/v1/files", config.base_url);
     let client = reqwest::Client::new();
@@ -409,25 +409,23 @@ pub async fn upload_file(
 
             // File part
             body.extend_from_slice(format!(
-                "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
-                boundary, filename
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
             ).as_bytes());
             body.extend_from_slice(&content);
             body.extend_from_slice(b"\r\n");
 
             // Purpose part
             body.extend_from_slice(format!(
-                "--{}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n",
-                boundary
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n"
             ).as_bytes());
 
             // Final boundary
-            body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+            body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
             let mut req_headers = headers;
             req_headers.insert(
                 CONTENT_TYPE,
-                HeaderValue::from_str(&format!("multipart/form-data; boundary={}", boundary))
+                HeaderValue::from_str(&format!("multipart/form-data; boundary={boundary}"))
                     .unwrap_or_else(|_| HeaderValue::from_static("multipart/form-data")),
             );
             req_headers.insert(
@@ -458,14 +456,14 @@ pub async fn upload_file(
                             RetryResult::Retry(Some("Upload succeeded but no file ID returned".to_string()))
                         }
                     }
-                    Err(e) => RetryResult::Retry(Some(format!("Failed to parse response: {}", e))),
+                    Err(e) => RetryResult::Retry(Some(format!("Failed to parse response: {e}"))),
                 }
             } else if is_non_retryable(status) {
                 let body = resp.text().await.unwrap_or_default();
-                RetryResult::Fatal(format!("HTTP {}: {}", status, body))
+                RetryResult::Fatal(format!("HTTP {status}: {body}"))
             } else {
                 let body = resp.text().await.unwrap_or_default();
-                RetryResult::Retry(Some(format!("HTTP {}: {}", status, body)))
+                RetryResult::Retry(Some(format!("HTTP {status}: {body}")))
             }
         }
     })
@@ -511,7 +509,7 @@ pub async fn upload_session_files(
             let _permit = match sem.acquire().await {
                 Ok(p) => p,
                 Err(_) => return UploadResult {
-                    path: relative.to_string(),
+                    path: relative.clone(),
                     success: false,
                     file_id: None,
                     size: None,
@@ -531,7 +529,7 @@ pub async fn upload_session_files(
                 success: false,
                 file_id: None,
                 size: None,
-                error: Some(format!("Task panicked: {}", e)),
+                error: Some(format!("Task panicked: {e}")),
             }),
         }
     }
@@ -557,7 +555,7 @@ pub async fn list_files_created_after(
             config.base_url, after_created_at
         );
         if let Some(ref cursor) = after_id {
-            url.push_str(&format!("&after_id={}", cursor));
+            url.push_str(&format!("&after_id={cursor}"));
         }
 
         let resp: ListFilesResponse = retry_with_backoff("list", |_attempt| {
@@ -580,14 +578,14 @@ pub async fn list_files_created_after(
                 if status == 200 {
                     match resp.json::<ListFilesResponse>().await {
                         Ok(data) => RetryResult::Done(data),
-                        Err(e) => RetryResult::Retry(Some(format!("Parse error: {}", e))),
+                        Err(e) => RetryResult::Retry(Some(format!("Parse error: {e}"))),
                     }
                 } else if is_non_retryable(status) {
                     let body = resp.text().await.unwrap_or_default();
-                    RetryResult::Fatal(format!("HTTP {}: {}", status, body))
+                    RetryResult::Fatal(format!("HTTP {status}: {body}"))
                 } else {
                     let body = resp.text().await.unwrap_or_default();
-                    RetryResult::Retry(Some(format!("HTTP {}: {}", status, body)))
+                    RetryResult::Retry(Some(format!("HTTP {status}: {body}")))
                 }
             }
         })
@@ -607,7 +605,7 @@ pub async fn list_files_created_after(
 
 // ── Parse file specs ─────────────────────────────────────────────────────────
 
-/// Parse file spec strings (`file_id:relative/path`) into FileSpec objects.
+/// Parse file spec strings (`file_id:relative/path`) into `FileSpec` objects.
 pub fn parse_file_specs(specs: &[String]) -> Vec<FileSpec> {
     let mut result = Vec::new();
 
@@ -618,12 +616,9 @@ pub fn parse_file_specs(specs: &[String]) -> Vec<FileSpec> {
                 continue;
             }
 
-            let colon_idx = match part.find(':') {
-                Some(i) => i,
-                None => {
-                    debug!("[files-api] Invalid file spec (no colon): {}", part);
-                    continue;
-                }
+            let colon_idx = if let Some(i) = part.find(':') { i } else {
+                debug!("[files-api] Invalid file spec (no colon): {}", part);
+                continue;
             };
 
             let file_id = &part[..colon_idx];

@@ -1,9 +1,9 @@
-//! Structured task management tools — TaskCreate, TaskUpdate, TaskGet, TaskList.
+//! Structured task management tools — `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.
 //!
 //! Aligned with TS `TaskCreateTool.ts`, `TaskUpdateTool.ts`, `TaskGetTool.ts`,
 //! `TaskListTool.ts`.  Tasks are persisted as individual JSON files under
 //! `~/.claude/tasks/`.  Each task has an ID, subject, description, status,
-//! owner, and dependency edges (blocks / blocked_by).
+//! owner, and dependency edges (blocks / `blocked_by`).
 //!
 //! These replace the simpler TodoRead/TodoWrite tools with a richer model
 //! suitable for multi-agent coordination.
@@ -69,7 +69,7 @@ fn tasks_dir() -> PathBuf {
 }
 
 fn task_path(id: &str) -> PathBuf {
-    tasks_dir().join(format!("{}.json", id))
+    tasks_dir().join(format!("{id}.json"))
 }
 
 fn save_task(task: &Task) -> anyhow::Result<()> {
@@ -121,10 +121,10 @@ pub struct TaskCreateTool;
 
 #[async_trait]
 impl Tool for TaskCreateTool {
-    fn name(&self) -> &str { "task_create" }
+    fn name(&self) -> &'static str { "task_create" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Create a new task for tracking progress. Use this when breaking down a complex \
          problem into steps. Each task has a subject (brief title) and description (what \
          to do). Returns the task ID for use with task_update."
@@ -199,10 +199,10 @@ pub struct TaskUpdateTool;
 
 #[async_trait]
 impl Tool for TaskUpdateTool {
-    fn name(&self) -> &str { "task_update" }
+    fn name(&self) -> &'static str { "task_update" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Update an existing task's status, subject, description, or dependencies. \
          Use this to mark tasks as in_progress when starting, completed when done, \
          or to add/remove blocking dependencies."
@@ -255,7 +255,7 @@ impl Tool for TaskUpdateTool {
 
         let mut task = match load_task(task_id) {
             Some(t) => t,
-            None => return Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+            None => return Ok(ToolResult::error(format!("Task not found: {task_id}"))),
         };
 
         let mut updated = Vec::new();
@@ -267,7 +267,7 @@ impl Tool for TaskUpdateTool {
                 "completed" => TaskStatus::Completed,
                 "blocked" => TaskStatus::Blocked,
                 "deleted" => TaskStatus::Deleted,
-                _ => return Ok(ToolResult::error(format!("Invalid status: {}", status))),
+                _ => return Ok(ToolResult::error(format!("Invalid status: {status}"))),
             };
             task.status = new_status;
             updated.push("status");
@@ -343,10 +343,10 @@ pub struct TaskGetTool;
 
 #[async_trait]
 impl Tool for TaskGetTool {
-    fn name(&self) -> &str { "task_get" }
+    fn name(&self) -> &'static str { "task_get" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Get details of a specific task by ID, including subject, description, \
          status, and dependencies."
     }
@@ -374,7 +374,7 @@ impl Tool for TaskGetTool {
 
         match load_task(task_id) {
             Some(task) => Ok(ToolResult::text(format_task_detail(&task))),
-            None => Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+            None => Ok(ToolResult::error(format!("Task not found: {task_id}"))),
         }
     }
 }
@@ -385,10 +385,10 @@ pub struct TaskListTool;
 
 #[async_trait]
 impl Tool for TaskListTool {
-    fn name(&self) -> &str { "task_list" }
+    fn name(&self) -> &'static str { "task_list" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "List all tasks with their status and dependencies. Returns a summary view \
          of all non-deleted tasks. Use to review project progress and plan next steps."
     }
@@ -413,7 +413,7 @@ impl Tool for TaskListTool {
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
-fn status_icon(status: &TaskStatus) -> &'static str {
+const fn status_icon(status: &TaskStatus) -> &'static str {
     match status {
         TaskStatus::Pending => "○",
         TaskStatus::InProgress => "◉",
@@ -441,7 +441,7 @@ fn format_task_detail(task: &Task) -> String {
         out.push_str(&format!("\nBlocks: {}", task.blocks.join(", ")));
     }
     if let Some(owner) = &task.owner {
-        out.push_str(&format!("\nOwner: {}", owner));
+        out.push_str(&format!("\nOwner: {owner}"));
     }
 
     out
@@ -482,10 +482,10 @@ pub struct TaskOutputTool;
 
 #[async_trait]
 impl Tool for TaskOutputTool {
-    fn name(&self) -> &str { "task_output" }
+    fn name(&self) -> &'static str { "task_output" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Get the detailed output or description of a specific task. Use this to \
          review what a task produced or to check its current state before deciding \
          next steps."
@@ -520,7 +520,7 @@ impl Tool for TaskOutputTool {
                 }
                 Ok(ToolResult::text(out))
             }
-            None => Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+            None => Ok(ToolResult::error(format!("Task not found: {task_id}"))),
         }
     }
 }
@@ -531,10 +531,10 @@ pub struct TaskStopTool;
 
 #[async_trait]
 impl Tool for TaskStopTool {
-    fn name(&self) -> &str { "task_stop" }
+    fn name(&self) -> &'static str { "task_stop" }
     fn category(&self) -> ToolCategory { ToolCategory::Agent }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Stop/cancel a running task by marking it as deleted. Use this when a task \
          is no longer needed or should be abandoned."
     }
@@ -563,11 +563,11 @@ impl Tool for TaskStopTool {
 
         let mut task = match load_task(task_id) {
             Some(t) => t,
-            None => return Ok(ToolResult::error(format!("Task not found: {}", task_id))),
+            None => return Ok(ToolResult::error(format!("Task not found: {task_id}"))),
         };
 
         if task.status == TaskStatus::Deleted {
-            return Ok(ToolResult::text(format!("Task {} is already deleted.", task_id)));
+            return Ok(ToolResult::text(format!("Task {task_id} is already deleted.")));
         }
 
         let prev_status = task.status.to_string();
@@ -669,8 +669,8 @@ mod tests {
     #[test]
     fn gen_task_id_format() {
         let id = gen_task_id();
-        assert!(id.starts_with("t-"), "ID should start with 't-': {}", id);
-        assert_eq!(id.len(), 10, "ID should be 10 chars (t- + 8 hex): {}", id);
+        assert!(id.starts_with("t-"), "ID should start with 't-': {id}");
+        assert_eq!(id.len(), 10, "ID should be 10 chars (t- + 8 hex): {id}");
     }
 
     #[test]

@@ -97,10 +97,10 @@ pub struct FileEditTool;
 
 #[async_trait]
 impl Tool for FileEditTool {
-    fn name(&self) -> &str { "Edit" }
+    fn name(&self) -> &'static str { "Edit" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Performs exact string replacements in files. You must use Read at least once before \
          editing. The edit will FAIL if old_string is not unique in the file — provide more \
          surrounding context to make it unique. \
@@ -131,7 +131,7 @@ impl Tool for FileEditTool {
 
         let path = match path_util::resolve_path(file_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };
 
         let content = tokio::fs::read_to_string(&path).await?;
@@ -139,7 +139,7 @@ impl Tool for FileEditTool {
         // Check for external modifications
         if let Some(warning) = check_external_modification(&path, &content) {
             // Warn but don't block — let the edit proceed
-            eprintln!("{}", warning);
+            eprintln!("{warning}");
         }
 
         let count = content.matches(old_string).count();
@@ -148,7 +148,7 @@ impl Tool for FileEditTool {
         }
         if count > 1 {
             return Ok(ToolResult::error(format!(
-                "old_string found {} times — must be unique.", count
+                "old_string found {count} times — must be unique."
             )));
         }
 
@@ -167,7 +167,7 @@ impl Tool for FileEditTool {
 
         let mut msg = format!("Edited {}", path.display());
         if added > 0 || removed > 0 {
-            msg.push_str(&format!(" (+{} -{} lines)", added, removed));
+            msg.push_str(&format!(" (+{added} -{removed} lines)"));
         }
         Ok(ToolResult::text(msg))
     }

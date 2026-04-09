@@ -7,9 +7,9 @@ pub struct SleepTool;
 
 #[async_trait]
 impl Tool for SleepTool {
-    fn name(&self) -> &str { "Sleep" }
+    fn name(&self) -> &'static str { "Sleep" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Sleep (pause execution) for a specified number of milliseconds. \
          Use this when you need to wait before retrying an operation."
     }
@@ -36,7 +36,7 @@ impl Tool for SleepTool {
             .min(30_000);
 
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        Ok(ToolResult::text(format!("Slept for {}ms", ms)))
+        Ok(ToolResult::text(format!("Slept for {ms}ms")))
     }
 }
 

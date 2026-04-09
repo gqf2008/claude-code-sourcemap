@@ -1,4 +1,4 @@
-//! WebSearchTool — search the web for current information.
+//! `WebSearchTool` — search the web for current information.
 //!
 //! Aligned with TS `WebSearchTool.ts`.  Uses a configurable search backend;
 //! the default implementation calls a simple HTTP search API (Brave/SearXNG/etc).
@@ -18,10 +18,10 @@ pub struct WebSearchTool;
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    fn name(&self) -> &str { "WebSearch" }
+    fn name(&self) -> &'static str { "WebSearch" }
     fn category(&self) -> ToolCategory { ToolCategory::Web }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Search the web for real-time information. Use this when you need current data, \
          recent events, or information that may not be in your training data. Returns \
          a list of relevant results with titles, URLs, and snippets."
@@ -80,8 +80,7 @@ impl Tool for WebSearchTool {
         if api_key.is_none() {
             return Ok(ToolResult::text(format!(
                 "Web search is not configured. Set SEARCH_API_KEY and optionally \
-                 SEARCH_API_URL environment variables.\n\nQuery was: {}",
-                query
+                 SEARCH_API_URL environment variables.\n\nQuery was: {query}"
             )));
         }
 
@@ -96,7 +95,7 @@ impl Tool for WebSearchTool {
 
         match results {
             Ok(formatted) => Ok(ToolResult::text(formatted)),
-            Err(e) => Ok(ToolResult::error(format!("Search failed: {}", e))),
+            Err(e) => Ok(ToolResult::error(format!("Search failed: {e}"))),
         }
     }
 }
@@ -112,10 +111,10 @@ async fn do_search(
     // Build query with domain restrictions
     let mut search_query = query.to_string();
     for domain in allowed_domains {
-        search_query.push_str(&format!(" site:{}", domain));
+        search_query.push_str(&format!(" site:{domain}"));
     }
     for domain in blocked_domains {
-        search_query.push_str(&format!(" -site:{}", domain));
+        search_query.push_str(&format!(" -site:{domain}"));
     }
 
     let client = reqwest::Client::new();
@@ -141,7 +140,7 @@ async fn do_search(
 
 /// Format search API response into a readable text summary.
 fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
-    let mut out = format!("Search results for: {}\n\n", query);
+    let mut out = format!("Search results for: {query}\n\n");
     let mut count = 0;
 
     // Handle Brave Search API format
@@ -164,7 +163,7 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
                 snippet
             };
 
-            out.push_str(&format!("{}. {}\n   {}\n   {}\n\n", count, title, url, snippet));
+            out.push_str(&format!("{count}. {title}\n   {url}\n   {snippet}\n\n"));
         }
     }
 
@@ -188,7 +187,7 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
                     snippet
                 };
 
-                out.push_str(&format!("{}. {}\n   {}\n   {}\n\n", count, title, url, snippet));
+                out.push_str(&format!("{count}. {title}\n   {url}\n   {snippet}\n\n"));
             }
         }
     }
@@ -196,7 +195,7 @@ fn format_search_results(body: &Value, query: &str) -> anyhow::Result<String> {
     if count == 0 {
         out.push_str("No results found.");
     } else {
-        out.push_str(&format!("({} results)", count));
+        out.push_str(&format!("({count} results)"));
     }
 
     Ok(out)

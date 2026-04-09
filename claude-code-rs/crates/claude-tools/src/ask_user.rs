@@ -6,8 +6,8 @@ pub struct AskUserTool;
 
 #[async_trait]
 impl Tool for AskUserTool {
-    fn name(&self) -> &str { "AskUser" }
-    fn description(&self) -> &str { "Ask the user a question and wait for a response." }
+    fn name(&self) -> &'static str { "AskUser" }
+    fn description(&self) -> &'static str { "Ask the user a question and wait for a response." }
 
     fn input_schema(&self) -> Value {
         json!({
@@ -21,7 +21,7 @@ impl Tool for AskUserTool {
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
         let question = input["question"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'question'"))?.to_string();
-        println!("\n\x1b[33m? {}\x1b[0m", question);
+        println!("\n\x1b[33m? {question}\x1b[0m");
         print!("> ");
         let response = tokio::task::spawn_blocking(move || {
             use std::io::Write;

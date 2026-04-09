@@ -80,7 +80,8 @@ pub enum ToolCategory {
 }
 
 impl ToolCategory {
-    pub fn label(&self) -> &'static str {
+    #[must_use] 
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::File => "File I/O",
             Self::Shell => "Shell",
@@ -96,6 +97,7 @@ impl ToolCategory {
 }
 
 /// Map a tool name to its category.
+#[must_use] 
 pub fn tool_category(name: &str) -> ToolCategory {
     match name {
         "Read" | "FileRead" | "Edit" | "FileEdit" | "Write" | "FileWrite"
@@ -129,6 +131,7 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    #[must_use] 
     pub fn new() -> Self {
         Self { tools: HashMap::new() }
     }
@@ -138,27 +141,33 @@ impl ToolRegistry {
         self.tools.insert(name, Arc::new(tool));
     }
 
+    #[must_use] 
     pub fn get(&self, name: &str) -> Option<&DynTool> {
         self.tools.get(name)
     }
 
+    #[must_use] 
     pub fn all(&self) -> Vec<&DynTool> {
         self.tools.values().collect()
     }
 
+    #[must_use] 
     pub fn names(&self) -> Vec<&str> {
-        self.tools.keys().map(|s| s.as_str()).collect()
+        self.tools.keys().map(std::string::String::as_str).collect()
     }
 
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
 
     /// Create a registry pre-loaded with all built-in tools
+    #[must_use] 
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
 
@@ -233,6 +242,7 @@ impl ToolRegistry {
     }
 
     /// Return tools filtered by category.
+    #[must_use] 
     pub fn by_category(&self, category: ToolCategory) -> Vec<(&str, &DynTool)> {
         self.tools
             .iter()
@@ -242,6 +252,7 @@ impl ToolRegistry {
     }
 
     /// Return a summary of tool counts by category.
+    #[must_use] 
     pub fn category_summary(&self) -> Vec<(ToolCategory, usize)> {
         let mut counts: HashMap<ToolCategory, usize> = HashMap::new();
         for name in self.tools.keys() {
@@ -288,7 +299,7 @@ mod tests {
     #[async_trait]
     impl Tool for DummyTool {
         fn name(&self) -> &str { self.nm }
-        fn description(&self) -> &str { "dummy" }
+        fn description(&self) -> &'static str { "dummy" }
         fn input_schema(&self) -> serde_json::Value { serde_json::json!({}) }
         async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
             Ok(ToolResult::text("ok"))
@@ -319,7 +330,7 @@ mod tests {
         r.register(DummyTool { nm: "Alpha" });
         r.register(DummyTool { nm: "Beta" });
         let mut names = r.names();
-        names.sort();
+        names.sort_unstable();
         assert_eq!(names, vec!["Alpha", "Beta"]);
     }
 

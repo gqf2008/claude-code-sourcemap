@@ -41,6 +41,7 @@ pub struct JsonRpcResponse {
 }
 
 impl JsonRpcResponse {
+    #[must_use] 
     pub fn success(id: u64, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),

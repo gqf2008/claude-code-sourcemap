@@ -42,7 +42,7 @@ pub trait ApiBackend: Send + Sync {
     /// Send a non-streaming messages request.
     ///
     /// Default implementation uses `reqwest` with the provider's headers and URL.
-    /// Override for providers that need custom request signing (e.g. AWS SigV4).
+    /// Override for providers that need custom request signing (e.g. AWS `SigV4`).
     async fn send_messages(
         &self,
         http: &reqwest::Client,
@@ -86,7 +86,7 @@ impl FirstPartyBackend {
 
 #[async_trait::async_trait]
 impl ApiBackend for FirstPartyBackend {
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "firstParty"
     }
 
@@ -130,18 +130,18 @@ impl ApiBackend for FirstPartyBackend {
             .json(request)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Request failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Request failed: {e}"))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("API error {}: {}", status, body);
+            anyhow::bail!("API error {status}: {body}");
         }
 
         response
             .json::<MessagesResponse>()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to parse response: {e}"))
     }
 
     async fn send_messages_stream(
@@ -160,12 +160,12 @@ impl ApiBackend for FirstPartyBackend {
             .json(&req)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Stream request failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Stream request failed: {e}"))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Stream API error {}: {}", status, body);
+            anyhow::bail!("Stream API error {status}: {body}");
         }
 
         Ok(crate::stream::sse_byte_stream_to_events(response))
@@ -174,10 +174,10 @@ impl ApiBackend for FirstPartyBackend {
 
 // ── Bedrock backend (stub) ───────────────────────────────────────────────────
 
-/// AWS Bedrock backend — uses AWS SigV4 auth and ARN-format model IDs.
+/// AWS Bedrock backend — uses AWS `SigV4` auth and ARN-format model IDs.
 ///
 /// This is a structural stub: model ID mapping is complete, but actual
-/// AWS credential resolution and SigV4 signing are not yet implemented.
+/// AWS credential resolution and `SigV4` signing are not yet implemented.
 /// The `send_messages` / `send_messages_stream` methods will return errors
 /// until AWS auth is wired up.
 pub struct BedrockBackend {
@@ -198,7 +198,7 @@ impl BedrockBackend {
 
 #[async_trait::async_trait]
 impl ApiBackend for BedrockBackend {
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "bedrock"
     }
 
@@ -261,11 +261,11 @@ impl VertexBackend {
 
 #[async_trait::async_trait]
 impl ApiBackend for VertexBackend {
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "vertex"
     }
 
-    fn base_url(&self) -> &str {
+    fn base_url(&self) -> &'static str {
         "https://us-central1-aiplatform.googleapis.com"
     }
 
@@ -304,13 +304,14 @@ impl ApiBackend for VertexBackend {
 
 /// Detect the API backend from environment variables (mirrors TS `getAPIProvider`).
 ///
-/// Priority: Bedrock → Vertex → FirstParty.
+/// Priority: Bedrock → Vertex → `FirstParty`.
 /// - `CLAUDE_CODE_USE_BEDROCK=1` → Bedrock
 /// - `CLAUDE_CODE_USE_VERTEX=1` → Vertex
-/// - Otherwise → FirstParty (requires `ANTHROPIC_API_KEY`)
+/// - Otherwise → `FirstParty` (requires `ANTHROPIC_API_KEY`)
 ///
 /// For OpenAI-compatible providers, use [`create_backend`] with explicit provider name
 /// via `--provider` CLI flag.
+#[must_use] 
 pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
     let is_truthy = |var: &str| -> bool {
         std::env::var(var)
@@ -347,6 +348,7 @@ pub fn detect_backend(api_key: &str) -> Box<dyn ApiBackend> {
 /// Supports: "anthropic" (default), "openai", "deepseek", "ollama", "bedrock", "vertex".
 /// For OpenAI-compatible providers, `api_key` is used for Bearer auth and `base_url`
 /// overrides the default endpoint.
+#[must_use] 
 pub fn create_backend(
     provider: &str,
     api_key: &str,
@@ -447,7 +449,8 @@ impl Default for MockBackend {
 
 #[cfg(any(test, feature = "test-support"))]
 impl MockBackend {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             responses: std::sync::Mutex::new(Vec::new()),
             stream_events: std::sync::Mutex::new(Vec::new()),
@@ -464,7 +467,7 @@ impl MockBackend {
 
     /// Queue an error for `send_messages`.
     pub fn with_error(self, msg: &str) -> Self {
-        self.responses.lock().unwrap().push(Err(anyhow::anyhow!("{}", msg)));
+        self.responses.lock().unwrap().push(Err(anyhow::anyhow!("{msg}")));
         self
     }
 
@@ -476,7 +479,7 @@ impl MockBackend {
 
     /// Queue a connection-level error for `send_messages_stream`.
     pub fn with_stream_error(self, msg: &str) -> Self {
-        self.stream_events.lock().unwrap().push(Err(anyhow::anyhow!("{}", msg)));
+        self.stream_events.lock().unwrap().push(Err(anyhow::anyhow!("{msg}")));
         self
     }
 
@@ -492,8 +495,8 @@ impl MockBackend {
 #[cfg(any(test, feature = "test-support"))]
 #[async_trait::async_trait]
 impl ApiBackend for MockBackend {
-    fn provider_name(&self) -> &str { "mock" }
-    fn base_url(&self) -> &str { "http://mock.test" }
+    fn provider_name(&self) -> &'static str { "mock" }
+    fn base_url(&self) -> &'static str { "http://mock.test" }
 
     fn headers(&self) -> Result<HeaderMap> {
         Ok(HeaderMap::new())

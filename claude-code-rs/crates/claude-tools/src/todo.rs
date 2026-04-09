@@ -50,7 +50,7 @@ fn format_todos(todos: &[TodoItem]) -> String {
     let pending  = todos.iter().filter(|t| t.status == "pending").count();
     let in_prog  = todos.iter().filter(|t| t.status == "in_progress").count();
     let done     = todos.iter().filter(|t| t.status == "completed").count();
-    out.push_str(&format!("\nSummary: {} pending, {} in_progress, {} completed", pending, in_prog, done));
+    out.push_str(&format!("\nSummary: {pending} pending, {in_prog} in_progress, {done} completed"));
     out
 }
 
@@ -60,9 +60,9 @@ pub struct TodoWriteTool;
 
 #[async_trait]
 impl Tool for TodoWriteTool {
-    fn name(&self) -> &str { "TodoWrite" }
+    fn name(&self) -> &'static str { "TodoWrite" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Create or update the structured task list for this session. The list is the \
          single source of truth for what needs to be done. Always call TodoRead first to \
          understand the current state before calling TodoWrite. Replace the entire list on \
@@ -98,7 +98,7 @@ impl Tool for TodoWriteTool {
 
         let new_todos: Vec<TodoItem> = match serde_json::from_value(input["todos"].clone()) {
             Ok(t)  => t,
-            Err(e) => return Ok(ToolResult::error(format!("Invalid todos format: {}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("Invalid todos format: {e}"))),
         };
 
         // Validate: at most one in_progress at a time
@@ -133,9 +133,9 @@ pub struct TodoReadTool;
 
 #[async_trait]
 impl Tool for TodoReadTool {
-    fn name(&self) -> &str { "TodoRead" }
+    fn name(&self) -> &'static str { "TodoRead" }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Read the current task list to check progress. Returns all todos with their \
          current status. Call this at the start of each turn to understand what still \
          needs to be done, and before calling TodoWrite to avoid overwriting unseen changes."

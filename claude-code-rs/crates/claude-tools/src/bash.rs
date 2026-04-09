@@ -8,7 +8,7 @@ use std::collections::HashMap;
 const MAX_OUTPUT_BYTES: usize = 100_000;
 
 /// Patterns that indicate dangerous/destructive commands.
-/// Each tuple: (pattern, reason, exact_boundary) — when exact_boundary is true,
+/// Each tuple: (pattern, reason, `exact_boundary`) — when `exact_boundary` is true,
 /// the pattern must match followed by whitespace/end-of-string (not a path continuation).
 const DANGEROUS_PATTERNS: &[(&str, &str, bool)] = &[
     ("rm -rf /", "Refusing to delete root filesystem", true),
@@ -187,10 +187,10 @@ pub struct BashTool;
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str { "Bash" }
+    fn name(&self) -> &'static str { "Bash" }
     fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Execute a shell command in the working directory. Use for system commands, \
          git operations, build commands, and running programs. Do NOT use for file operations \
          when dedicated tools exist (Read, Edit, Write, Glob, Grep). \
@@ -225,7 +225,7 @@ impl Tool for BashTool {
 
         // Security: check for dangerous patterns
         if let Some(reason) = check_dangerous(command) {
-            return Ok(ToolResult::error(format!("🚫 {}\nCommand: {}", reason, command)));
+            return Ok(ToolResult::error(format!("🚫 {reason}\nCommand: {command}")));
         }
 
         // Resolve working directory (allow override)
@@ -262,7 +262,7 @@ impl Tool for BashTool {
         }
 
         let child = cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to execute: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to execute: {e}"))?;
 
         let child_id = child.id();
         let abort = context.abort_signal.clone();
@@ -273,7 +273,7 @@ impl Tool for BashTool {
                 std::time::Duration::from_millis(timeout_ms),
                 child.wait_with_output(),
             ) => r,
-            _ = async {
+            () = async {
                 loop {
                     if abort.is_aborted() { break; }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -311,25 +311,24 @@ impl Tool for BashTool {
                         let text = match note {
                             Some(n) => {
                                 if result.is_empty() { n }
-                                else { format!("{}\n({})", result, n) }
+                                else { format!("{result}\n({n})") }
                             }
                             None => result,
                         };
                         Ok(ToolResult::text(if text.is_empty() { "(no output)".into() } else { text }))
                     } else {
                         Ok(ToolResult::error(format!(
-                            "Exit code {}\n{}",
-                            exit_code, result
+                            "Exit code {exit_code}\n{result}"
                         )))
                     }
                 }
             }
-            Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {}", e)),
+            Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {e}")),
             Err(_) => {
                 if let Some(pid) = child_id {
                     kill_process(pid);
                 }
-                Ok(ToolResult::error(format!("Command timed out after {}ms", timeout_ms)))
+                Ok(ToolResult::error(format!("Command timed out after {timeout_ms}ms")))
             }
         }
     }
@@ -440,31 +439,31 @@ mod tests {
     #[test]
     fn test_extract_base_command_simple() {
         let base = extract_base_command("ls -la");
-        assert!(base.starts_with("ls"), "expected 'ls', got '{}'", base);
+        assert!(base.starts_with("ls"), "expected 'ls', got '{base}'");
     }
 
     #[test]
     fn test_extract_base_command_sudo() {
         let base = extract_base_command("sudo apt update");
-        assert!(base.starts_with("apt"), "expected 'apt', got '{}'", base);
+        assert!(base.starts_with("apt"), "expected 'apt', got '{base}'");
     }
 
     #[test]
     fn test_extract_base_command_pipeline() {
         let base = extract_base_command("cat file | grep foo");
-        assert!(base.starts_with("cat"), "expected 'cat', got '{}'", base);
+        assert!(base.starts_with("cat"), "expected 'cat', got '{base}'");
     }
 
     #[test]
     fn test_extract_base_command_env_vars() {
         let base = extract_base_command("FOO=bar BAZ=1 node script.js");
-        assert!(base.starts_with("node"), "expected 'node', got '{}'", base);
+        assert!(base.starts_with("node"), "expected 'node', got '{base}'");
     }
 
     #[test]
     fn test_extract_base_command_complex() {
         let base = extract_base_command("sudo ENV=1 git status");
-        assert!(base.contains("git"), "expected 'git' in '{}'", base);
+        assert!(base.contains("git"), "expected 'git' in '{base}'");
     }
 
     // ── classify_command (additional) ───────────────────────────────────
@@ -584,7 +583,7 @@ mod tests {
         // Should be interrupted, not timed out
         assert!(result.is_error, "Expected error result for interrupted command");
         let text = format!("{:?}", result.content);
-        assert!(text.contains("Interrupted"), "Expected 'Interrupted', got: {}", text);
+        assert!(text.contains("Interrupted"), "Expected 'Interrupted', got: {text}");
     }
 
     // ── dangerous command edge cases ────────────────────────────────────

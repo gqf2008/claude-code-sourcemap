@@ -49,10 +49,10 @@ pub struct GrepTool;
 
 #[async_trait]
 impl Tool for GrepTool {
-    fn name(&self) -> &str { "Grep" }
+    fn name(&self) -> &'static str { "Grep" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "A powerful search tool built on ripgrep. ALWAYS use Grep for search tasks — NEVER \
          invoke grep or rg as a Bash command. Supports full regex syntax (e.g. \"log.*Error\"). \
          Filter by glob (e.g. \"*.js\") or type (e.g. \"py\", \"rust\"). Output modes: \
@@ -97,8 +97,8 @@ impl Tool for GrepTool {
             }
             None => context.cwd.clone(),
         };
-        let include_glob = input["include"].as_str().map(|s| s.to_string());
-        let type_filter = input["type"].as_str().map(|s| s.to_string());
+        let include_glob = input["include"].as_str().map(std::string::ToString::to_string);
+        let type_filter = input["type"].as_str().map(std::string::ToString::to_string);
         let output_mode = input["output_mode"].as_str().unwrap_or("files_with_matches").to_string();
         let multiline = input["multiline"].as_bool().unwrap_or(false);
         let case_insensitive = input["case_insensitive"].as_bool().unwrap_or(false);
@@ -111,7 +111,7 @@ impl Tool for GrepTool {
 
         // Build final pattern (with flags) and check length AFTER wrapping
         let final_pattern = if case_insensitive {
-            format!("(?i){}", pattern)
+            format!("(?i){pattern}")
         } else {
             pattern.clone()
         };
@@ -125,7 +125,7 @@ impl Tool for GrepTool {
 
         let output = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
             let regex = Regex::new(&final_pattern)
-                .map_err(|e| anyhow::anyhow!("Bad regex: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Bad regex: {e}"))?;
 
             let type_globs: Option<Vec<&str>> = type_filter.as_deref()
                 .and_then(type_to_globs);
@@ -416,7 +416,7 @@ mod tests {
             _ => String::new(),
         }).collect::<String>();
         // Should find the line containing "Hello" via case-insensitive match
-        assert!(text.contains("Hello"), "should match Hello case-insensitively: {}", text);
+        assert!(text.contains("Hello"), "should match Hello case-insensitively: {text}");
     }
 
     #[tokio::test]

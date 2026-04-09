@@ -9,7 +9,7 @@ use crate::bash::truncate_output;
 /// Default timeout for git commands (30 seconds).
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// GitTool — safe wrapper for common git operations.
+/// `GitTool` — safe wrapper for common git operations.
 ///
 /// Provides a structured interface for git commands that's safer than raw Bash.
 /// Read-only commands (status, log, diff, branch) are always allowed; write
@@ -18,10 +18,10 @@ pub struct GitTool;
 
 #[async_trait]
 impl Tool for GitTool {
-    fn name(&self) -> &str { "Git" }
+    fn name(&self) -> &'static str { "Git" }
     fn category(&self) -> ToolCategory { ToolCategory::Git }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Run git commands. Supports common operations: status, diff, log, branch, \
          add, commit, checkout, stash, show, blame. Safer than running raw shell commands."
     }
@@ -71,7 +71,7 @@ impl Tool for GitTool {
         ];
         if !allowed.contains(&subcommand) {
             return Ok(ToolResult::error(format!(
-                "Subcommand '{}' not allowed. Use one of: {:?}", subcommand, allowed
+                "Subcommand '{subcommand}' not allowed. Use one of: {allowed:?}"
             )));
         }
 
@@ -111,7 +111,7 @@ impl Tool for GitTool {
 
         let output = match output {
             Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Ok(ToolResult::error(format!("Git command failed to start: {}", e))),
+            Ok(Err(e)) => return Ok(ToolResult::error(format!("Git command failed to start: {e}"))),
             Err(_) => return Ok(ToolResult::error(format!(
                 "Git command timed out after {}s. Consider breaking the operation into smaller steps.",
                 GIT_TIMEOUT.as_secs()
@@ -139,12 +139,12 @@ impl Tool for GitTool {
         if output.status.success() {
             Ok(ToolResult::text(text))
         } else {
-            Ok(ToolResult::error(format!("git {} failed:\n{}", subcommand, text)))
+            Ok(ToolResult::error(format!("git {subcommand} failed:\n{text}")))
         }
     }
 }
 
-/// GitStatusTool — quick read-only git status check.
+/// `GitStatusTool` — quick read-only git status check.
 ///
 /// This is concurrency-safe and read-only, optimized for frequent use
 /// by the agent to check repository state before/after operations.
@@ -152,10 +152,10 @@ pub struct GitStatusTool;
 
 #[async_trait]
 impl Tool for GitStatusTool {
-    fn name(&self) -> &str { "GitStatus" }
+    fn name(&self) -> &'static str { "GitStatus" }
     fn category(&self) -> ToolCategory { ToolCategory::Git }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Quick git status check: shows branch, staged/unstaged changes, and untracked files."
     }
 
@@ -193,7 +193,7 @@ impl Tool for GitStatusTool {
         if let Ok(Ok(b)) = branch {
             let name = String::from_utf8_lossy(&b.stdout).trim().to_string();
             if !name.is_empty() {
-                text.push_str(&format!("Branch: {}\n", name));
+                text.push_str(&format!("Branch: {name}\n"));
             }
         }
 
@@ -207,16 +207,15 @@ impl Tool for GitStatusTool {
                     l.len() >= 2 && !l.starts_with(' ') && !l.starts_with('?')
                 }).count();
                 let unstaged = file_lines.iter().filter(|l| {
-                    l.len() >= 2 && l.chars().nth(1).map(|c| c != ' ').unwrap_or(false) && !l.starts_with('?')
+                    l.len() >= 2 && l.chars().nth(1).is_some_and(|c| c != ' ') && !l.starts_with('?')
                 }).count();
                 let untracked = file_lines.iter().filter(|l| l.starts_with("??")).count();
 
                 text.push_str(&format!(
-                    "Changes: {} staged, {} unstaged, {} untracked\n",
-                    staged, unstaged, untracked
+                    "Changes: {staged} staged, {unstaged} unstaged, {untracked} untracked\n"
                 ));
                 for line in &file_lines {
-                    text.push_str(&format!("  {}\n", line));
+                    text.push_str(&format!("  {line}\n"));
                 }
             }
         }
@@ -248,7 +247,7 @@ mod tests {
     fn get_text(result: &ToolResult) -> String {
         result.content.iter().filter_map(|c| {
             if let claude_core::message::ToolResultContent::Text { text } = c { Some(text.clone()) } else { None }
-        }).collect::<Vec<_>>().join("")
+        }).collect::<String>()
     }
 
     // ── Tool metadata ───────────────────────────────────────────────────────
@@ -373,7 +372,7 @@ mod tests {
             let input = json!({"subcommand": sub});
             let result = GitTool.call(input, &test_context()).await.unwrap();
             let text = get_text(&result);
-            let err_prefix = format!("Subcommand '{}' not allowed", sub);
+            let err_prefix = format!("Subcommand '{sub}' not allowed");
             assert!(
                 !text.starts_with(&err_prefix),
                 "'{}' should pass allowlist, but got: {}",

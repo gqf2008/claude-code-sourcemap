@@ -4,7 +4,7 @@
 //! Aligned with TS `services/api/promptCacheBreakDetection.ts`:
 //! - Hash-based change detection for system prompt, tool schemas, model, betas
 //! - Per-tool schema hashing for granular change identification
-//! - Two-phase: record_prompt_state() before API call, check_response() after
+//! - Two-phase: `record_prompt_state()` before API call, `check_response()` after
 //! - TTL-aware: distinguishes client-side changes from 5min/1hour cache expiry
 //! - Per-source state tracking with LRU eviction (max 10 sources)
 
@@ -160,7 +160,7 @@ static TRACKER: std::sync::LazyLock<Mutex<CacheTracker>> =
 
 // ── Hash utilities ───────────────────────────────────────────────────────────
 
-/// Compute a hash of a string using DefaultHasher (djb2-like).
+/// Compute a hash of a string using `DefaultHasher` (djb2-like).
 fn compute_hash(data: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     data.hash(&mut hasher);
@@ -173,7 +173,7 @@ fn compute_per_tool_hashes(schemas: &[String], names: &[String]) -> HashMap<Stri
     for (i, schema) in schemas.iter().enumerate() {
         let name = names.get(i)
             .cloned()
-            .unwrap_or_else(|| format!("__idx_{}", i));
+            .unwrap_or_else(|| format!("__idx_{i}"));
         hashes.insert(name, compute_hash(schema));
     }
     hashes
@@ -188,7 +188,7 @@ fn is_excluded_model(model: &str) -> bool {
 
 /// Get the tracking key for a query source + optional agent ID.
 ///
-/// Returns None for untracked sources (speculation, session_memory, etc.).
+/// Returns None for untracked sources (speculation, `session_memory`, etc.).
 fn get_tracking_key(query_source: &str, agent_id: Option<&str>) -> Option<String> {
     // Compact shares cache with repl_main_thread
     if query_source == "compact" {
@@ -197,7 +197,7 @@ fn get_tracking_key(query_source: &str, agent_id: Option<&str>) -> Option<String
 
     for prefix in TRACKED_SOURCE_PREFIXES {
         if query_source.starts_with(prefix) {
-            return Some(agent_id.map(String::from).unwrap_or_else(|| query_source.to_string()));
+            return Some(agent_id.map_or_else(|| query_source.to_string(), String::from));
         }
     }
 
@@ -220,8 +220,7 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
     let tools_hash = compute_hash(&tools_combined);
     let cache_control_hash = snapshot.cache_control_scope
         .as_deref()
-        .map(compute_hash)
-        .unwrap_or(0);
+        .map_or(0, compute_hash);
 
     let sorted_betas = {
         let mut b = snapshot.betas.clone();
@@ -231,8 +230,7 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
     let effort_str = snapshot.effort_value.clone();
     let extra_body_hash = snapshot.extra_body_json
         .as_deref()
-        .map(compute_hash)
-        .unwrap_or(0);
+        .map_or(0, compute_hash);
 
     let mut tracker = match TRACKER.lock() {
         Ok(t) => t,
@@ -269,8 +267,8 @@ pub fn record_prompt_state(snapshot: &PromptStateSnapshot) {
             || overage_changed;
 
         if any_change {
-            let prev_tool_set: HashSet<&str> = prev.tool_names.iter().map(|s| s.as_str()).collect();
-            let new_tool_set: HashSet<&str> = snapshot.tool_names.iter().map(|s| s.as_str()).collect();
+            let prev_tool_set: HashSet<&str> = prev.tool_names.iter().map(std::string::String::as_str).collect();
+            let new_tool_set: HashSet<&str> = snapshot.tool_names.iter().map(std::string::String::as_str).collect();
 
             let added_tools: Vec<String> = snapshot.tool_names.iter()
                 .filter(|n| !prev_tool_set.contains(n.as_str()))
@@ -451,11 +449,11 @@ pub fn check_response_for_cache_break(
             let info = if delta == 0 {
                 String::new()
             } else if delta > 0 {
-                format!(" (+{} chars)", delta)
+                format!(" (+{delta} chars)")
             } else {
-                format!(" ({} chars)", delta)
+                format!(" ({delta} chars)")
             };
-            parts.push(format!("system prompt changed{}", info));
+            parts.push(format!("system prompt changed{info}"));
         }
         if c.tool_schemas_changed {
             let tool_diff = if c.added_tool_count > 0 || c.removed_tool_count > 0 {
@@ -465,7 +463,7 @@ pub fn check_response_for_cache_break(
             } else {
                 " (tool prompt/schema changed, same tool set)".to_string()
             };
-            parts.push(format!("tools changed{}", tool_diff));
+            parts.push(format!("tools changed{tool_diff}"));
         }
         if c.fast_mode_changed {
             parts.push("fast mode toggled".to_string());
@@ -482,7 +480,7 @@ pub fn check_response_for_cache_break(
             if diff.is_empty() {
                 parts.push("betas changed".to_string());
             } else {
-                parts.push(format!("betas changed ({})", diff));
+                parts.push(format!("betas changed ({diff})"));
             }
         }
         if c.auto_mode_changed {

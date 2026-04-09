@@ -1,4 +1,4 @@
-//! NotebookEditTool — edit Jupyter notebook (.ipynb) cells.
+//! `NotebookEditTool` — edit Jupyter notebook (.ipynb) cells.
 //!
 //! Aligned with TS `NotebookEditTool.ts`.  Supports three edit modes:
 //! - replace: replace an existing cell's source
@@ -15,10 +15,10 @@ pub struct NotebookEditTool;
 
 #[async_trait]
 impl Tool for NotebookEditTool {
-    fn name(&self) -> &str { "NotebookEdit" }
+    fn name(&self) -> &'static str { "NotebookEdit" }
     fn category(&self) -> ToolCategory { ToolCategory::FileSystem }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Edit Jupyter notebook (.ipynb) cells. Supports replacing cell content, \
          inserting new cells, and deleting cells. Always read the notebook first \
          to understand its structure before editing."
@@ -68,7 +68,7 @@ impl Tool for NotebookEditTool {
 
         let path = match path_util::resolve_path(notebook_path, &context.cwd) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::error(format!("{}", e))),
+            Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };
 
         let new_source = input["new_source"]
@@ -85,10 +85,10 @@ impl Tool for NotebookEditTool {
             .unwrap_or("replace");
 
         let content = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("Failed to read notebook: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read notebook: {e}"))?;
 
         let mut notebook: Value = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Invalid notebook JSON: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid notebook JSON: {e}"))?;
 
         let cells = notebook["cells"]
             .as_array_mut()
@@ -104,7 +104,7 @@ impl Tool for NotebookEditTool {
                 }
                 let source_lines: Vec<Value> = new_source
                     .lines()
-                    .map(|l| Value::String(format!("{}\n", l)))
+                    .map(|l| Value::String(format!("{l}\n")))
                     .collect();
                 cells[cell_number]["source"] = Value::Array(source_lines);
                 cells[cell_number]["execution_count"] = Value::Null;
@@ -113,7 +113,7 @@ impl Tool for NotebookEditTool {
             "insert" => {
                 let source_lines: Vec<Value> = new_source
                     .lines()
-                    .map(|l| Value::String(format!("{}\n", l)))
+                    .map(|l| Value::String(format!("{l}\n")))
                     .collect();
                 let new_cell = json!({
                     "cell_type": cell_type,
@@ -136,7 +136,7 @@ impl Tool for NotebookEditTool {
             }
             _ => {
                 return Ok(ToolResult::error(format!(
-                    "Invalid edit_mode: {}. Use replace, insert, or delete.", edit_mode
+                    "Invalid edit_mode: {edit_mode}. Use replace, insert, or delete."
                 )));
             }
         }
@@ -147,7 +147,7 @@ impl Tool for NotebookEditTool {
         Ok(ToolResult::text(format!(
             "Notebook {} updated: {} cell at index {}. Total cells: {}",
             path.display(), edit_mode, cell_number,
-            notebook["cells"].as_array().map(|c| c.len()).unwrap_or(0)
+            notebook["cells"].as_array().map_or(0, std::vec::Vec::len)
         )))
     }
 }

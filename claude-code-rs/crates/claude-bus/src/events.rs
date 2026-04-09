@@ -79,7 +79,7 @@ pub enum AgentNotification {
     /// Session was saved to disk.
     SessionSaved { session_id: String },
 
-    /// Session status response (for GetStatus request).
+    /// Session status response (for `GetStatus` request).
     SessionStatus {
         session_id: String,
         model: String,
@@ -92,7 +92,7 @@ pub enum AgentNotification {
     /// Conversation history was cleared.
     HistoryCleared,
 
-    /// Model was changed (response to SetModel request).
+    /// Model was changed (response to `SetModel` request).
     ModelChanged {
         model: String,
         display_name: String,
@@ -143,7 +143,7 @@ pub enum AgentNotification {
     /// An MCP server encountered an error.
     McpServerError { name: String, error: String },
 
-    /// Response to McpListServers request.
+    /// Response to `McpListServers` request.
     McpServerList { servers: Vec<McpServerInfo> },
 
     // ── Memory ──
@@ -153,10 +153,10 @@ pub enum AgentNotification {
 
     // ── Query responses ──
 
-    /// Response to ListModels request.
+    /// Response to `ListModels` request.
     ModelList { models: Vec<ModelInfo> },
 
-    /// Response to ListTools request.
+    /// Response to `ListTools` request.
     ToolList { tools: Vec<ToolInfo> },
 
     // ── Errors ──
@@ -227,7 +227,7 @@ pub enum AgentRequest {
     /// Disconnect an MCP server.
     McpDisconnect { name: String },
 
-    /// List connected MCP servers (response via McpServerList notification).
+    /// List connected MCP servers (response via `McpServerList` notification).
     McpListServers,
 
     /// Graceful shutdown.
@@ -236,7 +236,7 @@ pub enum AgentRequest {
     /// Save the current session to disk.
     SaveSession,
 
-    /// Query session status (response via SessionStatus notification).
+    /// Query session status (response via `SessionStatus` notification).
     GetStatus,
 
     /// Clear the conversation history.
@@ -245,10 +245,10 @@ pub enum AgentRequest {
     /// Load a saved session by ID.
     LoadSession { session_id: String },
 
-    /// List available models (response via ModelList notification).
+    /// List available models (response via `ModelList` notification).
     ListModels,
 
-    /// List available tools (response via ToolList notification).
+    /// List available tools (response via `ToolList` notification).
     ListTools,
 }
 
@@ -303,7 +303,7 @@ pub struct ImageAttachment {
     pub media_type: String,
 }
 
-/// MCP server status info (returned in McpServerList notification).
+/// MCP server status info (returned in `McpServerList` notification).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerInfo {
     pub name: String,
@@ -311,14 +311,14 @@ pub struct McpServerInfo {
     pub connected: bool,
 }
 
-/// Model information (returned in ModelList notification).
+/// Model information (returned in `ModelList` notification).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
 }
 
-/// Tool information (returned in ToolList notification).
+/// Tool information (returned in `ToolList` notification).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
     pub name: String,

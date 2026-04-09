@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
 
-use crate::protocol::*;
+use crate::protocol::{JsonRpcResponse, JsonRpcNotification, JsonRpcRequest};
 use crate::types::McpSseConfig;
 
 struct PendingRequest {
@@ -93,7 +93,7 @@ impl SseTransport {
                     }
                 }
                 Ok(Some(Err(e))) => {
-                    anyhow::bail!("SSE stream error while waiting for endpoint: {}", e);
+                    anyhow::bail!("SSE stream error while waiting for endpoint: {e}");
                 }
                 Ok(None) => {
                     anyhow::bail!("SSE stream ended before receiving endpoint event");
@@ -283,7 +283,7 @@ fn resolve_url(base: &str, relative: &str) -> String {
         let after_scheme = &base[pos + 3..];
         if let Some(slash_pos) = after_scheme.find('/') {
             let origin = &base[..pos + 3 + slash_pos];
-            return format!("{}{}", origin, relative);
+            return format!("{origin}{relative}");
         }
     }
     format!("{}{}", base.trim_end_matches('/'), relative)

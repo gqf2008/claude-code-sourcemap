@@ -1,4 +1,4 @@
-//! PowerShellTool — execute Windows PowerShell commands.
+//! `PowerShellTool` — execute Windows `PowerShell` commands.
 //!
 //! Available only on Windows. On other platforms the tool is registered but
 //! returns an informational error.
@@ -13,10 +13,10 @@ pub struct PowerShellTool;
 
 #[async_trait]
 impl Tool for PowerShellTool {
-    fn name(&self) -> &str { "PowerShell" }
+    fn name(&self) -> &'static str { "PowerShell" }
     fn category(&self) -> ToolCategory { ToolCategory::Shell }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Execute a PowerShell command on Windows. Returns stdout, stderr, and exit code. \
          Use this for Windows-specific operations, file system tasks, or system administration."
     }
@@ -61,7 +61,7 @@ impl Tool for PowerShellTool {
 
             // Security: check for dangerous patterns
             if let Some(reason) = check_dangerous(command) {
-                return Ok(ToolResult::error(format!("🚫 {}\nCommand: {}", reason, command)));
+                return Ok(ToolResult::error(format!("🚫 {reason}\nCommand: {command}")));
             }
 
             use std::process::Stdio;
@@ -74,7 +74,7 @@ impl Tool for PowerShellTool {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| anyhow::anyhow!("Failed to spawn powershell.exe: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to spawn powershell.exe: {e}"))?;
 
             let result = timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await;
 
@@ -95,7 +95,7 @@ impl Tool for PowerShellTool {
                     }
                     if exit_code != 0 {
                         if !response.is_empty() { response.push('\n'); }
-                        response.push_str(&format!("Exit code: {}", exit_code));
+                        response.push_str(&format!("Exit code: {exit_code}"));
                     }
 
                     if response.is_empty() {
@@ -112,8 +112,8 @@ impl Tool for PowerShellTool {
                         Ok(ToolResult::text(response))
                     }
                 }
-                Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {}", e))),
-                Err(_) => Ok(ToolResult::error(format!("Command timed out after {}ms", timeout_ms))),
+                Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {e}"))),
+                Err(_) => Ok(ToolResult::error(format!("Command timed out after {timeout_ms}ms"))),
             }
         }
     }

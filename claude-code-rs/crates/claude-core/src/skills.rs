@@ -117,12 +117,12 @@ pub fn get_skills(cwd: &Path) -> Vec<SkillEntry> {
     }
 
     // Merge in dynamic skills (discovered from nested dirs + activated conditional)
-    let dyn_skills = lock_or_recover(dynamic_skills());
+    let dyn_snapshot: Vec<SkillEntry> = lock_or_recover(dynamic_skills()).values().cloned().collect();
     let mut seen: HashSet<String> = result.iter().map(|s| s.name.clone()).collect();
-    for skill in dyn_skills.values() {
+    for skill in dyn_snapshot {
         if !seen.contains(&skill.name) {
             seen.insert(skill.name.clone());
-            result.push(skill.clone());
+            result.push(skill);
         }
     }
 
@@ -185,24 +185,36 @@ fn skill_dirs(cwd: &Path) -> Vec<PathBuf> {
 pub fn load_skills(cwd: &Path) -> Vec<SkillEntry> {
     let all = load_skills_from_dirs(&skill_dirs(cwd));
     let mut regular = Vec::new();
-    let mut cond = lock_or_recover(conditional_cache());
-    let activated = lock_or_recover(activated_names());
+    let activated_snapshot: std::collections::HashSet<String> = lock_or_recover(activated_names()).clone();
+
+    let mut conditional_entries = Vec::new();
+    let mut dynamic_entries = Vec::new();
 
     for skill in all {
         if !skill.paths.is_empty() {
-            if activated.contains(&skill.name) {
-                // Already activated in this session — treat as regular
-                dynamic_skills()
-                    .lock()
-                    .unwrap()
-                    .insert(skill.name.clone(), skill);
+            if activated_snapshot.contains(&skill.name) {
+                dynamic_entries.push(skill);
             } else {
-                cond.insert(skill.name.clone(), skill);
+                conditional_entries.push(skill);
             }
         } else {
             regular.push(skill);
         }
     }
+
+    {
+        let mut cond = lock_or_recover(conditional_cache());
+        for skill in conditional_entries {
+            cond.insert(skill.name.clone(), skill);
+        }
+    }
+    {
+        let mut dyn_map = lock_or_recover(dynamic_skills());
+        for skill in dynamic_entries {
+            dyn_map.insert(skill.name.clone(), skill);
+        }
+    }
+
     regular
 }
 
@@ -448,13 +460,17 @@ pub fn activate_conditional_skills(file_paths: &[&str], cwd: &Path) -> Vec<Strin
         }
     }
 
+    let removed: Vec<(String, SkillEntry)> = to_remove
+        .iter()
+        .filter_map(|name| cond.remove(name).map(|s| (name.clone(), s)))
+        .collect();
+    drop(cond);
+
     let mut dyn_skills = lock_or_recover(dynamic_skills());
     let mut act_names = lock_or_recover(activated_names());
-    for name in &to_remove {
-        if let Some(skill) = cond.remove(name) {
-            dyn_skills.insert(name.clone(), skill);
-            act_names.insert(name.clone());
-        }
+    for (name, skill) in removed {
+        dyn_skills.insert(name.clone(), skill);
+        act_names.insert(name);
     }
 
     activated
@@ -583,33 +599,36 @@ pub fn discover_and_load_skills_for_paths(file_paths: &[&str], cwd: &Path) -> Ve
     };
 
     let mut new_dirs = Vec::new();
-    let mut disc = lock_or_recover(discovered_dirs());
 
-    for fp in file_paths {
-        let mut current = Path::new(fp)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
+    {
+        let mut disc = lock_or_recover(discovered_dirs());
 
-        // Walk up to cwd, NOT including cwd itself
-        loop {
-            let cur_str = current.to_string_lossy().replace('\\', "/");
-            if !cur_str.starts_with(&cwd_prefix) {
-                break;
-            }
+        for fp in file_paths {
+            let mut current = Path::new(fp)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
 
-            let skill_dir = current.join(".claude").join("skills");
-            if !disc.contains(&skill_dir) {
-                disc.insert(skill_dir.clone());
-                if skill_dir.is_dir() {
-                    new_dirs.push(skill_dir);
+            // Walk up to cwd, NOT including cwd itself
+            loop {
+                let cur_str = current.to_string_lossy().replace('\\', "/");
+                if !cur_str.starts_with(&cwd_prefix) {
+                    break;
                 }
-            }
 
-            let parent = current.parent().map(|p| p.to_path_buf());
-            match parent {
-                Some(p) if p != current => current = p,
-                _ => break,
+                let skill_dir = current.join(".claude").join("skills");
+                if !disc.contains(&skill_dir) {
+                    disc.insert(skill_dir.clone());
+                    if skill_dir.is_dir() {
+                        new_dirs.push(skill_dir);
+                    }
+                }
+
+                let parent = current.parent().map(|p| p.to_path_buf());
+                match parent {
+                    Some(p) if p != current => current = p,
+                    _ => break,
+                }
             }
         }
     }

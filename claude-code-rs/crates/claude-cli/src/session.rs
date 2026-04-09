@@ -191,8 +191,8 @@ fn handle_permission_request(req: &PermissionRequest) -> (bool, bool) {
     match crate::ui::permission_confirm(&req.tool_name, &req.description, risk) {
         Ok(choice) => match choice {
             crate::ui::PermissionChoice::AllowOnce => (true, false),
-            crate::ui::PermissionChoice::AllowSession => (true, true),
-            crate::ui::PermissionChoice::AllowAlways => (true, true),
+            crate::ui::PermissionChoice::AllowSession
+            | crate::ui::PermissionChoice::AllowAlways => (true, true),
             crate::ui::PermissionChoice::Deny => (false, false),
         },
         Err(_) => {
