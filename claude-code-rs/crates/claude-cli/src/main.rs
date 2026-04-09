@@ -136,6 +136,12 @@ struct Cli {
     #[arg(long)]
     append_system_prompt: Option<String>,
 
+    /// List all saved sessions and exit.
+    /// Shows session ID, title, message count, and age.
+    /// Useful for scripting: `claude --list-sessions | head -5`
+    #[arg(long)]
+    list_sessions: bool,
+
     /// Generate shell completions and exit.
     /// Supported shells: bash, zsh, fish, powershell, elvish.
     /// Example: claude --completions bash >> ~/.bashrc
@@ -163,6 +169,24 @@ async fn main() -> anyhow::Result<()> {
     if let Some(shell) = cli.completions {
         let mut cmd = Cli::command();
         clap_complete::generate(shell, &mut cmd, "claude", &mut std::io::stdout());
+        return Ok(());
+    }
+
+    // ── Handle --list-sessions: print sessions and exit ──────────────────
+    if cli.list_sessions {
+        let sessions = claude_core::session::list_sessions();
+        if sessions.is_empty() {
+            println!("No saved sessions.");
+        } else {
+            for s in &sessions {
+                let age = claude_core::session::format_age(&s.updated_at);
+                let title = s.custom_title.as_deref().unwrap_or(&s.title);
+                println!(
+                    "{:.8}\t{}\t{} msgs\t{} turns\t${:.4}\t{}",
+                    s.id, title, s.message_count, s.turn_count, s.total_cost_usd, age,
+                );
+            }
+        }
         return Ok(());
     }
 
@@ -485,5 +509,17 @@ mod tests {
     fn test_cli_base_url_flag() {
         let cli = Cli::try_parse_from(["claude", "--base-url", "http://localhost:11434"]).unwrap();
         assert_eq!(cli.base_url.as_deref(), Some("http://localhost:11434"));
+    }
+
+    #[test]
+    fn test_cli_list_sessions_flag() {
+        let cli = Cli::try_parse_from(["claude", "--list-sessions"]).unwrap();
+        assert!(cli.list_sessions);
+    }
+
+    #[test]
+    fn test_cli_defaults_list_sessions_false() {
+        let cli = Cli::try_parse_from(["claude"]).unwrap();
+        assert!(!cli.list_sessions);
     }
 }

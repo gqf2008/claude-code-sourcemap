@@ -131,8 +131,37 @@ pub(crate) fn handle_plugin_command(sub: &str, cwd: &std::path::Path) {
                 None => println!("Usage: /plugin disable <name>"),
             }
         }
+        "install" => {
+            let path_str = sub.split_whitespace().nth(1);
+            match path_str {
+                Some(path_str) => {
+                    let source = std::path::Path::new(path_str);
+                    // Resolve relative paths against cwd
+                    let source = if source.is_relative() {
+                        cwd.join(source)
+                    } else {
+                        source.to_path_buf()
+                    };
+                    match PluginLoader::install_from_path(&source) {
+                        Ok(name) => {
+                            println!("\x1b[32m✓\x1b[0m Plugin '\x1b[1m{}\x1b[0m' installed successfully.", name);
+                            println!("\x1b[2mUse /plugin list to verify, /plugin reload to activate.\x1b[0m");
+                        }
+                        Err(e) => {
+                            eprintln!("\x1b[31m✗ Install failed: {}\x1b[0m", e);
+                        }
+                    }
+                }
+                None => println!("Usage: /plugin install <path-to-plugin-dir>"),
+            }
+        }
+        "reload" => {
+            let loader = PluginLoader::discover(cwd);
+            println!("\x1b[32m✓\x1b[0m Reloaded {} plugin(s) ({} enabled).",
+                loader.count(), loader.enabled_count());
+        }
         other => {
-            println!("Unknown subcommand: {}. Use: /plugin [list|info|enable|disable] <name>", other);
+            println!("Unknown subcommand: {}. Use: /plugin [list|info|enable|disable|install|reload] <name>", other);
         }
     }
 }

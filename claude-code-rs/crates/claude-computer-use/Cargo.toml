@@ -23,6 +23,9 @@ enigo = { version = "0.6.1", features = ["serde"] }
 # Screenshot capture
 screenshots = "0.8"
 
+# Hostname detection
+hostname = "0.4"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 

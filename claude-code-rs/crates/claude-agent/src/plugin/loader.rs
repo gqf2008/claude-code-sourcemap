@@ -122,6 +122,18 @@ impl PluginLoader {
         }
     }
 
+    /// Get all MCP server configurations from enabled plugins.
+    ///
+    /// Returns a vec of (server_name, config_value) pairs.
+    /// The config value is expected to have at minimum a "command" field.
+    pub fn all_mcp_servers(&self) -> Vec<(String, &serde_json::Value)> {
+        self.plugins.iter()
+            .filter(|p| p.manifest.enabled)
+            .flat_map(|p| p.manifest.mcp.iter())
+            .map(|(name, config)| (name.clone(), config))
+            .collect()
+    }
+
     /// Total number of loaded plugins.
     pub fn count(&self) -> usize {
         self.plugins.len()
@@ -130,6 +142,55 @@ impl PluginLoader {
     /// Number of enabled plugins.
     pub fn enabled_count(&self) -> usize {
         self.plugins.iter().filter(|p| p.manifest.enabled).count()
+    }
+
+    /// Install a plugin from a local directory path to the user-global plugins dir.
+    ///
+    /// Copies the plugin directory (or extracts if `.zip`) to `~/.claude/plugins/<name>/`.
+    /// Returns the plugin name on success.
+    pub fn install_from_path(source: &Path) -> anyhow::Result<String> {
+        // Determine if source is a directory or zip
+        if source.is_dir() {
+            // Must have plugin.json or .claude-plugin/plugin.json
+            let manifest_path = if source.join("plugin.json").exists() {
+                source.join("plugin.json")
+            } else if source.join(".claude-plugin").join("plugin.json").exists() {
+                source.join(".claude-plugin").join("plugin.json")
+            } else {
+                anyhow::bail!("No plugin.json found in {}", source.display());
+            };
+
+            let content = std::fs::read_to_string(&manifest_path)?;
+            let manifest: PluginManifest = serde_json::from_str(&content)?;
+            if manifest.name.is_empty() {
+                anyhow::bail!("Plugin name cannot be empty");
+            }
+
+            let dest = user_plugins_dir()?.join(&manifest.name);
+            if dest.exists() {
+                // Remove existing version
+                std::fs::remove_dir_all(&dest)?;
+            }
+            copy_dir_recursive(source, &dest)?;
+
+            info!("Installed plugin '{}' v{} to {}", manifest.name, manifest.version, dest.display());
+            Ok(manifest.name)
+        } else if source.extension().and_then(|e| e.to_str()) == Some("zip") {
+            Self::install_from_zip(source)
+        } else {
+            anyhow::bail!(
+                "Expected a directory or .zip file, got: {}",
+                source.display()
+            );
+        }
+    }
+
+    /// Install a plugin from a .zip archive.
+    fn install_from_zip(_zip_path: &Path) -> anyhow::Result<String> {
+        anyhow::bail!(
+            "Zip plugin installation is not yet supported. \
+             Please extract the archive and use `/plugin install <directory>`."
+        );
     }
 }
 
@@ -302,6 +363,31 @@ fn load_single_plugin(
         dir: plugin_dir.to_path_buf(),
         source,
     })
+}
+
+/// Get the user-global plugins directory (`~/.claude/plugins/`).
+fn user_plugins_dir() -> anyhow::Result<PathBuf> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let dir = home.join(".claude").join("plugins");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Recursively copy a directory.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -567,5 +653,57 @@ mod tests {
         assert_eq!(loader.count(), 1);
         // Simple format (plugin.json at root) wins
         assert_eq!(loader.plugins()[0].manifest.name, "simple-wins");
+    }
+
+    #[test]
+    fn test_all_mcp_servers() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join(".claude").join("plugins");
+        create_plugin_dir(&plugins_dir, "mcp-plugin", r#"{
+            "name": "mcp-plugin",
+            "mcp": {
+                "git-mcp": {"command": "git-mcp-server", "args": ["--stdio"]},
+                "db-mcp": {"command": "db-mcp-server"}
+            }
+        }"#);
+
+        let loader = PluginLoader::discover(tmp.path());
+        let servers = loader.all_mcp_servers();
+        assert_eq!(servers.len(), 2);
+
+        let names: Vec<&str> = servers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"git-mcp"));
+        assert!(names.contains(&"db-mcp"));
+    }
+
+    #[test]
+    fn test_install_from_path() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("my-plugin");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("plugin.json"), r#"{"name": "test-install", "version": "1.0.0"}"#).unwrap();
+
+        let result = PluginLoader::install_from_path(&source);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test-install");
+
+        // Verify it was installed
+        let home = dirs::home_dir().unwrap();
+        let installed = home.join(".claude").join("plugins").join("test-install").join("plugin.json");
+        assert!(installed.exists());
+
+        // Clean up
+        let _ = fs::remove_dir_all(home.join(".claude").join("plugins").join("test-install"));
+    }
+
+    #[test]
+    fn test_install_no_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("empty-dir");
+        fs::create_dir_all(&source).unwrap();
+
+        let result = PluginLoader::install_from_path(&source);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No plugin.json"));
     }
 }
