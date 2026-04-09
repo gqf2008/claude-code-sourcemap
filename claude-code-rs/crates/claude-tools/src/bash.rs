@@ -205,6 +205,12 @@ impl Tool for BashTool {
          over 'git add -A'."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass command string; strip environment variables and timeout
+        let cmd = input.get("command").cloned().unwrap_or(Value::Null);
+        json!({"Bash": cmd})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

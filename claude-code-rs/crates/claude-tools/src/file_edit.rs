@@ -107,6 +107,14 @@ impl Tool for FileEditTool {
          ALWAYS prefer editing existing files over creating new ones."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass path and content lengths; strip actual content to avoid leaking code
+        let path = input.get("file_path").cloned().unwrap_or(Value::Null);
+        let old_len = input.get("old_string").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+        let new_len = input.get("new_string").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+        json!({"FileEdit": {"path": path, "old_len": old_len, "new_len": new_len}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

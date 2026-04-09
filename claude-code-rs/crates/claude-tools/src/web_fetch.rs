@@ -213,6 +213,12 @@ impl Tool for WebFetchTool {
          article/body content."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass URL; strip headers, body, and other options
+        let url = input.get("url").cloned().unwrap_or(Value::Null);
+        json!({"WebFetch": {"url": url}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

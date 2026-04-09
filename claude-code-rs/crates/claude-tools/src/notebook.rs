@@ -24,6 +24,13 @@ impl Tool for NotebookEditTool {
          to understand its structure before editing."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        let path = input.get("notebook_path").cloned().unwrap_or(Value::Null);
+        let mode = input.get("edit_mode").cloned().unwrap_or(Value::Null);
+        let cell = input.get("cell_number").cloned().unwrap_or(Value::Null);
+        json!({"NotebookEdit": {"path": path, "mode": mode, "cell": cell}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

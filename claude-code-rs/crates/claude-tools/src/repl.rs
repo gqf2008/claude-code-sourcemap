@@ -23,6 +23,13 @@ impl Tool for ReplTool {
          Use this for quick computations, data exploration, or testing snippets."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Pass language + code (needed for risk assessment), strip timeout
+        let lang = input.get("language").cloned().unwrap_or(Value::Null);
+        let code = input.get("code").cloned().unwrap_or(Value::Null);
+        json!({"REPL": {"language": lang, "code": code}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

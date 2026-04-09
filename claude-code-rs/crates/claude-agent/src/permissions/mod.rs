@@ -1,5 +1,6 @@
 //! Permission checking — rule-based + interactive TUI for tool authorization.
 
+pub mod auto_classifier;
 pub mod helpers;
 pub mod tui;
 #[cfg(test)]
@@ -13,6 +14,7 @@ use claude_core::permissions::{
 use claude_core::bash_classifier;
 use claude_core::tool::{Tool, ToolCategory};
 use serde_json::Value;
+use std::sync::Arc;
 
 use helpers::{build_permission_suggestions, input_matches_pattern};
 
@@ -28,6 +30,10 @@ pub struct PermissionChecker {
     pub(crate) session_allowed: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Auto-mode denial tracking for fallback to manual prompting.
     denial_state: std::sync::Mutex<DenialState>,
+    /// Optional API client for remote auto-classifier side-queries.
+    classifier_client: Option<Arc<claude_api::client::ApiClient>>,
+    /// Recent tool call history for classifier transcript (tool_name, projected_input).
+    recent_tools: std::sync::Mutex<Vec<(String, Value)>>,
 }
 
 impl PermissionChecker {
@@ -45,6 +51,26 @@ impl PermissionChecker {
             mode,
             session_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
             denial_state: std::sync::Mutex::new(DenialState::default()),
+            classifier_client: None,
+            recent_tools: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Attach an API client for the remote auto-classifier.
+    pub fn with_classifier_client(mut self, client: Arc<claude_api::client::ApiClient>) -> Self {
+        self.classifier_client = Some(client);
+        self
+    }
+
+    /// Record a tool call in the recent history (for classifier transcript).
+    pub fn record_tool_call(&self, tool_name: &str, classifier_input: Value) {
+        if let Ok(mut history) = self.recent_tools.lock() {
+            history.push((tool_name.to_string(), classifier_input));
+            // Keep only last 20 entries to bound memory
+            if history.len() > 20 {
+                let drain_count = history.len() - 20;
+                history.drain(..drain_count);
+            }
         }
     }
 
@@ -134,7 +160,9 @@ impl PermissionChecker {
     /// 1. Safe tool allowlist → auto-allow
     /// 2. AcceptEdits fast-path simulation → auto-allow
     /// 3. Bash classifier for shell commands → auto-allow/block
-    /// 4. Fall through to classifier (or prompt if classifier unavailable)
+    /// 4. Web tools → auto-allow safe ones
+    /// 5. Remote classifier side-query (if API client available)
+    /// 6. Fall through to interactive prompt
     async fn check_auto_mode(&self, tool: &dyn Tool, input: &Value) -> PermissionResult {
         // Check denial fallback first
         if let Ok(state) = self.denial_state.lock() {
@@ -177,15 +205,51 @@ impl PermissionChecker {
         }
 
         // Stage 4: Web tools — auto-approve fetch but block if dangerous
-        if tool.category() == ToolCategory::Web {
-            // WebFetch is generally safe for reading; allow in auto-mode
-            if tool.name() == "WebFetchTool" || tool.name() == "WebSearchTool" {
-                return PermissionResult::allow();
+        if tool.category() == ToolCategory::Web
+            && (tool.name() == "WebFetchTool" || tool.name() == "WebSearchTool")
+        {
+            return PermissionResult::allow();
+        }
+
+        // Stage 5: Remote classifier side-query
+        if let Some(ref client) = self.classifier_client {
+            let classifier_input = tool.to_auto_classifier_input(input);
+            let recent = self.recent_tools.lock()
+                .map(|h| h.clone())
+                .unwrap_or_default();
+
+            match auto_classifier::classify(
+                client,
+                &recent,
+                tool.name(),
+                &classifier_input,
+                None,
+            ).await {
+                Ok(Some(decision)) => {
+                    if decision.should_block {
+                        self.record_denial();
+                        let reason = decision.reason.unwrap_or_else(|| "Classifier blocked".into());
+                        return PermissionResult::deny(format!(
+                            "Auto-mode classifier (S{}): {}",
+                            decision.stage, reason
+                        ));
+                    }
+                    // Classifier approved
+                    self.record_auto_approval();
+                    return PermissionResult::allow();
+                }
+                Ok(None) => {
+                    // Unparseable response — fall through to interactive
+                    tracing::warn!("Auto-classifier returned unparseable response, falling through");
+                }
+                Err(e) => {
+                    // API error — fall through to interactive
+                    tracing::warn!(error = %e, "Auto-classifier failed, falling through");
+                }
             }
         }
 
-        // Stage 5: Future remote classifier would go here.
-        // For now, fall through to interactive prompt for unresolved tools.
+        // Stage 6: Fall through to interactive prompt for unresolved tools.
         let suggestions = build_permission_suggestions(tool, input);
         let prompt_msg = if tool.category() == ToolCategory::Shell {
             if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {

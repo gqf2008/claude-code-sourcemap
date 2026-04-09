@@ -19,6 +19,13 @@ impl Tool for MultiEditTool {
          Use this instead of multiple Edit calls on the same file."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass path and edit count; strip content
+        let path = input.get("file_path").cloned().unwrap_or(Value::Null);
+        let edit_count = input.get("edits").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        json!({"MultiEdit": {"path": path, "edit_count": edit_count}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

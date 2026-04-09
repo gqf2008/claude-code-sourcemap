@@ -27,6 +27,12 @@ impl Tool for WebSearchTool {
          a list of relevant results with titles, URLs, and snippets."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass query; strip domain filters
+        let query = input.get("query").cloned().unwrap_or(Value::Null);
+        json!({"WebSearch": {"query": query}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

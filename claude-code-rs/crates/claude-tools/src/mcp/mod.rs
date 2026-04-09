@@ -271,6 +271,11 @@ impl Tool for McpToolProxy {
     fn is_read_only(&self) -> bool { self.read_only }
     fn is_enabled(&self) -> bool { true }
 
+    fn to_auto_classifier_input(&self, _input: &Value) -> Value {
+        // MCP tools may carry arbitrary user data — only expose the tool name
+        json!({"MCP": {"server": &self.server_name, "tool": &self.tool_name}})
+    }
+
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
         let manager = self.manager.read().await;
         let result = manager

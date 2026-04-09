@@ -21,6 +21,12 @@ impl Tool for PowerShellTool {
          Use this for Windows-specific operations, file system tasks, or system administration."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass command string; strip timeout
+        let cmd = input.get("command").cloned().unwrap_or(Value::Null);
+        json!({"PowerShell": cmd})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

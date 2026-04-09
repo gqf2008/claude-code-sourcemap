@@ -146,6 +146,15 @@ pub trait Tool: Send + Sync {
             _ => PermissionResult::ask(format!("Allow {} to run?", self.name())),
         }
     }
+
+    /// Project tool input into a compact representation for the auto-mode classifier.
+    ///
+    /// Returns a JSON value containing only the fields relevant for security
+    /// classification. Sensitive data (e.g., file contents, API keys) should be
+    /// omitted. The default implementation returns `{ToolName: <full input>}`.
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        serde_json::json!({ self.name(): input })
+    }
 }
 
 /// Type-erased tool behind an `Arc` for dynamic dispatch.

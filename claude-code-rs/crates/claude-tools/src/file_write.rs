@@ -24,6 +24,13 @@ impl Tool for FileWriteTool {
          NEVER create documentation files (*.md) or README files unless explicitly requested."
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass path and content length; strip actual content
+        let path = input.get("file_path").cloned().unwrap_or(Value::Null);
+        let content_len = input.get("content").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+        json!({"FileWrite": {"path": path, "content_len": content_len}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

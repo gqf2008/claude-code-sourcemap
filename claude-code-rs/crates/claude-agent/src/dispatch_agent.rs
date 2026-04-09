@@ -194,6 +194,13 @@ impl Tool for DispatchAgentTool {
          - \"worker\": Full tool access, spawned by coordinator"
     }
 
+    fn to_auto_classifier_input(&self, input: &Value) -> Value {
+        // Only pass agent type and description; strip the full prompt
+        let agent_type = input.get("agent_type").cloned().unwrap_or(Value::Null);
+        let desc = input.get("description").cloned().unwrap_or(Value::Null);
+        json!({"Agent": {"type": agent_type, "description": desc}})
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
