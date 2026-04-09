@@ -397,7 +397,19 @@ impl Tool for DispatchAgentTool {
                 let agent_channels = self.agent_channels.clone();
                 let agent_name_clone = agent_name.clone();
 
+                // Acquire concurrency permit — blocks if at max parallel agents
+                let permit = match tracker.acquire_permit().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Ok(ToolResult::error(
+                            "Failed to acquire agent concurrency permit (semaphore closed)"
+                        ));
+                    }
+                };
+
                 tokio::spawn(async move {
+                    // Hold permit for the lifetime of the agent — released on drop
+                    let _permit = permit;
                     let mut stream = query_stream_with_injection(
                         client,
                         executor,

@@ -63,12 +63,19 @@ impl AgentTask {
     }
 }
 
+/// Default maximum number of concurrent background agents.
+pub const DEFAULT_MAX_CONCURRENT_AGENTS: usize = 8;
+
 /// Shared registry of all background agents. Thread-safe.
 #[derive(Clone)]
 pub struct AgentTracker {
     agents: Arc<RwLock<HashMap<String, AgentTask>>>,
     /// Channel to send task-notification messages back to the coordinator loop.
     notification_tx: mpsc::UnboundedSender<TaskNotification>,
+    /// Semaphore limiting the number of concurrent background agents.
+    concurrency: Arc<tokio::sync::Semaphore>,
+    /// Max permits (stored for running_count calculation).
+    max_concurrent: usize,
 }
 
 /// A task notification delivered to the coordinator's message queue.
@@ -121,14 +128,31 @@ impl TaskNotification {
 
 impl AgentTracker {
     pub fn new() -> (Self, mpsc::UnboundedReceiver<TaskNotification>) {
+        Self::with_concurrency(DEFAULT_MAX_CONCURRENT_AGENTS)
+    }
+
+    pub fn with_concurrency(max_concurrent: usize) -> (Self, mpsc::UnboundedReceiver<TaskNotification>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self {
                 agents: Arc::new(RwLock::new(HashMap::new())),
                 notification_tx: tx,
+                concurrency: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+                max_concurrent,
             },
             rx,
         )
+    }
+
+    /// Acquire a concurrency permit. Returns a guard that releases
+    /// the permit on drop — call this before spawning a background agent.
+    pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        self.concurrency.clone().acquire_owned().await
+    }
+
+    /// Number of currently running agents (permits in use).
+    pub fn running_count(&self) -> usize {
+        self.max_concurrent - self.concurrency.available_permits()
     }
 
     /// Register a new agent as running.
@@ -870,5 +894,42 @@ mod tests {
     #[test]
     fn xml_escape_empty() {
         assert_eq!(xml_escape(""), "");
+    }
+
+    // ── Concurrency limiter tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn concurrency_limiter_basic() {
+        let (tracker, _rx) = AgentTracker::with_concurrency(2);
+        assert_eq!(tracker.running_count(), 0);
+
+        let p1 = tracker.acquire_permit().await.unwrap();
+        assert_eq!(tracker.running_count(), 1);
+
+        let p2 = tracker.acquire_permit().await.unwrap();
+        assert_eq!(tracker.running_count(), 2);
+
+        drop(p1);
+        assert_eq!(tracker.running_count(), 1);
+
+        drop(p2);
+        assert_eq!(tracker.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrency_limiter_blocks_at_max() {
+        let (tracker, _rx) = AgentTracker::with_concurrency(1);
+
+        let _p1 = tracker.acquire_permit().await.unwrap();
+        // Trying to acquire a second permit should block — use try_acquire to test
+        let result = tracker.concurrency.clone().try_acquire_owned();
+        assert!(result.is_err(), "Should fail when at max concurrency");
+    }
+
+    #[tokio::test]
+    async fn default_tracker_has_default_concurrency() {
+        let (tracker, _rx) = AgentTracker::new();
+        assert_eq!(tracker.max_concurrent, DEFAULT_MAX_CONCURRENT_AGENTS);
+        assert_eq!(tracker.running_count(), 0);
     }
 }
