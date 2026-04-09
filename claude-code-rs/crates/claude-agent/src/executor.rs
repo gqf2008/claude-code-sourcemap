@@ -139,7 +139,8 @@ impl ToolExecutor {
         }
 
         // Permission check uses the (possibly hook-modified) input
-        let perm = self.permission_checker.check(tool.as_ref(), &input).await;
+        // Pass runtime permission_mode from context (may differ from initial mode if user changed it via /permissions)
+        let perm = self.permission_checker.check(tool.as_ref(), &input, Some(context.permission_mode)).await;
         match perm.behavior {
             PermissionBehavior::Deny => {
                 // Fire PermissionDenied hook

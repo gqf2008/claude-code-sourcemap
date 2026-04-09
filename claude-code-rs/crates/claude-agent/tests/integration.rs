@@ -346,7 +346,7 @@ async fn test_permission_checker_bypass_all() {
     }
 
     let checker = PermissionChecker::new(PermissionMode::BypassAll, Vec::new());
-    let result = checker.check(&DummyTool, &serde_json::json!({"command": "ls"})).await;
+    let result = checker.check(&DummyTool, &serde_json::json!({"command": "ls"}), None).await;
     assert!(
         matches!(result.behavior, claude_core::permissions::PermissionBehavior::Allow),
         "BypassAll should allow everything"
@@ -372,7 +372,7 @@ async fn test_permission_checker_plan_denies_writes() {
     }
 
     let checker = PermissionChecker::new(PermissionMode::Plan, Vec::new());
-    let result = checker.check(&WriteTool, &serde_json::json!({})).await;
+    let result = checker.check(&WriteTool, &serde_json::json!({}), None).await;
     assert!(
         matches!(result.behavior, claude_core::permissions::PermissionBehavior::Deny),
         "Plan mode should deny write tools"

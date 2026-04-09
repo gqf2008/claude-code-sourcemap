@@ -35,11 +35,12 @@ impl PermissionChecker {
         }
     }
 
-    pub async fn check(&self, tool: &dyn Tool, input: &Value) -> PermissionResult {
-        if self.mode == PermissionMode::BypassAll || self.mode == PermissionMode::DontAsk {
+    pub async fn check(&self, tool: &dyn Tool, input: &Value, runtime_mode: Option<PermissionMode>) -> PermissionResult {
+        let mode = runtime_mode.unwrap_or(self.mode);
+        if mode == PermissionMode::BypassAll || mode == PermissionMode::DontAsk {
             return PermissionResult::allow();
         }
-        if self.mode == PermissionMode::Plan && !tool.is_read_only() {
+        if mode == PermissionMode::Plan && !tool.is_read_only() {
             return PermissionResult::deny("Plan mode: writes not allowed".into());
         }
 
@@ -78,7 +79,7 @@ impl PermissionChecker {
         }
 
         // AcceptEdits mode: auto-allow filesystem edit tools by category
-        if self.mode == PermissionMode::AcceptEdits
+        if mode == PermissionMode::AcceptEdits
             && tool.category() == ToolCategory::FileSystem
         {
             return PermissionResult::allow();

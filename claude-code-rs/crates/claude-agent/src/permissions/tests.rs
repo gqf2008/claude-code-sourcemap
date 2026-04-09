@@ -127,50 +127,76 @@ use serde_json::{json, Value};
     #[tokio::test]
     async fn test_check_bypass_mode() {
         let checker = PermissionChecker::new(PermissionMode::BypassAll, vec![]);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
     #[tokio::test]
     async fn test_check_plan_mode_blocks_writes() {
         let checker = PermissionChecker::new(PermissionMode::Plan, vec![]);
-        let result = checker.check(&write_tool(), &json!({})).await;
+        let result = checker.check(&write_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Deny);
     }
 
     #[tokio::test]
     async fn test_check_plan_mode_allows_reads() {
         let checker = PermissionChecker::new(PermissionMode::Plan, vec![]);
-        let result = checker.check(&read_tool(), &json!({})).await;
+        let result = checker.check(&read_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
     #[tokio::test]
     async fn test_check_read_only_auto_allowed() {
         let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
-        let result = checker.check(&read_tool(), &json!({})).await;
+        let result = checker.check(&read_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
     #[tokio::test]
     async fn test_check_write_tool_asks() {
         let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
-        let result = checker.check(&write_tool(), &json!({})).await;
+        let result = checker.check(&write_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Ask);
     }
 
     #[tokio::test]
     async fn test_check_accept_edits_allows_filesystem() {
         let checker = PermissionChecker::new(PermissionMode::AcceptEdits, vec![]);
-        let result = checker.check(&write_tool(), &json!({})).await;
+        let result = checker.check(&write_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
     #[tokio::test]
     async fn test_check_accept_edits_asks_shell() {
         let checker = PermissionChecker::new(PermissionMode::AcceptEdits, vec![]);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Ask);
+    }
+
+    // ── runtime mode override ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_runtime_mode_overrides_initial() {
+        // Checker created with Default (would ask for shell), but runtime bypass overrides
+        let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
+        let result = checker.check(&shell_tool(), &json!({}), Some(PermissionMode::BypassAll)).await;
+        assert_eq!(result.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_plan_overrides_initial_default() {
+        // Checker created with Default, but runtime Plan blocks writes
+        let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
+        let result = checker.check(&write_tool(), &json!({}), Some(PermissionMode::Plan)).await;
+        assert_eq!(result.behavior, PermissionBehavior::Deny);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_none_uses_initial_mode() {
+        // None runtime mode → falls back to checker's initial mode
+        let checker = PermissionChecker::new(PermissionMode::BypassAll, vec![]);
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
+        assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
     #[tokio::test]
@@ -181,7 +207,7 @@ use serde_json::{json, Value};
             behavior: PermissionBehavior::Allow,
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
@@ -193,7 +219,7 @@ use serde_json::{json, Value};
             behavior: PermissionBehavior::Deny,
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Deny);
     }
 
@@ -206,7 +232,7 @@ use serde_json::{json, Value};
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
         let result = checker
-            .check(&shell_tool(), &json!({"command": "git status"}))
+            .check(&shell_tool(), &json!({"command": "git status"}), None)
             .await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
@@ -220,7 +246,7 @@ use serde_json::{json, Value};
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
         let result = checker
-            .check(&shell_tool(), &json!({"command": "rm -rf /"}))
+            .check(&shell_tool(), &json!({"command": "rm -rf /"}), None)
             .await;
         assert_eq!(result.behavior, PermissionBehavior::Ask);
     }
@@ -233,7 +259,7 @@ use serde_json::{json, Value};
             behavior: PermissionBehavior::Allow,
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
@@ -245,7 +271,7 @@ use serde_json::{json, Value};
             behavior: PermissionBehavior::Allow,
         }];
         let checker = PermissionChecker::new(PermissionMode::Default, rules);
-        let result = checker.check(&shell_tool(), &json!({})).await;
+        let result = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(result.behavior, PermissionBehavior::Allow);
     }
 
@@ -254,12 +280,12 @@ use serde_json::{json, Value};
     #[tokio::test]
     async fn test_session_allow_persists() {
         let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
-        let r1 = checker.check(&shell_tool(), &json!({})).await;
+        let r1 = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(r1.behavior, PermissionBehavior::Ask);
 
         checker.session_allow("Bash");
 
-        let r2 = checker.check(&shell_tool(), &json!({})).await;
+        let r2 = checker.check(&shell_tool(), &json!({}), None).await;
         assert_eq!(r2.behavior, PermissionBehavior::Allow);
     }
 
