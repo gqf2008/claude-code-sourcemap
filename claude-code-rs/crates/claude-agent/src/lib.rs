@@ -5,6 +5,7 @@
 //! auto-compaction, and supports multi-agent coordination.
 
 pub mod audit;
+pub mod computer_use;
 pub mod engine;
 pub mod query;
 pub mod executor;

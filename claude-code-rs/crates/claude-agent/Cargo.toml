@@ -9,6 +9,7 @@ claude-api = { path = "../claude-api" }
 claude-tools = { path = "../claude-tools" }
 claude-bus = { path = "../claude-bus" }
 claude-mcp = { path = "../claude-mcp" }
+claude-computer-use = { path = "../claude-computer-use" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }

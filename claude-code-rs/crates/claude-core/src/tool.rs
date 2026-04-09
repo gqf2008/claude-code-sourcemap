@@ -86,6 +86,8 @@ pub enum ToolCategory {
     Mcp,
     /// Git operations
     Git,
+    /// Computer Use — desktop automation (screenshot, mouse, keyboard)
+    ComputerUse,
 }
 
 impl std::fmt::Display for ToolCategory {
@@ -99,6 +101,7 @@ impl std::fmt::Display for ToolCategory {
             Self::Session => write!(f, "session"),
             Self::Mcp => write!(f, "mcp"),
             Self::Git => write!(f, "git"),
+            Self::ComputerUse => write!(f, "computer_use"),
         }
     }
 }

@@ -202,6 +202,15 @@ impl QueryEngineBuilder {
 
         let client = Arc::new(client);
         let mut registry = ToolRegistry::with_defaults();
+
+        // Register Computer Use tools if enabled via environment variable
+        if std::env::var("CLAUDE_CODE_COMPUTER_USE").unwrap_or_default() == "1" {
+            match crate::computer_use::register_cu_tools(&mut registry) {
+                Ok(()) => tracing::info!("Computer Use tools registered"),
+                Err(e) => tracing::warn!("Computer Use unavailable: {e}"),
+            }
+        }
+
         let permission_checker = Arc::new(self.permission_checker);
 
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());

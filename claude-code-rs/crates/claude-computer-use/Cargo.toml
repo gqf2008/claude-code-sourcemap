@@ -18,7 +18,7 @@ dirs = { workspace = true }
 image = "0.24"
 
 # Cross-platform input simulation
-enigo = { version = "0.3", features = ["serde"] }
+enigo = { version = "0.6.1", features = ["serde"] }
 
 # Screenshot capture
 screenshots = "0.8"
