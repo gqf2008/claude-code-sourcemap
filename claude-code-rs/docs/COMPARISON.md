@@ -12,7 +12,7 @@
 |------|-----------|---------|--------|
 | **源文件数** | ~162 (.rs) | ~1,200+ (.ts/.tsx) | Rust (4x 更少) |
 | **代码行数** | ~52,900 | ~200,000+ (估算) | Rust (4x 更少) |
-| **测试数量** | 1,674 | 未知 | — |
+| **测试数量** | 1,708 | 未知 | — |
 | **Crate/包数** | 9 crates | 1 大包 | — |
 | **循环依赖** | 0 | 大量 | Rust |
 | **unsafe 块** | 0 | N/A | Rust |
@@ -135,7 +135,7 @@ export interface Tool {
 | 交互 | AskUser, SendUserMessage | 同 + SendUserFile | ⚠️ 部分缺失 |
 | Agent | Task CRUD+Stop, PlanMode, Skill, Agent | 同 + TeamCreate/Delete, Brief, Monitor | ⚠️ 缺 Swarm |
 | 管理 | Todo, Sleep, Config, Context, Verify | 同 + OverflowTest, CtxInspect | ⚠️ 部分缺失 |
-| MCP | ListMcpResources, ReadMcpResource | 同 | ✅ 完整 |
+| MCP | ListMcpResources, ReadMcpResource, Prompts | 同 + Sampling | ✅ 基本完整 |
 | JS 独有工具 | — | WebBrowser, Workflow, Snip, PushNotification, Cron, TerminalCapture, SubscribePR, Tungsten, REPL (ant), SuggestBackgroundPR | ❌ 15+ 工具缺失 |
 
 ### 3.2 Agent 循环架构
@@ -226,11 +226,12 @@ export function filterToolsByDenyRules<T>(tools: T[], ctx): T[] {
 | 方面 | Rust | JS |
 |------|------|-----|
 | **权限模式数** | 5 | 8+ |
-| **规则引擎** | 简单规则匹配 | 复杂规则树 + Bash AST + 分类器 |
+| **规则引擎** | Bash 风险分类器 (7 级) + 危险模式检测 | 复杂规则树 + Bash AST + 分类器 |
 | **检查位置** | Tool trait 内 | 工具列表/调用前/API 请求时 |
-| **自动模式** | ❌ 未实现 | ✅ YOLO 分类器 + 自动审批 |
-| **Bash 权限** | 简单命令检查 | 完整 AST 分析 + 危险命令检测 |
-| **交互确认** | cliclack 弹窗 | React 组件弹窗 |
+| **自动模式** | ⚠️ AcceptEdits 自动审批安全命令 | ✅ YOLO 分类器 + 自动审批 |
+| **Bash 权限** | 风险分类 (80+ 命令模式) + sudo 处理 | 完整 AST 分析 + 危险命令检测 |
+| **危险模式** | ✅ dangerous pattern 检测 + strip | ✅ dangerousPatterns.ts |
+| **交互确认** | cliclack 弹窗 (含风险等级标签) | React 组件弹窗 |
 
 ### 3.4 API 客户端
 
@@ -294,7 +295,7 @@ components/   → 250+ React/Ink 组件
 | **构建产物** | 单二进制 | node_modules + 打包 | Rust |
 | **Clippy 警告** | 0 | 未知 | Rust |
 | **TODO/FIXME** | 2 (路线图) | 未知 | — |
-| **测试覆盖** | 1,674 | 未知 | — |
+| **测试覆盖** | 1,708 | 未知 | — |
 
 ---
 
@@ -303,13 +304,13 @@ components/   → 250+ React/Ink 组件
 ```
 核心 Agent 循环    ████████████████████ 100%  ████████████████████ 100%
 工具系统          ████████████░░░░░░░░  62%   ████████████████████ 100%
-权限系统          █████████░░░░░░░░░░░  45%   ████████████████████ 100%
-MCP 支持          ██████████████░░░░░░  70%   ████████████████████ 100%
+权限系统          ████████████░░░░░░░░  60%   ████████████████████ 100%
+MCP 支持          ███████████████░░░░░  75%   ████████████████████ 100%
 会话管理          ███████████████░░░░░  75%   ████████████████████ 100%
 Hook 系统         ████████████████░░░░  78%   ████████████████████ 100%
 自动压缩          ████████████████░░░░  78%   ████████████████████ 100%
 插件系统          ██████░░░░░░░░░░░░░░  28%   ████████████████████ 100%
-Agent 蜂群        ████████░░░░░░░░░░░░  40%   ████████████████████ 100%
+Agent 蜂群        ██████████░░░░░░░░░░  50%   ████████████████████ 100%
 Computer Use      ░░░░░░░░░░░░░░░░░░░░   0%   ████████████████████ 100%
 语音模式          ░░░░░░░░░░░░░░░░░░░░   0%   ████████████████████ 100%
 Bridge (飞书等)   ████████████████████ 100%  ░░░░░░░░░░░░░░░░░░░░   0%
@@ -341,10 +342,9 @@ RPC 接口          ████████████████████
 
 | 优先级 | 缺失功能 | JS 实现参考 | 建议 |
 |--------|---------|------------|------|
-| 高 | 自动模式 (YOLO) | `yoloClassifier.ts` + `classifierDecision.ts` | 实现基础自动分类 |
-| 高 | Bash AST 权限分析 | `bash/parser.ts` + `bash/treeSitterAnalysis.ts` | 集成 tree-sitter |
+| 高 | 完整 YOLO 自动模式 | `yoloClassifier.ts` + `classifierDecision.ts` | 基于现有分类器扩展 |
 | 中 | 插件系统 | `utils/plugins/` 40+ 文件 | 先实现本地插件加载 |
-| 中 | Agent 蜂群 | `utils/swarm/` + iTerm2/tmux | 先实现 InProcess 后端 |
+| 中 | MCP Sampling/重连 | `services/mcp/` | 补充 sampling + 自动重连 |
 | 低 | Computer Use | `utils/computerUse/` + MCP | 通过 MCP 桥接 |
 | 低 | 语音模式 | `voice/` + audio-capture | 优先级低 |
 | 低 | Vim 键位 | `vim/` 4 文件 | 终端 UI 成熟后考虑 |
@@ -362,6 +362,6 @@ RPC 接口          ████████████████████
 | 构建产物 | Rust | 单二进制 vs node_modules |
 | 可维护性 | Rust | 严格分层 vs 循环依赖 |
 | 生态扩展 | 各有优势 | Rust: Bridge/RPC；JS: 插件市场/DXT |
-| 权限精细度 | JS | Bash AST + 分类器系统 |
+| 权限精细度 | JS (略领先) | JS: Bash AST；Rust: 风险分类器 + 危险模式 |
 
-**结论：** Rust 实现在架构质量、代码简洁度、安全保证上领先，功能覆盖约 45-78%（平均 ~60%）。JS 原版在功能丰富度和权限精细度上更成熟，但伴随快速迭代积累了架构债（上帝文件、循环依赖、Utils 地狱）。Rust 版本通过 Bridge 和 RPC 展现了独有的扩展方向。
+**结论：** Rust 实现在架构质量、代码简洁度、安全保证上领先，功能覆盖约 50-78%（核心功能 ~65%）。JS 原版在功能丰富度上更成熟（插件市场、Computer Use、语音模式），但伴随快速迭代积累了架构债（上帝文件、循环依赖、Utils 地狱）。Rust 版本通过 Bridge 和 RPC 展现了独有的扩展方向，权限系统已实现风险分类和危险模式检测。
