@@ -53,57 +53,143 @@ const NO_TOOLS_PREAMBLE: &str = "CRITICAL: Respond with TEXT ONLY. Do NOT call a
     - Tool calls will be REJECTED and will waste your only turn — you will fail the task.\n\
     - Your entire response must be plain text: an <analysis> block followed by a <summary> block.\n\n";
 
-const COMPACT_PROMPT: &str = "Your task is to create a detailed summary of the conversation so far, \
-paying close attention to the user's explicit requests and your previous actions.\n\
+const COMPACT_PROMPT: &str = "\
+Your task is to create a detailed summary of the conversation so far, \
+paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural \
-decisions that would be essential for continuing development work without losing context.\n\n\
+decisions that would be essential for continuing development work without losing context.
+
 Before providing your final summary, wrap your analysis in <analysis> tags to organize your \
-thoughts and ensure you've covered all necessary points.\n\n\
-Your summary should include the following sections:\n\n\
-1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail\n\
-2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.\n\
+thoughts and ensure you've covered all necessary points. In your analysis process:
+
+1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
+   - The user's explicit requests and intents
+   - Your approach to addressing the user's requests
+   - Key decisions, technical concepts and code patterns
+   - Specific details like:
+     - file names
+     - full code snippets
+     - function signatures
+     - file edits
+   - Errors that you ran into and how you fixed them
+   - Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
+2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
+
+Your summary should include the following sections:
+
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
 3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. \
-   Include full code snippets where applicable.\n\
-4. Errors and fixes: List all errors encountered and how you fixed them. Include user feedback.\n\
-5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.\n\
-6. All user messages: List ALL user messages that are not tool results.\n\
-7. Pending Tasks: Outline any pending tasks explicitly requested.\n\
-8. Current Work: Describe precisely what was being worked on immediately before this summary.\n\
-9. Optional Next Step: The next step directly in line with the most recent work. Include verbatim quotes.\n\n\
-Structure your response as:\n\
-<analysis>\n\
-[Your analysis]\n\
-</analysis>\n\n\
-<summary>\n\
-[Your structured summary]\n\
-</summary>\n\n\
+Pay special attention to the most recent messages and include full code snippets where applicable \
+and include a summary of why this file read or edit is important.
+4. Errors and fixes: List all errors that you ran into, and how you fixed them. \
+Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All user messages: List ALL user messages that are not tool results. \
+These are critical for understanding the users' feedback and changing intent.
+7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
+8. Current Work: Describe in detail precisely what was being worked on immediately before this summary request, \
+paying special attention to the most recent messages from both user and assistant. Include file names and code snippets where applicable.
+9. Optional Next Step: List the next step that you will take that is related to the most recent work you were doing. \
+IMPORTANT: ensure that this step is DIRECTLY in line with the user's most recent explicit requests, \
+and the task you were working on immediately before this summary request. If your last task was concluded, \
+then only list next steps if they are explicitly in line with the users request. \
+If there is a next step, include direct quotes from the most recent conversation showing exactly what task \
+you were working on and where you left off. This should be verbatim to ensure there's no drift in task interpretation.
+
+Here's an example of how your output should be structured:
+
+<example>
+<analysis>
+[Your thought process, ensuring all points are covered thoroughly and accurately]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detailed description]
+
+2. Key Technical Concepts:
+   - [Concept 1]
+   - [Concept 2]
+
+3. Files and Code Sections:
+   - [File Name 1]
+     - [Summary of why this file is important]
+     - [Summary of changes made]
+     - [Important Code Snippet]
+   - [File Name 2]
+     - [Important Code Snippet]
+
+4. Errors and fixes:
+   - [Detailed description of error 1]:
+     - [How you fixed the error]
+     - [User feedback on the error if any]
+
+5. Problem Solving:
+   [Description of solved problems and ongoing troubleshooting]
+
+6. All user messages:
+   - [Detailed non tool use user message]
+
+7. Pending Tasks:
+   - [Task 1]
+   - [Task 2]
+
+8. Current Work:
+   [Precise description of current work]
+
+9. Optional Next Step:
+   [Optional Next step to take]
+
+</summary>
+</example>
+
+Please provide your summary based on the conversation so far, following this structure and \
+ensuring precision and thoroughness in your response.
+
+There may be additional summarization instructions provided in the included context. \
+If so, remember to follow these instructions when creating the above summary.
+
 REMINDER: Do NOT call any tools. Respond with plain text only.";
 
 // ── Summary formatting ────────────────────────────────────────────────────────
 
 /// Strip the `<analysis>` scratchpad and unwrap `<summary>` tags.
+///
+/// Mirrors TS `formatCompactSummary()` in `prompt.ts`. Handles:
+/// - `<analysis>…</analysis>` removal (drafting scratchpad)
+/// - `<summary>…</summary>` extraction → prefixed with "Summary:\n"
+/// - `<example>…</example>` removal (echoed prompt artifacts)
+/// - Fallback: if no `<summary>` tags, returns analysis-stripped text as-is
 pub fn format_compact_summary(raw: &str) -> String {
-    // Remove <analysis>...</analysis>
-    let without_analysis = if let (Some(start), Some(end)) = (
-        raw.find("<analysis>"),
-        raw.find("</analysis>"),
-    ) {
-        let before = &raw[..start];
-        let after = &raw[end + "</analysis>".len()..];
-        format!("{}{}", before, after)
-    } else {
-        raw.to_string()
-    };
+    let mut text = raw.to_string();
+
+    // Remove <example>...</example> blocks (model may echo from prompt)
+    while let (Some(start), Some(end_tag)) = (text.find("<example>"), text.find("</example>")) {
+        if end_tag > start {
+            text = format!("{}{}", &text[..start], &text[end_tag + "</example>".len()..]);
+        } else {
+            break;
+        }
+    }
+
+    // Remove <analysis>...</analysis> — drafting scratchpad
+    if let (Some(start), Some(end_tag)) = (text.find("<analysis>"), text.find("</analysis>")) {
+        if end_tag > start {
+            text = format!("{}{}", &text[..start], &text[end_tag + "</analysis>".len()..]);
+        }
+    }
 
     // Extract <summary>...</summary> content
-    let result = if let (Some(start), Some(end)) = (
-        without_analysis.find("<summary>"),
-        without_analysis.find("</summary>"),
-    ) {
-        let content = &without_analysis[start + "<summary>".len()..end];
-        format!("Summary:\n{}", content.trim())
+    let result = if let (Some(start), Some(end_tag)) = (text.find("<summary>"), text.find("</summary>")) {
+        if end_tag > start {
+            let content = &text[start + "<summary>".len()..end_tag];
+            format!("Summary:\n{}", content.trim())
+        } else {
+            text
+        }
     } else {
-        without_analysis
+        text
     };
 
     // Collapse excessive blank lines
@@ -268,7 +354,7 @@ pub async fn compact_conversation(
 
     // Validate that we actually got a meaningful summary.
     if !raw_text.contains("<summary>") || !raw_text.contains("</summary>") {
-        tracing::warn!("Compaction response missing <summary> tags — may be unreliable");
+        tracing::debug!("Compaction response missing <summary> tags — using raw text as fallback");
     }
     if summary.trim().is_empty() || summary.len() < 30 {
         anyhow::bail!("Compaction produced an empty or too-short summary — keeping original messages");
@@ -634,6 +720,24 @@ mod tests {
         let result = format_compact_summary(raw);
         assert!(result.contains("Only summary here"));
         assert!(result.starts_with("Summary:"));
+    }
+
+    #[test]
+    fn format_summary_strips_example_blocks() {
+        let raw = "<example>echoed prompt</example>\n<analysis>draft</analysis>\n<summary>Real summary</summary>";
+        let result = format_compact_summary(raw);
+        assert!(!result.contains("echoed prompt"));
+        assert!(!result.contains("draft"));
+        assert!(result.contains("Real summary"));
+        assert!(result.starts_with("Summary:"));
+    }
+
+    #[test]
+    fn format_summary_handles_malformed_tag_order() {
+        // </summary> before <summary> — should fallback gracefully
+        let raw = "some text </summary> extra <summary> inner";
+        let result = format_compact_summary(raw);
+        assert!(!result.is_empty());
     }
 
     // ── compact_context_message ─────────────────────────────────────────────
