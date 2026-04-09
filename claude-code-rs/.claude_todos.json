@@ -1,20 +1,44 @@
 [
   {
-    "id": "explore-rs",
-    "content": "探索 Rust 项目结构和源码统计",
-    "status": "in_progress",
+    "id": "tools-cmp",
+    "content": "对比工具系统实现 (Rust vs JS)",
+    "status": "completed",
     "priority": "high"
   },
   {
-    "id": "explore-js",
-    "content": "探索 JS 项目结构和源码统计",
-    "status": "pending",
+    "id": "agent-cmp",
+    "content": "对比 Agent 循环架构 (Rust vs JS)",
+    "status": "completed",
     "priority": "high"
   },
   {
-    "id": "compare",
-    "content": "对比分析两个项目的架构、质量、差异",
-    "status": "pending",
+    "id": "api-cmp",
+    "content": "对比 API 客户端 (Rust vs JS)",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "mcp-cmp",
+    "content": "对比 MCP 实现 (Rust vs JS)",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "perm-cmp",
+    "content": "对比权限系统 (Rust vs JS)",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "cli-cmp",
+    "content": "对比 CLI/REPL 入口 (Rust vs JS)",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "final-report",
+    "content": "汇总完整对比报告",
+    "status": "completed",
     "priority": "high"
   }
 ]

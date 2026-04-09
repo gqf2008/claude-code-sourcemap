@@ -17,7 +17,13 @@ pub(crate) fn read_oauth_credentials() -> Option<String> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let now_ms = i64::try_from(now_ms).unwrap_or(i64::MAX);
+        let now_ms = match i64::try_from(now_ms) {
+            Ok(ms) => ms,
+            Err(_) => {
+                tracing::warn!("System time overflow checking OAuth expiry — treating as expired");
+                return None;
+            }
+        };
         if now_ms > expires_at {
             tracing::debug!("OAuth token expired (expiresAt={})", expires_at);
             return None;
