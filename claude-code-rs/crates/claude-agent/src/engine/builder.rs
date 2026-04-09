@@ -207,9 +207,19 @@ impl QueryEngineBuilder {
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
         let caps = claude_core::model::model_capabilities(&model_name);
 
-        // Apply CLAUDE_CODE_AUTO_COMPACT_WINDOW env var override (matches TS behavior)
+        // Apply context window env var overrides:
+        // - CLAUDE_CODE_MAX_CONTEXT_TOKENS: set absolute context window (for third-party providers with large context)
+        // - CLAUDE_CODE_AUTO_COMPACT_WINDOW: cap context window (can only reduce, matches TS behavior)
         let effective_context_window = {
             let mut cw = caps.context_window;
+            if let Ok(val) = std::env::var("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
+                if let Ok(parsed) = val.parse::<u64>() {
+                    if parsed > 0 {
+                        cw = parsed;
+                        tracing::info!("CLAUDE_CODE_MAX_CONTEXT_TOKENS={} → context_window={}", parsed, cw);
+                    }
+                }
+            }
             if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
                 if let Ok(parsed) = val.parse::<u64>() {
                     if parsed > 0 {
