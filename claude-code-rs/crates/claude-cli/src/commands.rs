@@ -840,4 +840,284 @@ mod tests {
         let text = build_help_text(&no_skills(), &no_plugins());
         assert!(text.contains("/retry"));
     }
+
+    // ── comprehensive: every parse alias ────────────────────────────
+
+    #[test]
+    fn test_parse_all_aliases() {
+        let s = no_skills();
+        // /config aliases
+        assert!(matches!(SlashCommand::parse("/config", &s), Some(SlashCommand::Config)));
+        assert!(matches!(SlashCommand::parse("/settings", &s), Some(SlashCommand::Config)));
+        // /branch aliases
+        assert!(matches!(SlashCommand::parse("/branch feat", &s), Some(SlashCommand::Branch { .. })));
+        assert!(matches!(SlashCommand::parse("/fork feat", &s), Some(SlashCommand::Branch { .. })));
+        // /pr-comments aliases
+        assert!(matches!(SlashCommand::parse("/pr-comments 42", &s), Some(SlashCommand::PrComments { .. })));
+        assert!(matches!(SlashCommand::parse("/prc 42", &s), Some(SlashCommand::PrComments { .. })));
+        // /reload-context aliases
+        assert!(matches!(SlashCommand::parse("/reload-context", &s), Some(SlashCommand::ReloadContext)));
+        assert!(matches!(SlashCommand::parse("/reload", &s), Some(SlashCommand::ReloadContext)));
+        // /plugin aliases
+        assert!(matches!(SlashCommand::parse("/plugin", &s), Some(SlashCommand::Plugin { .. })));
+        assert!(matches!(SlashCommand::parse("/plugins", &s), Some(SlashCommand::Plugin { .. })));
+        // /agents aliases
+        assert!(matches!(SlashCommand::parse("/agents", &s), Some(SlashCommand::Agents { .. })));
+        assert!(matches!(SlashCommand::parse("/agent", &s), Some(SlashCommand::Agents { .. })));
+    }
+
+    // ── comprehensive: every command parse+execute round-trip ────────
+
+    #[test]
+    fn test_permissions_parse_with_mode() {
+        let s = no_skills();
+        match SlashCommand::parse("/permissions bypass", &s) {
+            Some(SlashCommand::Permissions { mode }) => assert_eq!(mode, "bypass"),
+            _ => panic!("expected Permissions"),
+        }
+        match SlashCommand::parse("/perms plan", &s) {
+            Some(SlashCommand::Permissions { mode }) => assert_eq!(mode, "plan"),
+            _ => panic!("expected Permissions"),
+        }
+        // no arg
+        match SlashCommand::parse("/permissions", &s) {
+            Some(SlashCommand::Permissions { mode }) => assert!(mode.is_empty()),
+            _ => panic!("expected Permissions"),
+        }
+    }
+
+    #[test]
+    fn test_execute_permissions() {
+        let cmd = SlashCommand::Permissions { mode: "bypass".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Permissions { mode } => assert_eq!(mode, "bypass"),
+            _ => panic!("expected Permissions"),
+        }
+        let cmd = SlashCommand::Permissions { mode: String::new() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Permissions { mode } => assert!(mode.is_empty()),
+            _ => panic!("expected Permissions"),
+        }
+    }
+
+    #[test]
+    fn test_parse_and_execute_branch() {
+        let s = no_skills();
+        let cmd = SlashCommand::parse("/branch feature-x", &s).unwrap();
+        match cmd.execute(&s, &no_plugins()) {
+            CommandResult::Branch { name } => assert_eq!(name, "feature-x"),
+            _ => panic!("expected Branch"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pr_comments_hash_prefix() {
+        let s = no_skills();
+        match SlashCommand::parse("/prc #123", &s) {
+            Some(SlashCommand::PrComments { pr_number }) => assert_eq!(pr_number, 123),
+            _ => panic!("expected PrComments"),
+        }
+        match SlashCommand::parse("/pr-comments 456", &s) {
+            Some(SlashCommand::PrComments { pr_number }) => assert_eq!(pr_number, 456),
+            _ => panic!("expected PrComments"),
+        }
+        // invalid number → 0
+        match SlashCommand::parse("/prc abc", &s) {
+            Some(SlashCommand::PrComments { pr_number }) => assert_eq!(pr_number, 0),
+            _ => panic!("expected PrComments"),
+        }
+    }
+
+    #[test]
+    fn test_execute_config() {
+        let cmd = SlashCommand::Config;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Config));
+    }
+
+    #[test]
+    fn test_execute_undo() {
+        let cmd = SlashCommand::Undo;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Undo));
+    }
+
+    #[test]
+    fn test_execute_diff() {
+        let cmd = SlashCommand::Diff;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Diff));
+    }
+
+    #[test]
+    fn test_execute_status() {
+        let cmd = SlashCommand::Status;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Status));
+    }
+
+    #[test]
+    fn test_execute_login_logout() {
+        let login = SlashCommand::Login;
+        assert!(matches!(login.execute(&no_skills(), &no_plugins()), CommandResult::Login));
+        let logout = SlashCommand::Logout;
+        assert!(matches!(logout.execute(&no_skills(), &no_plugins()), CommandResult::Logout));
+    }
+
+    #[test]
+    fn test_execute_context() {
+        let cmd = SlashCommand::Context;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Context));
+    }
+
+    #[test]
+    fn test_execute_reload_context() {
+        let cmd = SlashCommand::ReloadContext;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::ReloadContext));
+    }
+
+    #[test]
+    fn test_execute_doctor() {
+        let cmd = SlashCommand::Doctor;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Doctor));
+    }
+
+    #[test]
+    fn test_execute_init() {
+        let cmd = SlashCommand::Init;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Init));
+    }
+
+    #[test]
+    fn test_execute_cost() {
+        let cmd = SlashCommand::Cost;
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::ShowCost));
+    }
+
+    #[test]
+    fn test_execute_review() {
+        let cmd = SlashCommand::Review { prompt: "check perf".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Review { prompt } => assert_eq!(prompt, "check perf"),
+            _ => panic!("expected Review"),
+        }
+    }
+
+    #[test]
+    fn test_execute_commit() {
+        let cmd = SlashCommand::Commit { message: "feat: new".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Commit { message } => assert_eq!(message, "feat: new"),
+            _ => panic!("expected Commit"),
+        }
+    }
+
+    #[test]
+    fn test_execute_memory_session_passthrough() {
+        let cmd = SlashCommand::Memory { sub: "list".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Memory { sub } => assert_eq!(sub, "list"),
+            _ => panic!("expected Memory"),
+        }
+        let cmd = SlashCommand::Session { sub: "save".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Session { sub } => assert_eq!(sub, "save"),
+            _ => panic!("expected Session"),
+        }
+    }
+
+    #[test]
+    fn test_execute_mcp_plugin_agents_passthrough() {
+        let cmd = SlashCommand::Mcp { sub: "status".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Mcp { sub } => assert_eq!(sub, "status"),
+            _ => panic!("expected Mcp"),
+        }
+        let cmd = SlashCommand::Plugin { sub: "list".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Plugin { sub } => assert_eq!(sub, "list"),
+            _ => panic!("expected Plugin"),
+        }
+        let cmd = SlashCommand::Agents { sub: "show".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Agents { sub } => assert_eq!(sub, "show"),
+            _ => panic!("expected Agents"),
+        }
+    }
+
+    #[test]
+    fn test_execute_export_format() {
+        let cmd = SlashCommand::Export { format: "json".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Export { format } => assert_eq!(format, "json"),
+            _ => panic!("expected Export"),
+        }
+    }
+
+    #[test]
+    fn test_execute_run_skill() {
+        let cmd = SlashCommand::RunSkill { name: "deploy".into(), prompt: "to prod".into() };
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::RunSkill { name, prompt } => {
+                assert_eq!(name, "deploy");
+                assert_eq!(prompt, "to prod");
+            }
+            _ => panic!("expected RunSkill"),
+        }
+    }
+
+    // ── help text completeness ──────────────────────────────────────
+
+    #[test]
+    fn test_help_text_covers_all_sections() {
+        let text = build_help_text(&no_skills(), &no_plugins());
+        // All section headers (match HELP_TEXT_BASE)
+        assert!(text.contains("Conversation"));
+        assert!(text.contains("Git & Code"));
+        assert!(text.contains("Configuration"));
+        assert!(text.contains("Session & Memory"));
+        assert!(text.contains("System"));
+        assert!(text.contains("Tips"));
+        // Key commands from each section
+        assert!(text.contains("/help"));
+        assert!(text.contains("/compact"));
+        assert!(text.contains("/model"));
+        assert!(text.contains("/permissions"));
+        assert!(text.contains("/commit"));
+        assert!(text.contains("/session"));
+        assert!(text.contains("/diff"));
+        assert!(text.contains("/doctor"));
+        assert!(text.contains("/export"));
+        assert!(text.contains("/context"));
+        assert!(text.contains("/config"));
+        assert!(text.contains("/login"));
+        assert!(text.contains("/logout"));
+        assert!(text.contains("/undo"));
+        assert!(text.contains("/init"));
+        assert!(text.contains("/agents"));
+        assert!(text.contains("/mcp"));
+    }
+
+    // ── edge cases ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_whitespace_handling() {
+        let s = no_skills();
+        // leading/trailing whitespace
+        match SlashCommand::parse("  /model   opus  ", &s) {
+            Some(SlashCommand::Model(name)) => assert_eq!(name, "opus"),
+            _ => panic!("expected Model"),
+        }
+        // just a slash
+        match SlashCommand::parse("/", &s) {
+            Some(SlashCommand::Unknown(name)) => assert!(name.is_empty()),
+            _ => panic!("expected Unknown for bare slash"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_invalid_page() {
+        let s = no_skills();
+        // non-numeric page falls back to 1
+        match SlashCommand::parse("/history abc", &s) {
+            Some(SlashCommand::History { page }) => assert_eq!(page, 1),
+            _ => panic!("expected History with default page"),
+        }
+    }
 }
