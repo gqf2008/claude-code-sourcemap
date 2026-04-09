@@ -115,6 +115,20 @@ pub fn parse_request(method: &str, params: Option<Value>) -> Result<AgentRequest
         "session.status" => Ok(AgentRequest::GetStatus),
         "session.shutdown" => Ok(AgentRequest::Shutdown),
 
+        "session.load" => {
+            let p = params.ok_or_else(|| {
+                RpcError::new(error_codes::INVALID_PARAMS, "Missing params for session.load")
+            })?;
+            let session_id = p.get("session_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, "Missing 'session_id'"))?
+                .to_string();
+            Ok(AgentRequest::LoadSession { session_id })
+        }
+
+        "agent.listModels" => Ok(AgentRequest::ListModels),
+        "agent.listTools" => Ok(AgentRequest::ListTools),
+
         "mcp.connect" => {
             let p = params.ok_or_else(|| {
                 RpcError::new(error_codes::INVALID_PARAMS, "Missing params for mcp.connect")
@@ -282,6 +296,21 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
             })).collect();
             Notification::new("mcp.serverList", Some(serde_json::json!({ "servers": list })))
         }
+        AgentNotification::MemoryExtracted { facts } => {
+            Notification::new("agent.memoryExtracted", Some(serde_json::json!({ "facts": facts })))
+        }
+        AgentNotification::ModelList { models } => {
+            let list: Vec<Value> = models.iter().map(|m| serde_json::json!({
+                "id": m.id, "display_name": m.display_name
+            })).collect();
+            Notification::new("agent.modelList", Some(serde_json::json!({ "models": list })))
+        }
+        AgentNotification::ToolList { tools } => {
+            let list: Vec<Value> = tools.iter().map(|t| serde_json::json!({
+                "name": t.name, "description": t.description, "enabled": t.enabled
+            })).collect();
+            Notification::new("agent.toolList", Some(serde_json::json!({ "tools": list })))
+        }
         AgentNotification::Error { code, message } => {
             Notification::new("agent.error", Some(serde_json::json!({
                 "code": code.to_string(), "message": message
@@ -300,9 +329,12 @@ pub const METHODS: &[&str] = &[
     "agent.permission",
     "agent.sendMessage",
     "agent.stopAgent",
+    "agent.listModels",
+    "agent.listTools",
     "session.save",
     "session.status",
     "session.shutdown",
+    "session.load",
     "mcp.connect",
     "mcp.disconnect",
     "mcp.listServers",

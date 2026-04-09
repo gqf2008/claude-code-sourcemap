@@ -185,20 +185,32 @@ impl AgentCoreAdapter {
                     });
                 }
                 AgentRequest::SendAgentMessage { agent_id, message } => {
-                    warn!("SendAgentMessage to {}: {} — sub-agent dispatch not yet implemented", agent_id, message);
-                    let bus = self.bus.lock().await;
-                    bus.notify(AgentNotification::Error {
-                        code: ErrorCode::InternalError,
-                        message: format!("Sub-agent message dispatch not yet implemented (target: {})", agent_id),
-                    });
+                    match self.engine.send_to_agent(&agent_id, &message).await {
+                        Ok(()) => {
+                            debug!("Message sent to agent {}", agent_id);
+                        }
+                        Err(e) => {
+                            let bus = self.bus.lock().await;
+                            bus.notify(AgentNotification::Error {
+                                code: ErrorCode::InternalError,
+                                message: format!("Failed to send message to agent '{}': {}", agent_id, e),
+                            });
+                        }
+                    }
                 }
                 AgentRequest::StopAgent { agent_id } => {
-                    warn!("StopAgent: {} — sub-agent cancellation not yet implemented", agent_id);
-                    let bus = self.bus.lock().await;
-                    bus.notify(AgentNotification::Error {
-                        code: ErrorCode::InternalError,
-                        message: format!("Sub-agent cancellation not yet implemented (target: {})", agent_id),
-                    });
+                    match self.engine.cancel_agent(&agent_id).await {
+                        Ok(()) => {
+                            info!("Agent {} cancellation requested", agent_id);
+                        }
+                        Err(e) => {
+                            let bus = self.bus.lock().await;
+                            bus.notify(AgentNotification::Error {
+                                code: ErrorCode::InternalError,
+                                message: format!("Failed to stop agent '{}': {}", agent_id, e),
+                            });
+                        }
+                    }
                 }
                 AgentRequest::PermissionResponse { .. } => {
                     // Permission responses are handled via the dedicated channel,
@@ -222,6 +234,25 @@ impl AgentCoreAdapter {
                 }
                 AgentRequest::ClearHistory => {
                     self.handle_clear_history().await;
+                }
+                AgentRequest::LoadSession { session_id } => {
+                    // Session loading requires creating a new engine — cannot be done
+                    // from within the adapter. The CLI layer handles this.
+                    warn!("LoadSession '{}' via bus — requires CLI-layer handling", session_id);
+                    let bus = self.bus.lock().await;
+                    bus.notify(AgentNotification::Error {
+                        code: ErrorCode::InternalError,
+                        message: format!(
+                            "LoadSession must be handled by the CLI layer (session: {})",
+                            session_id
+                        ),
+                    });
+                }
+                AgentRequest::ListModels => {
+                    self.handle_list_models().await;
+                }
+                AgentRequest::ListTools => {
+                    self.handle_list_tools().await;
                 }
             }
         }
@@ -485,6 +516,42 @@ impl AgentCoreAdapter {
         self.engine.clear_history().await;
         let bus = self.bus.lock().await;
         bus.notify(AgentNotification::HistoryCleared);
+    }
+
+    /// List available models.
+    async fn handle_list_models(&self) {
+        let current_model = { self.engine.state().read().await.model.clone() };
+        let aliases = ["sonnet", "opus", "haiku"];
+        let models: Vec<ModelInfo> = aliases
+            .iter()
+            .map(|alias| {
+                let id = claude_core::model::resolve_model_string(alias);
+                let display = claude_core::model::display_name_any(&id);
+                ModelInfo { id, display_name: display }
+            })
+            .chain(std::iter::once(ModelInfo {
+                id: current_model.clone(),
+                display_name: claude_core::model::display_name_any(&current_model),
+            }))
+            .collect();
+
+        // Deduplicate by id
+        let mut seen = std::collections::HashSet::new();
+        let models: Vec<ModelInfo> = models.into_iter().filter(|m| seen.insert(m.id.clone())).collect();
+
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::ModelList { models });
+    }
+
+    /// List available tools.
+    async fn handle_list_tools(&self) {
+        let tools: Vec<ToolInfo> = self.engine.tool_list()
+            .into_iter()
+            .map(|(name, description, enabled)| ToolInfo { name, description, enabled })
+            .collect();
+
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::ToolList { tools });
     }
 }
 

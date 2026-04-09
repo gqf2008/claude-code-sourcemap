@@ -501,6 +501,20 @@ impl OutputRenderer {
             AgentNotification::ModelChanged { model, display_name } => {
                 println!("Model set to: {} ({})", display_name, model);
             }
+            AgentNotification::MemoryExtracted { facts } => {
+                if !facts.is_empty() {
+                    eprintln!("\x1b[2m🧠 Extracted {} memory fact(s)\x1b[0m", facts.len());
+                }
+            }
+            AgentNotification::ModelList { models } => {
+                for m in &models {
+                    eprintln!("  {} — {}", m.id, m.display_name);
+                }
+            }
+            AgentNotification::ToolList { tools } => {
+                let enabled = tools.iter().filter(|t| t.enabled).count();
+                eprintln!("\x1b[2m[{} tools ({} enabled)]\x1b[0m", tools.len(), enabled);
+            }
         }
         false
     }

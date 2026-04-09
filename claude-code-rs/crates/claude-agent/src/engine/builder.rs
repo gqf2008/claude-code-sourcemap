@@ -324,8 +324,8 @@ impl QueryEngineBuilder {
                 context_window: caps.context_window,
             },
             agent_tracker,
-            cancel_tokens: coord_cancel_tokens,
-            agent_channels: coord_agent_channels,
+            cancel_tokens: coord_cancel_tokens.clone(),
+            agent_channels: coord_agent_channels.clone(),
         };
         registry.register(dispatch_tool);
 
@@ -374,6 +374,8 @@ impl QueryEngineBuilder {
             coordinator_mode: self.coordinator_mode,
             allowed_tools: self.allowed_tools,
             cost_tracker: CostTracker::new(),
+            cancel_tokens: coord_cancel_tokens,
+            agent_channels: coord_agent_channels,
             auto_compact: tokio::sync::Mutex::new(AutoCompactState::new()),
             context_window: caps.context_window,
         }

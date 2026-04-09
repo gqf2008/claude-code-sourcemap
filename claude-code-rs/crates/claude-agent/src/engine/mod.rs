@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::compact::{compact_conversation, compact_context_message, AutoCompactState};
 use crate::coordinator::TaskNotification;
+use crate::dispatch_agent::{AgentChannelMap, CancelTokenMap};
 use crate::cost::CostTracker;
 use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
@@ -46,6 +47,10 @@ pub struct QueryEngine {
     allowed_tools: Vec<String>,
     /// Tracks accumulated API usage costs per model.
     cost_tracker: CostTracker,
+    /// Sub-agent cancellation tokens (coordinator mode only).
+    cancel_tokens: Option<CancelTokenMap>,
+    /// Sub-agent message channels (coordinator mode only).
+    agent_channels: Option<AgentChannelMap>,
     /// Auto-compact state machine (circuit breaker, dynamic threshold).
     auto_compact: tokio::sync::Mutex<AutoCompactState>,
     /// Model context window size (for auto-compact threshold calculation).
@@ -280,6 +285,42 @@ impl QueryEngine {
     /// Abort the current task (equivalent to Ctrl-C in the TS implementation).
     pub fn abort(&self) {
         self.abort_signal.abort();
+    }
+
+    /// Send a message to a running background sub-agent.
+    ///
+    /// Returns an error if not in coordinator mode or if the agent is not found.
+    pub async fn send_to_agent(&self, agent_id: &str, message: &str) -> anyhow::Result<()> {
+        let channels = self.agent_channels.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not in coordinator mode"))?;
+        let channels = channels.read().await;
+        let tx = channels.get(agent_id)
+            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found or not running", agent_id))?;
+        tx.send(message.to_string())
+            .map_err(|_| anyhow::anyhow!("Agent '{}' channel closed", agent_id))?;
+        Ok(())
+    }
+
+    /// Cancel a running background sub-agent.
+    ///
+    /// Returns an error if not in coordinator mode or if the agent is not found.
+    pub async fn cancel_agent(&self, agent_id: &str) -> anyhow::Result<()> {
+        let tokens = self.cancel_tokens.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not in coordinator mode"))?;
+        let tokens = tokens.read().await;
+        let token = tokens.get(agent_id)
+            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found or not running", agent_id))?;
+        token.cancel();
+        Ok(())
+    }
+
+    /// Return tool names and descriptions for the ListTools bus request.
+    pub fn tool_list(&self) -> Vec<(String, String, bool)> {
+        self.registry
+            .all()
+            .iter()
+            .map(|t| (t.name().to_string(), t.description().to_string(), t.is_enabled()))
+            .collect()
     }
 
     /// Access the hook registry (for firing lifecycle events from task_runner, etc.)

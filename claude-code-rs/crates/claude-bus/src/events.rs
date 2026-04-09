@@ -146,6 +146,19 @@ pub enum AgentNotification {
     /// Response to McpListServers request.
     McpServerList { servers: Vec<McpServerInfo> },
 
+    // ── Memory ──
+
+    /// Memory facts extracted from the conversation.
+    MemoryExtracted { facts: Vec<String> },
+
+    // ── Query responses ──
+
+    /// Response to ListModels request.
+    ModelList { models: Vec<ModelInfo> },
+
+    /// Response to ListTools request.
+    ToolList { tools: Vec<ToolInfo> },
+
     // ── Errors ──
 
     /// A non-fatal error occurred.
@@ -228,6 +241,15 @@ pub enum AgentRequest {
 
     /// Clear the conversation history.
     ClearHistory,
+
+    /// Load a saved session by ID.
+    LoadSession { session_id: String },
+
+    /// List available models (response via ModelList notification).
+    ListModels,
+
+    /// List available tools (response via ToolList notification).
+    ListTools,
 }
 
 // ── Permission request/response (bidirectional) ──────────────────────────────
@@ -287,6 +309,21 @@ pub struct McpServerInfo {
     pub name: String,
     pub tool_count: usize,
     pub connected: bool,
+}
+
+/// Model information (returned in ModelList notification).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+}
+
+/// Tool information (returned in ToolList notification).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
 }
 
 /// Risk level for permission requests.
@@ -404,6 +441,22 @@ mod tests {
                 model: "claude-sonnet-4-20250514".into(),
                 display_name: "Claude Sonnet 4".into(),
             },
+            AgentNotification::MemoryExtracted {
+                facts: vec!["Use JWT for auth".into()],
+            },
+            AgentNotification::ModelList {
+                models: vec![ModelInfo {
+                    id: "claude-sonnet-4-20250514".into(),
+                    display_name: "Claude Sonnet 4".into(),
+                }],
+            },
+            AgentNotification::ToolList {
+                tools: vec![ToolInfo {
+                    name: "Bash".into(),
+                    description: "Run shell commands".into(),
+                    enabled: true,
+                }],
+            },
         ];
 
         for event in &events {
@@ -447,6 +500,9 @@ mod tests {
             AgentRequest::McpListServers,
             AgentRequest::Shutdown,
             AgentRequest::ClearHistory,
+            AgentRequest::LoadSession { session_id: "sess_123".into() },
+            AgentRequest::ListModels,
+            AgentRequest::ListTools,
         ];
 
         for req in &requests {

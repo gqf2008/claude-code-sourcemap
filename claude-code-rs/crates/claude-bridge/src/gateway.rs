@@ -142,15 +142,21 @@ impl ChannelGateway {
                 continue;
             }
 
-            // Spawn a notification consumer task if one isn't already running
+            // Spawn a notification consumer task if one isn't already running.
+            // The tasks Mutex serializes access; entry API makes intent explicit.
             let mut tasks = consumer_tasks.lock().await;
-            if !tasks.contains_key(&channel_id) || tasks.get(&channel_id).is_some_and(|t| t.is_finished()) {
-                // Get a fresh client for the consumer (subscribes to notifications)
+
+            // Clean up finished tasks
+            if tasks.get(&channel_id).is_some_and(|t| t.is_finished()) {
+                tasks.remove(&channel_id);
+            }
+
+            if let std::collections::hash_map::Entry::Vacant(entry) = tasks.entry(channel_id.clone()) {
                 let consumer_client = router_guard.get_client_subscriber(&channel_id);
-                drop(router_guard); // Release lock before spawning
+                drop(router_guard);
 
                 if let Some(mut notif_rx) = consumer_client {
-                    let ch = channel_id.clone();
+                    let ch = channel_id;
                     let adapters_ref = Arc::clone(&adapters);
 
                     let task = tokio::spawn(async move {
@@ -166,7 +172,6 @@ impl ChannelGateway {
                             }
 
                             if is_done {
-                                // Turn complete — send the final message
                                 let out = formatter.finish();
                                 if !out.text.is_empty() {
                                     if let Some(adapter) = adapters_ref.get(&ch.platform) {
@@ -175,13 +180,12 @@ impl ChannelGateway {
                                         }
                                     }
                                 }
-                                // Reset formatter for next turn
                                 formatter = MessageFormatter::new();
                             }
                         }
                     });
 
-                    tasks.insert(channel_id, task);
+                    entry.insert(task);
                 }
             } else {
                 drop(router_guard);
