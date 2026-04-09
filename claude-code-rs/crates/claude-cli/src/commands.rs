@@ -11,7 +11,7 @@ pub enum SlashCommand {
     Session { sub: String },
     Diff,
     Status,
-    Permissions,
+    Permissions { mode: String },
     Config,
     Undo,
     Review { prompt: String },
@@ -61,7 +61,7 @@ impl SlashCommand {
             "session" | "resume" => Self::Session { sub: args },
             "diff" => Self::Diff,
             "status" => Self::Status,
-            "permissions" | "perms" => Self::Permissions,
+            "permissions" | "perms" => Self::Permissions { mode: args },
             "config" | "settings" => Self::Config,
             "undo" => Self::Undo,
             "review" => Self::Review { prompt: args },
@@ -159,7 +159,7 @@ impl SlashCommand {
             Self::Session { sub } => CommandResult::Session { sub: sub.clone() },
             Self::Diff => CommandResult::Diff,
             Self::Status => CommandResult::Status,
-            Self::Permissions => CommandResult::Permissions,
+            Self::Permissions { mode } => CommandResult::Permissions { mode: mode.clone() },
             Self::Config => CommandResult::Config,
             Self::Undo => CommandResult::Undo,
             Self::Review { prompt } => CommandResult::Review { prompt: prompt.clone() },
@@ -209,7 +209,7 @@ pub enum CommandResult {
     Session { sub: String },
     Diff,
     Status,
-    Permissions,
+    Permissions { mode: String },
     Config,
     Undo,
     Review { prompt: String },
@@ -409,8 +409,8 @@ mod tests {
     #[test]
     fn test_parse_aliases() {
         let s = no_skills();
-        assert!(matches!(SlashCommand::parse("/perms", &s), Some(SlashCommand::Permissions)));
-        assert!(matches!(SlashCommand::parse("/permissions", &s), Some(SlashCommand::Permissions)));
+        assert!(matches!(SlashCommand::parse("/perms", &s), Some(SlashCommand::Permissions { .. })));
+        assert!(matches!(SlashCommand::parse("/permissions", &s), Some(SlashCommand::Permissions { .. })));
         assert!(matches!(SlashCommand::parse("/ctx", &s), Some(SlashCommand::Context)));
         assert!(matches!(SlashCommand::parse("/context", &s), Some(SlashCommand::Context)));
         assert!(matches!(SlashCommand::parse("/resume", &s), Some(SlashCommand::Session { .. })));

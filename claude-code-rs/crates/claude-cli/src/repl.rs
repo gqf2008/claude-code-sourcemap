@@ -12,6 +12,7 @@ use rustyline::validate::Validator;
 use rustyline::{Editor, Helper};
 
 use crate::commands::{CommandResult, SlashCommand};
+use crate::config;
 use crate::output::{print_stream, OutputRenderer};
 use crate::repl_commands::*;
 
@@ -396,9 +397,16 @@ pub async fn run(
                                     handle_status_command(&engine, &cwd).await;
                                 }
                             }
-                            CommandResult::Permissions => {
-                                let s = engine.state().read().await;
-                                println!("Permission mode: {:?}", s.permission_mode);
+                            CommandResult::Permissions { mode } => {
+                                if mode.is_empty() {
+                                    let s = engine.state().read().await;
+                                    println!("Permission mode: {:?}", s.permission_mode);
+                                    println!("  \x1b[2mSet with: /permissions <default|bypass|acceptEdits|plan>\x1b[0m");
+                                } else {
+                                    let new_mode = config::parse_permission_mode(&mode);
+                                    engine.state().write().await.permission_mode = new_mode;
+                                    println!("Permission mode: {:?}", new_mode);
+                                }
                             }
                             CommandResult::Config => {
                                 handle_config_command(&cwd);
