@@ -7,6 +7,7 @@
 pub mod message;
 pub mod tool;
 pub mod permissions;
+pub mod bash_classifier;
 pub mod config;
 pub mod claude_md;
 pub mod skills;

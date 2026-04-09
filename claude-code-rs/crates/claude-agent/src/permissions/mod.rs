@@ -9,6 +9,7 @@ use claude_core::permissions::{
     PermissionBehavior, PermissionDestination, PermissionMode, PermissionResponse,
     PermissionResult, PermissionRule,
 };
+use claude_core::bash_classifier;
 use claude_core::tool::{Tool, ToolCategory};
 use serde_json::Value;
 
@@ -85,9 +86,31 @@ impl PermissionChecker {
             return PermissionResult::allow();
         }
 
+        // AcceptEdits mode: auto-approve safe shell commands via risk classifier
+        if mode == PermissionMode::AcceptEdits
+            && tool.category() == ToolCategory::Shell
+        {
+            if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+                let classification = bash_classifier::classify(cmd);
+                if classification.risk.auto_approvable() {
+                    return PermissionResult::allow();
+                }
+            }
+        }
+
         // Build suggestions based on tool type
         let suggestions = build_permission_suggestions(tool, input);
-        PermissionResult::ask_with_suggestions(format!("Allow {} ?", tool.name()), suggestions)
+        let prompt_msg = if tool.category() == ToolCategory::Shell {
+            if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+                let classification = bash_classifier::classify(cmd);
+                format!("Allow {} ({})? [risk: {}]", tool.name(), cmd, classification.risk.label())
+            } else {
+                format!("Allow {} ?", tool.name())
+            }
+        } else {
+            format!("Allow {} ?", tool.name())
+        };
+        PermissionResult::ask_with_suggestions(prompt_msg, suggestions)
     }
 
     /// Interactive terminal permission prompt with arrow-key navigation.
