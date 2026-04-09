@@ -6,24 +6,48 @@
 
 | 指标 | 数值 |
 |------|------|
-| Crate 数 | 5 |
-| Rust 文件 | 74 |
-| 代码行数 | ~16,600 LoC |
+| Crate 数 | 9 |
+| Rust 文件 | 157 |
+| 代码行数 | ~50,500 LoC |
 | 注册工具 | 28+ (含 MCP 动态代理) |
-| 斜杠命令 | 22 |
-| 测试数 | 128+ |
+| 斜杠命令 | 30+ |
+| 测试数 | 1,560+ |
 
 ## 分层架构
 
 ```
-Layer 3  claude-cli      (6 files,  1,986 LoC)  二进制入口, REPL, 命令行解析
-Layer 2  claude-agent    (17 files, 5,905 LoC)  引擎编排, 会话, Hooks, 权限, 压缩
-Layer 1  claude-api      (6 files,    874 LoC)  HTTP 客户端, 流式 SSE, OAuth PKCE
-Layer 1  claude-tools    (33 files, 5,514 LoC)  28+ 工具实现, MCP 客户端, ToolRegistry
-Layer 0  claude-core     (12 files, 2,342 LoC)  基础类型, Tool trait, 权限模型, 配置
+Layer 3  claude-cli      (21 files,  7,342 LoC)  二进制入口, REPL, cliclack UI
+Layer 3  claude-rpc      ( 9 files,  1,683 LoC)  JSON-RPC 外部接口 (HTTP/WebSocket)
+Layer 3  claude-bridge   (11 files,  1,976 LoC)  外部消息渠道网关 (Feishu/Telegram/Slack)
+Layer 2  claude-agent    (34 files, 12,121 LoC)  引擎编排, 会话, Hooks, 权限, 压缩
+Layer 2  claude-mcp      ( 8 files,  1,791 LoC)  MCP 服务器注册与生命周期管理
+Layer 1  claude-bus      ( 3 files,    903 LoC)  事件总线, ClientHandle, 广播通知
+Layer 1  claude-api      (15 files,  6,489 LoC)  HTTP 客户端, 流式 SSE, OAuth PKCE
+Layer 1  claude-tools    (32 files,  7,613 LoC)  28+ 工具实现, ToolRegistry
+Layer 0  claude-core     (24 files, 10,659 LoC)  基础类型, Tool trait, 权限模型, 配置
 ```
 
-依赖方向: `cli → agent → {api, tools} → core`（零循环依赖）
+依赖方向: `{cli,rpc,bridge} → agent → {api,tools,mcp,bus} → core`（零循环依赖）
+
+## 4-Client Event Bus 架构
+
+```
+                  ┌─────────┐
+                  │  Agent   │ ← claude-agent (QueryEngine + ToolExecutor)
+                  │   Core   │
+                  └────┬─────┘
+                       │ AgentCoreAdapter
+                  ┌────┴─────┐
+                  │ EventBus │ ← claude-bus (broadcast notifications, mpsc requests)
+                  └────┬─────┘
+        ┌──────────┬───┴───┬──────────┐
+   ┌────┴───┐ ┌────┴───┐ ┌┴────┐ ┌───┴─────┐
+   │  CLI   │ │  RPC   │ │ MCP │ │ Bridge  │
+   │(REPL)  │ │(HTTP)  │ │     │ │(飞书等) │
+   └────────┘ └────────┘ └─────┘ └─────────┘
+```
+
+每个客户端持有独立的 `ClientHandle`，通过 bus 发送 `AgentRequest`，接收 `AgentNotification` 广播。
 
 ## Crate 详解
 
@@ -102,15 +126,58 @@ Anthropic Messages API 客户端。
 
 ### claude-cli
 
-用户入口 — 命令行解析 + REPL 交互循环。
+用户入口 — 命令行解析 + REPL 交互循环 + cliclack UI。
 
 | 模块 | 职责 |
 |------|------|
-| `main.rs` | CLI 参数解析 (clap), 初始化, 模式分发 |
-| `repl.rs` | REPL 主循环 (~190 行) — readline, 多行输入, 自动压缩检查 |
-| `repl_commands.rs` | 22 个斜杠命令处理函数 (~940 行) |
+| `main.rs` | CLI 参数解析 (clap), 初始化, 模式分发, EventBus 启动 |
+| `repl.rs` | REPL 主循环 — rustyline, 多行输入, Tab 补全, 自动压缩检查 |
+| `repl_commands/` | 30+ 斜杠命令处理 (model, compact, diff, review, PR ...) |
 | `output.rs` | 终端输出格式化 (Markdown 渲染, 颜色, 进度) |
-| `banner.rs` | 启动 banner + 版本信息 |
+| `session.rs` | SessionManager (bus 代理) + 权限 handler (cliclack 弹窗) |
+| `ui.rs` | cliclack 交互组件 (permission_confirm, model_select, init_wizard) |
+
+### claude-bus
+
+进程内事件总线 — 解耦 Agent Core 与 4 个客户端。
+
+| 模块 | 职责 |
+|------|------|
+| `bus.rs` | `EventBus` + `ClientHandle` — broadcast 通知, mpsc 请求, 权限握手 |
+| `events.rs` | `AgentRequest` / `AgentNotification` 全部事件类型定义 |
+
+### claude-mcp
+
+MCP (Model Context Protocol) 服务器注册与生命周期管理。
+
+| 模块 | 职责 |
+|------|------|
+| `registry.rs` | `McpManager` — 服务器发现、启停、工具代理 |
+| `config.rs` | MCP 服务器配置解析 (stdio/SSE) |
+| `bus_adapter.rs` | `McpBusAdapter` — MCP ↔ EventBus 桥接 |
+| `transport.rs` | JSON-RPC stdio/SSE 传输层 |
+
+### claude-rpc
+
+外部 JSON-RPC 接口 — HTTP/WebSocket 供 IDE/脚本调用。
+
+| 模块 | 职责 |
+|------|------|
+| `server.rs` | Axum HTTP/WS 服务器, 路由定义 |
+| `handler.rs` | JSON-RPC 方法处理 (submit, abort, status, history ...) |
+| `protocol.rs` | RPC 请求/响应/通知类型 |
+| `bus_adapter.rs` | RPC ↔ EventBus 桥接 |
+
+### claude-bridge
+
+外部消息渠道网关 — 让 Agent 通过飞书/Telegram/Slack 等平台交互。
+
+| 模块 | 职责 |
+|------|------|
+| `gateway.rs` | `ChannelGateway` — 适配器生命周期 + 通知消费循环 |
+| `session.rs` | `SessionRouter` — channel→session 映射 |
+| `formatter.rs` | `MessageFormatter` — AgentNotification → 用户友好文本 |
+| `adapters/` | `FeishuAdapter`, `TelegramAdapter`, `SlackAdapter` (trait `ChannelAdapter`) |
 
 ## 核心数据流
 

@@ -33,6 +33,8 @@ pub struct QueryEngine {
     hooks: Arc<HookRegistry>,
     cwd: std::path::PathBuf,
     session_id: String,
+    /// Timestamp when this session was created.
+    created_at: chrono::DateTime<chrono::Utc>,
     compact_threshold: u64,
     /// Shared abort signal — call `.abort()` to cancel the running task.
     abort_signal: AbortSignal,
@@ -520,7 +522,7 @@ impl QueryEngine {
             title: title_from_messages(&s.messages),
             model: s.model.clone(),
             cwd: self.cwd.to_string_lossy().to_string(),
-            created_at: chrono::Utc::now(), // approximate
+            created_at: self.created_at,
             updated_at: chrono::Utc::now(),
             turn_count: s.turn_count,
             input_tokens: s.total_input_tokens,

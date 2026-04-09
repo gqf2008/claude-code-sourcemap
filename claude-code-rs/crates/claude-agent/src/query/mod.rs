@@ -104,6 +104,7 @@ pub fn query_stream_with_injection(
 ) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
     let stream = async_stream::stream! {
         let mut messages = initial_messages;
+        let mut tool_context = tool_context;
         let mut turn_count: u32 = 0;
         let mut stop_hook_retries: u32 = 0;
         const MAX_STOP_HOOK_RETRIES: u32 = 3;
@@ -447,6 +448,8 @@ pub fn query_stream_with_injection(
             let actual_stop = stop_reason.unwrap_or(StopReason::EndTurn);
             match actual_stop {
                 StopReason::ToolUse if !tool_uses.is_empty() => {
+                    // Snapshot messages into tool_context so tools like ContextTool can inspect them
+                    tool_context.messages = messages.clone();
                     let results: Vec<ContentBlock> = executor.execute_many(tool_uses, &tool_context).await;
                     let tool_result_msg = UserMessage {
                         uuid: Uuid::new_v4().to_string(),

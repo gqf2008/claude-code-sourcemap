@@ -367,6 +367,7 @@ impl QueryEngineBuilder {
             hooks,
             cwd: self.cwd,
             session_id,
+            created_at: chrono::Utc::now(),
             compact_threshold: self.compact_threshold,
             abort_signal,
             notification_rx,
