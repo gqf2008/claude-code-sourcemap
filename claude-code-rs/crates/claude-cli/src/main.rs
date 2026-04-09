@@ -16,102 +16,139 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser, Debug)]
 #[command(name = "claude", version, about = "Claude Code — AI coding assistant (Rust)")]
 struct Cli {
-    /// Initial prompt — run non-interactively and exit
+    /// Initial prompt — run non-interactively and exit.
+    /// If omitted, starts an interactive REPL session
     prompt: Option<String>,
 
-    /// API key (or set ANTHROPIC_API_KEY)
+    /// API key for authentication.
+    /// Can also be set via ANTHROPIC_API_KEY env var.
+    /// For non-Anthropic providers, use the provider's key format
     #[arg(long, env = "ANTHROPIC_API_KEY")]
     api_key: Option<String>,
 
-    /// Model
+    /// Model identifier or alias.
+    /// Aliases: sonnet, opus, haiku, best.
+    /// Full names: claude-sonnet-4-20250514, claude-opus-4-20250514, etc.
+    /// Third-party: gpt-4o, deepseek-chat, qwen-plus, etc.
     #[arg(long, short, default_value = "claude-sonnet-4-20250514")]
     model: String,
 
-    /// Permission mode: default | bypass | acceptEdits | plan
-    ///   default       — ask before risky operations
-    ///   bypass        — skip all permission checks (dangerzone)
-    ///   acceptEdits   — auto-approve file edits, still ask for shell commands
+    /// Permission mode: default | bypass | acceptEdits | plan.
+    ///   default       — ask before risky operations.
+    ///   bypass        — skip all permission checks (dangerzone).
+    ///   acceptEdits   — auto-approve file edits, still ask for shell commands.
     ///   plan          — read-only, no tool execution
     #[arg(long, default_value = "default")]
     permission_mode: String,
 
-    /// Custom system prompt
+    /// Replace the entire system prompt with custom text.
+    /// Overrides built-in prompt, CLAUDE.md, and all injected sections
     #[arg(long)]
     system_prompt: Option<String>,
 
-    /// Working directory
+    /// Working directory for the session.
+    /// Tools resolve paths relative to this directory.
+    /// Defaults to current working directory
     #[arg(long, short = 'd')]
     cwd: Option<String>,
 
-    /// Max conversation turns
+    /// Max conversation turns before auto-exit (non-interactive mode).
+    /// Each user→assistant round-trip counts as one turn
     #[arg(long, default_value = "100")]
     max_turns: u32,
 
-    /// Disable CLAUDE.md injection
+    /// Disable CLAUDE.md injection.
+    /// Skips loading project-level (.claude/CLAUDE.md) and user-level CLAUDE.md files
     #[arg(long)]
     no_claude_md: bool,
 
-    /// Print final output only (suppress progress, suitable for piping)
+    /// Print final assistant response only.
+    /// Suppresses progress indicators — suitable for piping to other commands
     #[arg(long, short = 'p')]
     print: bool,
 
-    /// Output format for non-interactive mode: text (default) or json
+    /// Output format for non-interactive mode: text | json.
+    ///   text — plain text output (default).
+    ///   json — structured JSON with messages, tool calls, and metadata
     #[arg(long, default_value = "text")]
     output_format: String,
 
-    /// Resume the most recent session
+    /// Resume the most recent conversation session.
+    /// Alias: --continue
     #[arg(long, alias = "continue")]
     resume: bool,
 
-    /// Resume a specific session by ID
+    /// Resume a specific session by its UUID.
+    /// Use /session list in REPL to find session IDs
     #[arg(long)]
     session_id: Option<String>,
 
-    /// Initialize CLAUDE.md and settings in the current project
+    /// Initialize project configuration.
+    /// Creates .claude/CLAUDE.md and .claude/settings.json interactively
     #[arg(long)]
     init: bool,
 
-    /// Additional context directories (files are read and included)
+    /// Additional context directories.
+    /// Files in these directories are read and included as context.
+    /// Can be specified multiple times: --add-dir src --add-dir docs
     #[arg(long = "add-dir")]
     add_dirs: Vec<String>,
 
-    /// Verbose output
+    /// Enable verbose/debug logging output.
+    /// Shows API calls, token usage, tool execution details
     #[arg(long, short)]
     verbose: bool,
 
-    /// Enable coordinator (multi-agent orchestration) mode
+    /// Enable coordinator (multi-agent orchestration) mode.
+    /// Spawns sub-agents via AgentTool for parallel task execution
     #[arg(long)]
     coordinator: bool,
 
-    /// Restrict available tools (comma-separated or repeatable)
+    /// Restrict available tools.
+    /// Comma-separated list or repeatable: --allowed-tools Bash,FileRead.
+    /// Available tools: Bash, FileRead, FileEdit, FileWrite, Glob, Grep,
+    /// LS, WebFetch, WebSearch, AskUser, MultiEdit, Notebook, TodoRead,
+    /// TodoWrite, Agent, Task, Skill, MCP, etc.
     #[arg(long = "allowed-tools")]
     allowed_tools: Vec<String>,
 
-    /// Maximum output tokens per response
+    /// Maximum output tokens per model response.
+    /// Higher values allow longer responses but cost more
     #[arg(long, default_value = "16384")]
     max_tokens: u32,
 
-    /// Enable extended thinking (chain-of-thought reasoning)
+    /// Enable extended thinking (chain-of-thought reasoning).
+    /// Model shows its reasoning process before answering.
+    /// Uses additional tokens from --thinking-budget
     #[arg(long)]
     thinking: bool,
 
-    /// Token budget for extended thinking (default 10000)
+    /// Token budget for extended thinking.
+    /// Only effective when --thinking is enabled.
+    /// Higher budgets allow deeper reasoning on complex problems
     #[arg(long, default_value = "10000")]
     thinking_budget: u32,
 
-    /// Additional system prompt text appended to the default prompt
+    /// Additional system prompt text appended after the default prompt.
+    /// Unlike --system-prompt, this preserves built-in prompt and CLAUDE.md
     #[arg(long)]
     append_system_prompt: Option<String>,
 
-    /// Generate shell completions and exit (bash, zsh, fish, powershell)
+    /// Generate shell completions and exit.
+    /// Supported shells: bash, zsh, fish, powershell, elvish.
+    /// Example: claude --completions bash >> ~/.bashrc
     #[arg(long, value_name = "SHELL")]
     completions: Option<clap_complete::Shell>,
 
-    /// API provider: anthropic (default), openai, deepseek, ollama, together, groq, bedrock, vertex
+    /// API provider backend.
+    /// Supported: anthropic, openai, deepseek, ollama, together, groq, bedrock, vertex.
+    /// Each provider has different model availability and pricing
     #[arg(long, default_value = "anthropic")]
     provider: String,
 
-    /// Override API base URL (provider-specific)
+    /// Override API base URL.
+    /// Useful for proxies, self-hosted instances, or custom endpoints.
+    /// Example: --base-url http://localhost:11434/v1
     #[arg(long)]
     base_url: Option<String>,
 }
