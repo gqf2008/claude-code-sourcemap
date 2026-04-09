@@ -28,6 +28,10 @@ struct Cli {
     model: String,
 
     /// Permission mode: default | bypass | acceptEdits | plan
+    ///   default       — ask before risky operations
+    ///   bypass        — skip all permission checks (dangerzone)
+    ///   acceptEdits   — auto-approve file edits, still ask for shell commands
+    ///   plan          — read-only, no tool execution
     #[arg(long, default_value = "default")]
     permission_mode: String,
 

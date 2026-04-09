@@ -293,7 +293,7 @@ const HELP_TEXT_BASE: &str = "\
   /login             Set API key interactively
   /logout            Clear saved API key
   /config            Show current configuration
-  /permissions       Show permission mode and rules
+  /permissions       Show permission mode and rules (default|bypass|acceptEdits|plan)
   /context           Show loaded context (CLAUDE.md, memory, model)
   /reload-context    Reload CLAUDE.md, memory, and settings
   /mcp               Show discovered MCP servers
