@@ -131,7 +131,8 @@ pub struct McpSseConfig {
 /// Returns the file path if persisted, or None if the output was small enough.
 ///
 /// Outputs >100KB are written to `~/.claude/mcp-outputs/{id}.txt`.
-pub fn persist_large_output(
+/// Uses `tokio::fs` for non-blocking I/O in async contexts.
+pub async fn persist_large_output(
     tool_name: &str,
     result: &McpToolResult,
 ) -> Option<std::path::PathBuf> {
@@ -147,25 +148,25 @@ pub fn persist_large_output(
         .join(".claude")
         .join("mcp-outputs");
 
-    if std::fs::create_dir_all(&output_dir).is_err() {
+    if tokio::fs::create_dir_all(&output_dir).await.is_err() {
         tracing::warn!("Failed to create MCP output directory: {}", output_dir.display());
         return None;
     }
 
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let filename = format!("{}-{}.txt", tool_name, &id[..8]);
+    let filename = format!("{tool_name}-{}.txt", &id[..8]);
     let path = output_dir.join(&filename);
 
-    match std::fs::write(&path, &text) {
+    match tokio::fs::write(&path, &text).await {
         Ok(()) => {
             tracing::info!(
-                "MCP large output persisted: {} ({} bytes) → {}",
-                tool_name, text.len(), path.display()
+                "MCP large output persisted: {tool_name} ({} bytes) → {}",
+                text.len(), path.display()
             );
             Some(path)
         }
         Err(e) => {
-            tracing::warn!("Failed to persist MCP output: {}", e);
+            tracing::warn!("Failed to persist MCP output: {e}");
             None
         }
     }
@@ -274,8 +275,8 @@ mod tests {
         assert!(caps.resources.is_none());
     }
 
-    #[test]
-    fn persist_small_output_returns_none() {
+    #[tokio::test]
+    async fn persist_small_output_returns_none() {
         let result = McpToolResult {
             content: vec![McpContent {
                 content_type: "text".into(),
@@ -285,11 +286,11 @@ mod tests {
             }],
             is_error: false,
         };
-        assert!(persist_large_output("test_tool", &result).is_none());
+        assert!(persist_large_output("test_tool", &result).await.is_none());
     }
 
-    #[test]
-    fn persist_large_output_creates_file() {
+    #[tokio::test]
+    async fn persist_large_output_creates_file() {
         let large_text = "x".repeat(200_000);
         let result = McpToolResult {
             content: vec![McpContent {
@@ -300,7 +301,7 @@ mod tests {
             }],
             is_error: false,
         };
-        let path = persist_large_output("test_tool", &result);
+        let path = persist_large_output("test_tool", &result).await;
         assert!(path.is_some());
         let path = path.unwrap();
         assert!(path.exists());
