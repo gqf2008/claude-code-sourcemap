@@ -39,6 +39,12 @@ pub fn parse_request(method: &str, params: Option<Value>) -> Result<AgentRequest
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            if text.is_empty() {
+                return Err(RpcError::new(
+                    error_codes::INVALID_PARAMS,
+                    "Missing or empty 'text' parameter for agent.submit",
+                ));
+            }
             Ok(AgentRequest::Submit { text, images: vec![] })
         }
 
@@ -426,8 +432,21 @@ mod tests {
 
     #[test]
     fn parse_submit_no_params() {
-        let req = parse_request("agent.submit", None).unwrap();
-        assert!(matches!(req, AgentRequest::Submit { text, .. } if text.is_empty()));
+        // Empty text is now rejected
+        let err = parse_request("agent.submit", None).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_submit_empty_text() {
+        let err = parse_request("agent.submit", Some(serde_json::json!({"text": ""}))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_submit_missing_text_field() {
+        let err = parse_request("agent.submit", Some(serde_json::json!({"other": "val"}))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
     }
 
     #[test]
@@ -577,5 +596,200 @@ mod tests {
                     "Method '{}' returned METHOD_NOT_FOUND", method);
             }
         }
+    }
+
+    // ── Additional parse_request edge case tests ─────────────────────────────
+
+    #[test]
+    fn parse_set_model_missing_model_field() {
+        let err = parse_request("agent.setModel", Some(serde_json::json!({}))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_permission_missing_request_id() {
+        let err = parse_request("agent.permission", Some(serde_json::json!({
+            "granted": true
+        }))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_permission_defaults() {
+        // granted and remember default to false when missing
+        let req = parse_request("agent.permission", Some(serde_json::json!({
+            "request_id": "perm-x"
+        }))).unwrap();
+        assert!(matches!(req, AgentRequest::PermissionResponse { granted: false, remember: false, .. }));
+    }
+
+    #[test]
+    fn parse_session_load_missing_id() {
+        let err = parse_request("session.load", None).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_session_load_valid() {
+        let req = parse_request("session.load", Some(serde_json::json!({
+            "session_id": "sess-123"
+        }))).unwrap();
+        assert!(matches!(req, AgentRequest::LoadSession { session_id } if session_id == "sess-123"));
+    }
+
+    #[test]
+    fn parse_mcp_connect_valid() {
+        let req = parse_request("mcp.connect", Some(serde_json::json!({
+            "name": "fs-server",
+            "command": "npx",
+            "args": ["-y", "@mcp/fs-server"],
+            "env": {"NODE_ENV": "production"}
+        }))).unwrap();
+        if let AgentRequest::McpConnect { name, command, args, env } = req {
+            assert_eq!(name, "fs-server");
+            assert_eq!(command, "npx");
+            assert_eq!(args, vec!["-y", "@mcp/fs-server"]);
+            assert_eq!(env.get("NODE_ENV").unwrap(), "production");
+        } else {
+            panic!("Expected McpConnect");
+        }
+    }
+
+    #[test]
+    fn parse_mcp_connect_missing_command() {
+        let err = parse_request("mcp.connect", Some(serde_json::json!({
+            "name": "test"
+        }))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn parse_mcp_connect_blocked_command() {
+        let err = parse_request("mcp.connect", Some(serde_json::json!({
+            "name": "test", "command": "rm"
+        }))).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+        assert!(err.message.contains("not allowed"));
+    }
+
+    #[test]
+    fn parse_mcp_connect_allowed_mcp_prefix() {
+        let req = parse_request("mcp.connect", Some(serde_json::json!({
+            "name": "test", "command": "mcp-my-server"
+        }))).unwrap();
+        assert!(matches!(req, AgentRequest::McpConnect { .. }));
+    }
+
+    #[test]
+    fn parse_send_message_valid() {
+        let req = parse_request("agent.sendMessage", Some(serde_json::json!({
+            "agent_id": "a1", "message": "hello"
+        }))).unwrap();
+        assert!(matches!(req, AgentRequest::SendAgentMessage { agent_id, message }
+            if agent_id == "a1" && message == "hello"));
+    }
+
+    #[test]
+    fn parse_stop_agent_missing_id() {
+        let err = parse_request("agent.stopAgent", None).unwrap_err();
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    }
+
+    // ── Additional notification tests ────────────────────────────────────────
+
+    #[test]
+    fn notification_tool_use_start() {
+        let notif = AgentNotification::ToolUseStart {
+            id: "tu-1".into(),
+            tool_name: "Bash".into(),
+        };
+        let jsonrpc = notification_to_jsonrpc(&notif);
+        assert_eq!(jsonrpc.method, "agent.toolStart");
+        let p = jsonrpc.params.unwrap();
+        assert_eq!(p["id"], "tu-1");
+        assert_eq!(p["tool_name"], "Bash");
+    }
+
+    #[test]
+    fn notification_tool_complete_with_none_preview() {
+        let notif = AgentNotification::ToolUseComplete {
+            id: "tu-2".into(),
+            tool_name: "Read".into(),
+            is_error: false,
+            result_preview: None,
+        };
+        let jsonrpc = notification_to_jsonrpc(&notif);
+        let p = jsonrpc.params.unwrap();
+        assert!(p["result_preview"].is_null());
+    }
+
+    #[test]
+    fn notification_agent_spawned_optional_name() {
+        let notif = AgentNotification::AgentSpawned {
+            agent_id: "ag-1".into(),
+            name: None,
+            agent_type: "explore".into(),
+            background: true,
+        };
+        let jsonrpc = notification_to_jsonrpc(&notif);
+        let p = jsonrpc.params.unwrap();
+        assert!(p["name"].is_null());
+        assert_eq!(p["background"], true);
+    }
+
+    #[test]
+    fn notification_session_status() {
+        let notif = AgentNotification::SessionStatus {
+            session_id: "s1".into(),
+            model: "opus".into(),
+            total_turns: 5,
+            total_input_tokens: 1000,
+            total_output_tokens: 500,
+            context_usage_pct: 42.5,
+        };
+        let jsonrpc = notification_to_jsonrpc(&notif);
+        assert_eq!(jsonrpc.method, "session.status");
+        let p = jsonrpc.params.unwrap();
+        assert_eq!(p["total_turns"], 5);
+        assert_eq!(p["context_usage_pct"], 42.5);
+    }
+
+    #[test]
+    fn notification_compact_events() {
+        let start = notification_to_jsonrpc(&AgentNotification::CompactStart);
+        assert_eq!(start.method, "agent.compactStart");
+        assert!(start.params.is_none());
+
+        let complete = notification_to_jsonrpc(&AgentNotification::CompactComplete { summary_len: 200 });
+        assert_eq!(complete.method, "agent.compactComplete");
+        assert_eq!(complete.params.unwrap()["summary_len"], 200);
+    }
+
+    // ── MCP command validation tests ─────────────────────────────────────────
+
+    #[test]
+    fn validate_mcp_allowed_commands() {
+        for cmd in MCP_ALLOWED_COMMANDS {
+            assert!(validate_mcp_command(cmd).is_ok(), "Should allow: {}", cmd);
+        }
+    }
+
+    #[test]
+    fn validate_mcp_command_with_path() {
+        assert!(validate_mcp_command("/usr/bin/node").is_ok());
+        assert!(validate_mcp_command("C:\\Program Files\\node.exe").is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_command_blocked() {
+        assert!(validate_mcp_command("rm").is_err());
+        assert!(validate_mcp_command("bash").is_err());
+        assert!(validate_mcp_command("curl").is_err());
+    }
+
+    #[test]
+    fn validate_mcp_command_prefix_allowed() {
+        assert!(validate_mcp_command("mcp-filesystem").is_ok());
+        assert!(validate_mcp_command("mcp_custom_tool").is_ok());
     }
 }

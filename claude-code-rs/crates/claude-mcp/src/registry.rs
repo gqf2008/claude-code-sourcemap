@@ -463,4 +463,165 @@ mod tests {
         mgr.load_configs(configs).await;
         assert!(mgr.has_configs().await);
     }
+
+    // ── Additional registry tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn manager_load_replaces_configs() {
+        let mgr = McpManager::new();
+        let c1 = vec![McpServerConfig {
+            name: "a".into(),
+            command: "echo".into(),
+            args: vec![],
+            env: HashMap::new(),
+        }];
+        mgr.load_configs(c1).await;
+        assert!(mgr.has_configs().await);
+
+        let c2 = vec![];
+        mgr.load_configs(c2).await;
+        assert!(!mgr.has_configs().await);
+    }
+
+    #[tokio::test]
+    async fn manager_server_count_tracks_correctly() {
+        let mgr = McpManager::new();
+        assert_eq!(mgr.server_count().await, 0);
+        // Can't start real servers, but verify empty state
+        let result = mgr.list_all_tools().await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manager_stop_nonexistent_is_ok() {
+        let mgr = McpManager::new();
+        let result = mgr.stop_server("nonexistent").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn manager_call_tool_unknown_server() {
+        let mgr = McpManager::new();
+        let err = mgr.call_tool("mcp__unknown__readFile", serde_json::json!({})).await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn manager_call_tool_invalid_name() {
+        let mgr = McpManager::new();
+        let err = mgr.call_tool("invalid_name", serde_json::json!({})).await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn manager_list_tools_for_unknown_server() {
+        let mgr = McpManager::new();
+        let err = mgr.list_tools_for("missing").await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn load_mcp_configs_valid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".mcp.json");
+        std::fs::write(&config_path, r#"{
+            "mcpServers": {
+                "fs": {
+                    "command": "npx",
+                    "args": ["-y", "@mcp/fs"],
+                    "env": {"NODE_ENV": "production"}
+                },
+                "git": {
+                    "command": "mcp-git"
+                }
+            }
+        }"#).unwrap();
+
+        let configs = load_mcp_configs(&config_path).unwrap();
+        assert_eq!(configs.len(), 2);
+        let fs = configs.iter().find(|c| c.name == "fs").unwrap();
+        assert_eq!(fs.command, "npx");
+        assert_eq!(fs.args, vec!["-y", "@mcp/fs"]);
+        assert_eq!(fs.env.get("NODE_ENV").unwrap(), "production");
+
+        let git = configs.iter().find(|c| c.name == "git").unwrap();
+        assert_eq!(git.command, "mcp-git");
+        assert!(git.args.is_empty());
+    }
+
+    #[test]
+    fn load_mcp_configs_missing_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("mcp.json");
+        std::fs::write(&config_path, r#"{
+            "mcpServers": {
+                "bad": {}
+            }
+        }"#).unwrap();
+
+        let err = load_mcp_configs(&config_path);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_mcp_configs_missing_servers_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("mcp.json");
+        std::fs::write(&config_path, r#"{"version": 1}"#).unwrap();
+
+        let err = load_mcp_configs(&config_path);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_mcp_configs_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("mcp.json");
+        std::fs::write(&config_path, "not json").unwrap();
+
+        let err = load_mcp_configs(&config_path);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn discover_mcp_configs_finds_project_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let mcp_file = dir.path().join(".mcp.json");
+        std::fs::write(&mcp_file, "{}").unwrap();
+
+        let found = discover_mcp_configs(dir.path());
+        assert!(found.iter().any(|p| p.file_name().unwrap() == ".mcp.json"));
+    }
+
+    #[test]
+    fn discover_mcp_configs_finds_claude_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(claude_dir.join("mcp.json"), "{}").unwrap();
+
+        let found = discover_mcp_configs(dir.path());
+        assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn discover_mcp_configs_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let found = discover_mcp_configs(dir.path());
+        // Should not find any project-level configs (home-level may exist)
+        let project_configs: Vec<_> = found.iter()
+            .filter(|p| p.starts_with(dir.path()))
+            .collect();
+        assert!(project_configs.is_empty());
+    }
+
+    #[test]
+    fn format_and_parse_roundtrip() {
+        let formatted = format_mcp_tool_name("my_server", "read_file");
+        let (server, tool) = parse_mcp_tool_name(&formatted).unwrap();
+        assert_eq!(server, "my_server");
+        assert_eq!(tool, "read_file");
+    }
 }

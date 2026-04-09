@@ -198,7 +198,7 @@ impl RpcSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Request;
+    use crate::protocol::{Request, RawMessage, RequestId, error_codes};
     use crate::transport::stdio::test_transport::ChannelTransport;
     use claude_bus::bus::EventBus;
     use claude_bus::events::AgentNotification;
@@ -280,5 +280,115 @@ mod tests {
             session.run(),
         ).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn session_preserves_request_id() {
+        let (_bus_handle, client) = EventBus::new(64);
+        let (client_transport, mut server_side) = ChannelTransport::pair(64);
+
+        let session = RpcSession::new("test-id", Box::new(client_transport), client);
+        tokio::spawn(session.run());
+
+        // Send request with specific numeric ID
+        let req = Request::new(42, "agent.clearHistory", None);
+        server_side.write_message(&RawMessage::from(req)).await.unwrap();
+
+        let resp = server_side.read_message().await.unwrap().unwrap();
+        assert_eq!(resp.id, Some(RequestId::Number(42)));
+    }
+
+    #[tokio::test]
+    async fn session_invalid_params_returns_error() {
+        let (_bus_handle, client) = EventBus::new(64);
+        let (client_transport, mut server_side) = ChannelTransport::pair(64);
+
+        let session = RpcSession::new("test-params", Box::new(client_transport), client);
+        tokio::spawn(session.run());
+
+        // agent.setModel requires "model" param
+        let req = Request::new(1, "agent.setModel", None);
+        server_side.write_message(&RawMessage::from(req)).await.unwrap();
+
+        let resp = server_side.read_message().await.unwrap().unwrap();
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, error_codes::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn session_bus_notification_forwarded() {
+        let (bus_handle, client) = EventBus::new(64);
+        let (client_transport, mut server_side) = ChannelTransport::pair(64);
+
+        let session = RpcSession::new("test-notif", Box::new(client_transport), client);
+        tokio::spawn(session.run());
+
+        // Give the session task time to start and subscribe to notifications
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Send a notification from the bus
+        bus_handle.notify(AgentNotification::TextDelta { text: "hi there".into() });
+
+        // Read it from the transport
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            server_side.read_message(),
+        ).await.unwrap().unwrap().unwrap();
+        assert_eq!(msg.method.as_deref(), Some("agent.textDelta"));
+        let params = msg.params.unwrap();
+        assert_eq!(params["text"], "hi there");
+    }
+
+    #[tokio::test]
+    async fn session_multiple_rapid_requests() {
+        let (_bus_handle, client) = EventBus::new(64);
+        let (client_transport, mut server_side) = ChannelTransport::pair(64);
+
+        let session = RpcSession::new("test-rapid", Box::new(client_transport), client);
+        tokio::spawn(session.run());
+
+        // Send 5 requests rapidly
+        for i in 1..=5 {
+            let req = Request::new(i, "agent.clearHistory", None);
+            server_side.write_message(&RawMessage::from(req)).await.unwrap();
+        }
+
+        // Should get 5 responses
+        for i in 1..=5 {
+            let resp = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                server_side.read_message(),
+            ).await.unwrap().unwrap().unwrap();
+            assert_eq!(resp.id, Some(RequestId::Number(i)));
+            assert!(resp.result.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn session_classify_error_uses_fallback_id() {
+        let (_bus_handle, client) = EventBus::new(64);
+        let (client_transport, mut server_side) = ChannelTransport::pair(64);
+
+        let session = RpcSession::new("test-classify", Box::new(client_transport), client);
+        tokio::spawn(session.run());
+
+        // Send a message with id but missing method (classify should fail)
+        let raw = RawMessage {
+            jsonrpc: "2.0".into(),
+            id: Some(RequestId::Number(99)),
+            method: None,
+            params: None,
+            result: None,
+            error: None,
+        };
+        server_side.write_message(&raw).await.unwrap();
+
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            server_side.read_message(),
+        ).await.unwrap().unwrap().unwrap();
+        // Should use fallback_id from raw message
+        assert_eq!(resp.id, Some(RequestId::Number(99)));
+        assert!(resp.error.is_some());
     }
 }
