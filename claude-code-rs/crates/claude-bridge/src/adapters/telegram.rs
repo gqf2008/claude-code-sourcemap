@@ -240,15 +240,16 @@ impl ChannelAdapter for TelegramAdapter {
     }
 
     async fn stop(&self) -> AdapterResult<()> {
-        if let Some((task, cancel_tx)) = self.poll_task.lock().await.take() {
+        if let Some((mut task, cancel_tx)) = self.poll_task.lock().await.take() {
             // Signal graceful shutdown
             let _ = cancel_tx.send(true);
-            // Wait for clean exit, then abort if stuck
-            if tokio::time::timeout(std::time::Duration::from_secs(3), task)
-                .await
-                .is_err()
-            {
-                warn!("Telegram polling task did not stop in 3s, detaching");
+            // Wait for clean exit, then force-abort if stuck
+            tokio::select! {
+                _ = &mut task => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                    warn!("Telegram polling task did not stop in 3s, aborting");
+                    task.abort();
+                }
             }
         }
         info!("Telegram adapter stopped");
