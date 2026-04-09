@@ -477,6 +477,25 @@ pub fn worker_tool_names(all_tools: &[&str]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn test_context() -> ToolContext {
+        ToolContext {
+            cwd: std::path::PathBuf::from("."),
+            abort_signal: claude_core::tool::AbortSignal::default(),
+            permission_mode: claude_core::permissions::PermissionMode::BypassAll,
+            messages: vec![],
+        }
+    }
+
+    fn result_text(result: &ToolResult) -> String {
+        result.content.iter().filter_map(|c| {
+            if let claude_core::message::ToolResultContent::Text { text } = c {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        }).collect::<Vec<_>>().join("")
+    }
+
     #[test]
     fn test_notification_xml() {
         let n = TaskNotification {
@@ -598,5 +617,258 @@ mod tests {
         };
         let xml = n.to_xml();
         assert!(xml.contains("a&amp;b&lt;c&gt;d"));
+    }
+
+    // ── AgentTracker state management tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn tracker_get_returns_none_for_unknown() {
+        let (tracker, _rx) = AgentTracker::new();
+        assert!(tracker.get("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn tracker_is_running_unknown_agent() {
+        let (tracker, _rx) = AgentTracker::new();
+        assert!(!tracker.is_running("no-such-agent").await);
+    }
+
+    #[tokio::test]
+    async fn tracker_is_running_after_complete() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("r1", "test", None, None).await;
+        assert!(tracker.is_running("r1").await);
+
+        tracker.complete("r1", "done".into(), 100, 1).await;
+        assert!(!tracker.is_running("r1").await);
+    }
+
+    #[tokio::test]
+    async fn tracker_lookup_by_name() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("id-1", "task", Some("my-worker"), None).await;
+
+        assert_eq!(tracker.lookup_by_name("my-worker").await, Some("id-1".into()));
+        assert_eq!(tracker.lookup_by_name("other").await, None);
+    }
+
+    #[tokio::test]
+    async fn tracker_record_progress() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("p1", "task", None, None).await;
+
+        tracker.record_progress("p1", 5, 1200, Some("Running Bash".into())).await;
+
+        let task = tracker.get("p1").await.unwrap();
+        assert_eq!(task.tool_use_count, 5);
+        assert_eq!(task.total_tokens, 1200);
+        assert_eq!(task.last_activity.as_deref(), Some("Running Bash"));
+    }
+
+    #[tokio::test]
+    async fn tracker_record_progress_preserves_activity_on_none() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("p2", "task", None, None).await;
+        tracker.record_progress("p2", 1, 100, Some("First".into())).await;
+        // None should NOT overwrite existing activity
+        tracker.record_progress("p2", 2, 200, None).await;
+
+        let task = tracker.get("p2").await.unwrap();
+        assert_eq!(task.tool_use_count, 2);
+        assert_eq!(task.last_activity.as_deref(), Some("First"));
+    }
+
+    #[tokio::test]
+    async fn tracker_remove() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("rm-1", "task", None, None).await;
+        assert!(tracker.get("rm-1").await.is_some());
+
+        tracker.remove("rm-1").await;
+        assert!(tracker.get("rm-1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn tracker_list_returns_all() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("a1", "t1", None, None).await;
+        tracker.register("a2", "t2", None, None).await;
+        tracker.register("a3", "t3", None, None).await;
+
+        let list = tracker.list().await;
+        assert_eq!(list.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn tracker_duplicate_register_overwrites() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("dup", "first prompt", None, None).await;
+        tracker.register("dup", "second prompt", None, None).await;
+
+        let task = tracker.get("dup").await.unwrap();
+        assert_eq!(task.prompt, "second prompt");
+    }
+
+    #[tokio::test]
+    async fn tracker_complete_nonexistent_still_notifies() {
+        let (tracker, mut rx) = AgentTracker::new();
+        // Complete an agent that was never registered
+        tracker.complete("ghost", "result".into(), 0, 0).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert_eq!(notif.agent_id, "ghost");
+        assert_eq!(notif.duration_ms, 0); // fallback duration
+    }
+
+    #[tokio::test]
+    async fn tracker_fail_nonexistent_still_notifies() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.fail("ghost", "err".into()).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert!(matches!(notif.status, AgentStatus::Failed));
+        assert_eq!(notif.duration_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn complete_truncates_long_summary() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.register("long", "task", None, None).await;
+
+        let long_result = "x".repeat(500);
+        tracker.complete("long", long_result.clone(), 0, 0).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert_eq!(notif.result.len(), 500); // result is full
+        assert!(notif.summary.len() <= 203); // summary is truncated (200 + "...")
+        assert!(notif.summary.ends_with("..."));
+    }
+
+    #[tokio::test]
+    async fn complete_short_summary_not_truncated() {
+        let (tracker, mut rx) = AgentTracker::new();
+        tracker.register("short", "task", None, None).await;
+
+        tracker.complete("short", "ok".into(), 0, 0).await;
+
+        let notif = rx.try_recv().unwrap();
+        assert_eq!(notif.summary, "ok");
+        assert!(!notif.summary.ends_with("..."));
+    }
+
+    // ── Tool tests ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn send_message_to_unknown_agent() {
+        let (tracker, _rx) = AgentTracker::new();
+        let channels: AgentChannelMap = Arc::new(RwLock::new(HashMap::new()));
+
+        let tool = SendMessageTool { tracker, agent_channels: channels };
+        let ctx = test_context();
+        let input = json!({"to": "no-such-agent", "message": "hello"});
+
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("No agent found"));
+    }
+
+    #[tokio::test]
+    async fn send_message_to_completed_agent() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("done-agent", "task", None, None).await;
+        tracker.complete("done-agent", "result".into(), 0, 0).await;
+
+        let channels: AgentChannelMap = Arc::new(RwLock::new(HashMap::new()));
+        let tool = SendMessageTool { tracker, agent_channels: channels };
+        let ctx = test_context();
+        let input = json!({"to": "done-agent", "message": "hello"});
+
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("not running"));
+    }
+
+    #[tokio::test]
+    async fn send_message_by_name() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("id-abc", "task", Some("my-worker"), None).await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let channels: AgentChannelMap = Arc::new(RwLock::new(HashMap::new()));
+        channels.write().await.insert("id-abc".into(), tx);
+
+        let tool = SendMessageTool { tracker, agent_channels: channels };
+        let ctx = test_context();
+        let input = json!({"to": "my-worker", "message": "do something"});
+
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(rx.try_recv().unwrap(), "do something");
+    }
+
+    #[tokio::test]
+    async fn task_stop_nonexistent() {
+        let (tracker, _rx) = AgentTracker::new();
+        let tokens: CancelTokenMap = Arc::new(RwLock::new(HashMap::new()));
+
+        let tool = TaskStopTool { tracker, cancel_tokens: tokens };
+        let ctx = test_context();
+        let input = json!({"agent_id": "nope"});
+
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("No agent found"));
+    }
+
+    #[tokio::test]
+    async fn task_stop_already_completed() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("fin", "task", None, None).await;
+        tracker.complete("fin", "done".into(), 0, 0).await;
+
+        let tokens: CancelTokenMap = Arc::new(RwLock::new(HashMap::new()));
+        let tool = TaskStopTool { tracker, cancel_tokens: tokens };
+        let ctx = test_context();
+        let input = json!({"agent_id": "fin"});
+
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("already"));
+    }
+
+    #[tokio::test]
+    async fn task_stop_cancels_token() {
+        let (tracker, _rx) = AgentTracker::new();
+        tracker.register("stop-me", "task", None, None).await;
+
+        let token = tokio_util::sync::CancellationToken::new();
+        let tokens: CancelTokenMap = Arc::new(RwLock::new(HashMap::new()));
+        tokens.write().await.insert("stop-me".into(), token.clone());
+
+        let tool = TaskStopTool { tracker, cancel_tokens: tokens };
+        let ctx = test_context();
+        let input = json!({"agent_id": "stop-me"});
+
+        assert!(!token.is_cancelled());
+        let result = tool.call(input, &ctx).await.unwrap();
+        assert!(!result.is_error);
+        assert!(token.is_cancelled());
+    }
+
+    // ── xml_escape tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn xml_escape_all_entities() {
+        assert_eq!(xml_escape("a&b<c>d\"e'f"), "a&amp;b&lt;c&gt;d&quot;e&apos;f");
+    }
+
+    #[test]
+    fn xml_escape_no_special() {
+        assert_eq!(xml_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn xml_escape_empty() {
+        assert_eq!(xml_escape(""), "");
     }
 }

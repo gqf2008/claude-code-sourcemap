@@ -323,13 +323,18 @@ mod tests {
         let session = RpcSession::new("test-notif", Box::new(client_transport), client);
         tokio::spawn(session.run());
 
-        // Give the session task time to start and subscribe to notifications
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // First, send a ping request to confirm the session is running and subscribed.
+        let req = Request::new(1, "agent.clearHistory", None);
+        server_side.write_message(&RawMessage::from(req)).await.unwrap();
+        let _resp = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            server_side.read_message(),
+        ).await.unwrap().unwrap().unwrap();
 
-        // Send a notification from the bus
+        // Now the session is definitely running — send a notification via the bus
         bus_handle.notify(AgentNotification::TextDelta { text: "hi there".into() });
 
-        // Read it from the transport
+        // Read the notification from the transport
         let msg = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             server_side.read_message(),

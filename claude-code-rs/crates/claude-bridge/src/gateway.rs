@@ -372,15 +372,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gateway_cannot_run_twice() {
+    async fn gateway_inbound_rx_consumed_by_run() {
         let (bus, _client) = EventBus::new(64);
         let config = BridgeConfig::default();
         let gateway = ChannelGateway::new(bus, config);
 
-        // Take the receiver internally by attempting to run
-        // We can't truly run (no adapters), but we can verify the "run once" guard
-        // by directly checking internal state
+        // Before run(), inbound_rx exists
         assert!(gateway.inbound_rx.is_some());
+        // Note: the actual run-once guard is tested by the fact that run() takes
+        // &mut self and calls inbound_rx.take(), returning an error on second call.
+        // We can't easily call run() twice here without a full adapter setup.
     }
 
     #[test]
