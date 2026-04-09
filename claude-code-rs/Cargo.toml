@@ -9,6 +9,7 @@ members = [
     "crates/claude-mcp",
     "crates/claude-rpc",
     "crates/claude-bridge",
+    "crates/claude-computer-use",
 ]
 resolver = "2"
 
