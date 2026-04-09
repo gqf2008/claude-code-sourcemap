@@ -100,6 +100,9 @@ pub struct Settings {
     /// The TS Claude Code applies these before auth resolution.
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    /// Auto-approve mode configuration (from settings.json `autoMode`).
+    #[serde(default, rename = "autoMode")]
+    pub auto_mode: Option<crate::permissions::AutoModeConfig>,
 }
 
 // ── File paths ──────────────────────────────────────────────────────────────
@@ -185,6 +188,7 @@ fn merge_settings(base: Settings, overlay: &Settings) -> Settings {
             env.extend(overlay.env.clone());
             env
         },
+        auto_mode: overlay.auto_mode.clone().or(base.auto_mode),
     }
 }
 

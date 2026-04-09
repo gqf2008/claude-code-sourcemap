@@ -133,10 +133,14 @@ pub trait Tool: Send + Sync {
 
     async fn check_permissions(&self, _input: &Value, context: &ToolContext) -> PermissionResult {
         match context.permission_mode {
-            PermissionMode::BypassAll => PermissionResult::allow(),
+            PermissionMode::BypassAll | PermissionMode::DontAsk => PermissionResult::allow(),
             PermissionMode::AcceptEdits if self.is_read_only() => PermissionResult::allow(),
             PermissionMode::AcceptEdits => {
                 PermissionResult::ask("Edit requires confirmation".into())
+            }
+            PermissionMode::Auto if self.is_read_only() => PermissionResult::allow(),
+            PermissionMode::Auto => {
+                PermissionResult::ask(format!("Auto-mode: Allow {} to run?", self.name()))
             }
             _ if self.is_read_only() => PermissionResult::allow(),
             _ => PermissionResult::ask(format!("Allow {} to run?", self.name())),

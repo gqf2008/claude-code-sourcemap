@@ -9,12 +9,13 @@ pub fn parse_permission_mode(mode: &str) -> PermissionMode {
     match mode {
         "bypass" | "bypassPermissions" => PermissionMode::BypassAll,
         "acceptEdits" | "accept-edits" => PermissionMode::AcceptEdits,
+        "auto" => PermissionMode::Auto,
         "plan" => PermissionMode::Plan,
         "default" | "" => PermissionMode::Default,
         other => {
             eprintln!(
                 "\x1b[33m⚠ Unknown permission mode '{}', using 'default'. \
-                 Valid: default, bypass, acceptEdits, plan\x1b[0m",
+                 Valid: default, bypass, acceptEdits, auto, plan\x1b[0m",
                 other
             );
             PermissionMode::Default
@@ -41,6 +42,11 @@ mod tests {
     #[test]
     fn test_parse_plan() {
         assert_eq!(parse_permission_mode("plan"), PermissionMode::Plan);
+    }
+
+    #[test]
+    fn test_parse_auto() {
+        assert_eq!(parse_permission_mode("auto"), PermissionMode::Auto);
     }
 
     #[test]

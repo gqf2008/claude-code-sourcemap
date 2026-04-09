@@ -504,3 +504,176 @@ use serde_json::{json, Value};
         let allowed = checker.session_allowed.lock().unwrap();
         assert!(allowed.contains("Bash"));
     }
+
+    // ── Auto-mode tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_safe_tools() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "FileReadTool",
+            category: ToolCategory::FileSystem,
+            read_only: true,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_grep_tool() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "GrepTool",
+            category: ToolCategory::FileSystem,
+            read_only: true,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_filesystem_writes() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "FileEditTool",
+            category: ToolCategory::FileSystem,
+            read_only: false,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_safe_shell_commands() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "git status"}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_blocks_destructive_shell() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        // sudo elevates to at least System, which always_ask() = true
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "sudo rm -rf /"}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Deny);
+        assert!(r.reason.as_deref().unwrap_or("").contains("Auto-mode blocked"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_blocks_sudo() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "sudo apt install foo"}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Deny);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_simple_rm() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        // Plain rm is ProjectWrite = auto-approvable
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "rm temp.txt"}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_allows_web_tools() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "WebFetchTool",
+            category: ToolCategory::Web,
+            read_only: true,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_prompts_for_unknown_tool() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "SomeNewTool",
+            category: ToolCategory::Agent,
+            read_only: false,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Ask);
+        assert!(r.reason.as_deref().unwrap_or("").contains("Auto-mode"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_prompts_for_network_shell() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "curl https://example.com"}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Ask);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_task_tools_allowed() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        let tool = MockTool {
+            name: "TaskCreateTool",
+            category: ToolCategory::Agent,
+            read_only: false,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_denial_tracking() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        for _ in 0..5 {
+            checker.record_denial();
+        }
+        // After MAX_CONSECUTIVE_DENIALS, should fallback to manual prompting
+        // Use a non-read-only, non-allowlisted tool (Agent category)
+        let tool = MockTool {
+            name: "SomeNewTool",
+            category: ToolCategory::Agent,
+            read_only: false,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Ask);
+        assert!(r.reason.as_deref().unwrap_or("").contains("fallback"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_denial_reset_on_approval() {
+        let checker = PermissionChecker::new(PermissionMode::Auto, vec![]);
+        for _ in 0..4 {
+            checker.record_denial();
+        }
+        checker.record_auto_approval();
+        assert_eq!(checker.denial_state().consecutive_denials, 0);
+
+        let tool = MockTool {
+            name: "GlobTool",
+            category: ToolCategory::FileSystem,
+            read_only: true,
+        };
+        let r = checker.check(&tool, &json!({}), None).await;
+        assert_eq!(r.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_auto_mode_rules_still_apply() {
+        let rules = vec![PermissionRule {
+            tool_name: "Bash".into(),
+            pattern: Some("rm*".into()),
+            behavior: PermissionBehavior::Deny,
+        }];
+        let checker = PermissionChecker::new(PermissionMode::Auto, rules);
+        let r = checker
+            .check(&shell_tool(), &json!({"command": "rm -rf ."}), None)
+            .await;
+        assert_eq!(r.behavior, PermissionBehavior::Deny);
+    }

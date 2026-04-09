@@ -8,6 +8,100 @@ pub enum PermissionMode {
     Plan,
     /// "Don't ask" mode — auto-allow everything without prompts.
     DontAsk,
+    /// Auto-approve mode: safe tools are allowed immediately, unsafe tools
+    /// pass through a classifier (local fast-path + optional remote LLM).
+    Auto,
+}
+
+// ── Auto-mode configuration ─────────────────────────────────────────────────
+
+/// User-configurable rules for auto-approve mode (from settings.json `autoMode`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AutoModeConfig {
+    /// Glob patterns for commands/tools that should always be allowed.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Glob patterns for commands that should be soft-denied (prompt user).
+    #[serde(default)]
+    pub soft_deny: Vec<String>,
+    /// Free-text environment context injected into the classifier prompt.
+    #[serde(default)]
+    pub environment: Option<String>,
+}
+
+/// Result of the auto-mode classifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoModeDecision {
+    /// Action is safe to execute without confirmation.
+    Allow,
+    /// Action should be blocked; optional reason string.
+    Block(Option<String>),
+    /// Classifier unavailable (API error / timeout).
+    Unavailable,
+}
+
+// ── Safe tool allowlist ─────────────────────────────────────────────────────
+
+/// Tools that are intrinsically safe and should be auto-approved in Auto mode
+/// without consulting the classifier. Mirrors TS `SAFE_YOLO_ALLOWLISTED_TOOLS`.
+pub const SAFE_AUTO_TOOLS: &[&str] = &[
+    // Read-only file operations
+    "FileReadTool",
+    "GrepTool",
+    "GlobTool",
+    "LSTool",
+    // Task management (metadata-only)
+    "TodoWriteTool",
+    "TaskCreateTool",
+    "TaskGetTool",
+    "TaskUpdateTool",
+    "TaskListTool",
+    "TaskStopTool",
+    "TaskOutputTool",
+    // User interaction / plan mode
+    "AskUserQuestionTool",
+    // Swarm coordination
+    "TeamCreateTool",
+    "TeamDeleteTool",
+    "SendMessageTool",
+    // MCP read resources
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+];
+
+/// Check if a tool name is on the intrinsic safe allowlist.
+pub fn is_safe_auto_tool(name: &str) -> bool {
+    SAFE_AUTO_TOOLS.contains(&name)
+}
+
+// ── Denial tracking ─────────────────────────────────────────────────────────
+
+/// Tracks consecutive and total denials for auto-mode fallback.
+#[derive(Debug, Clone, Default)]
+pub struct DenialState {
+    pub consecutive_denials: u32,
+    pub total_denials: u32,
+    pub total_approvals: u32,
+}
+
+/// Maximum consecutive denials before falling back to manual prompting.
+pub const MAX_CONSECUTIVE_DENIALS: u32 = 5;
+
+impl DenialState {
+    pub fn record_denial(&mut self) {
+        self.consecutive_denials += 1;
+        self.total_denials += 1;
+    }
+
+    pub fn record_approval(&mut self) {
+        self.consecutive_denials = 0;
+        self.total_approvals += 1;
+    }
+
+    /// Whether we should fall back to manual prompting.
+    pub fn should_fallback(&self) -> bool {
+        self.consecutive_denials >= MAX_CONSECUTIVE_DENIALS
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,5 +344,78 @@ mod tests {
         // DontAsk should be a distinct mode
         assert_ne!(PermissionMode::DontAsk, PermissionMode::BypassAll);
         assert_ne!(PermissionMode::DontAsk, PermissionMode::Default);
+    }
+
+    #[test]
+    fn test_permission_mode_auto() {
+        assert_ne!(PermissionMode::Auto, PermissionMode::BypassAll);
+        assert_ne!(PermissionMode::Auto, PermissionMode::AcceptEdits);
+        assert_ne!(PermissionMode::Auto, PermissionMode::DontAsk);
+    }
+
+    #[test]
+    fn test_safe_auto_tools_contains_expected() {
+        assert!(is_safe_auto_tool("FileReadTool"));
+        assert!(is_safe_auto_tool("GrepTool"));
+        assert!(is_safe_auto_tool("GlobTool"));
+        assert!(is_safe_auto_tool("LSTool"));
+        assert!(is_safe_auto_tool("TodoWriteTool"));
+        assert!(is_safe_auto_tool("TaskCreateTool"));
+        assert!(is_safe_auto_tool("AskUserQuestionTool"));
+        assert!(is_safe_auto_tool("TeamCreateTool"));
+        // Not safe:
+        assert!(!is_safe_auto_tool("BashTool"));
+        assert!(!is_safe_auto_tool("FileEditTool"));
+        assert!(!is_safe_auto_tool("FileWriteTool"));
+        assert!(!is_safe_auto_tool("WebFetchTool"));
+    }
+
+    #[test]
+    fn test_denial_state_tracking() {
+        let mut state = DenialState::default();
+        assert_eq!(state.consecutive_denials, 0);
+        assert!(!state.should_fallback());
+
+        state.record_denial();
+        state.record_denial();
+        assert_eq!(state.consecutive_denials, 2);
+        assert_eq!(state.total_denials, 2);
+        assert!(!state.should_fallback());
+
+        state.record_approval();
+        assert_eq!(state.consecutive_denials, 0);
+        assert_eq!(state.total_approvals, 1);
+        assert_eq!(state.total_denials, 2);
+
+        // Hit the limit
+        for _ in 0..MAX_CONSECUTIVE_DENIALS {
+            state.record_denial();
+        }
+        assert!(state.should_fallback());
+    }
+
+    #[test]
+    fn test_auto_mode_config_deserialize() {
+        let json = r#"{"allow": ["git*", "npm*"], "soft_deny": ["rm*"], "environment": "CI server"}"#;
+        let config: AutoModeConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.allow, vec!["git*", "npm*"]);
+        assert_eq!(config.soft_deny, vec!["rm*"]);
+        assert_eq!(config.environment.as_deref(), Some("CI server"));
+    }
+
+    #[test]
+    fn test_auto_mode_config_deserialize_empty() {
+        let json = r#"{}"#;
+        let config: AutoModeConfig = serde_json::from_str(json).unwrap();
+        assert!(config.allow.is_empty());
+        assert!(config.soft_deny.is_empty());
+        assert!(config.environment.is_none());
+    }
+
+    #[test]
+    fn test_auto_mode_decision_variants() {
+        assert_eq!(AutoModeDecision::Allow, AutoModeDecision::Allow);
+        assert_ne!(AutoModeDecision::Allow, AutoModeDecision::Block(None));
+        assert_ne!(AutoModeDecision::Allow, AutoModeDecision::Unavailable);
     }
 }
