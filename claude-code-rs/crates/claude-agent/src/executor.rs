@@ -177,9 +177,20 @@ impl ToolExecutor {
                 let desc = format!("{}: {}", tool_name, serde_json::to_string(&input).unwrap_or_default());
                 let tn = tool_name.to_string();
                 let suggestions = perm.suggestions.clone();
-                let response = tokio::task::spawn_blocking(move || {
-                    PermissionChecker::prompt_user(&tn, &desc, &suggestions)
-                }).await.unwrap_or_else(|_| PermissionResponse::deny());
+                let perm_timeout = std::time::Duration::from_secs(300); // 5 min default
+                let response = match tokio::time::timeout(
+                    perm_timeout,
+                    tokio::task::spawn_blocking(move || {
+                        PermissionChecker::prompt_user(&tn, &desc, &suggestions)
+                    }),
+                ).await {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(_)) => PermissionResponse::deny(), // spawn panic
+                    Err(_) => {
+                        warn!("Permission prompt timed out after {}s for tool '{}'", perm_timeout.as_secs(), tool_name);
+                        PermissionResponse::deny()
+                    }
+                };
                 if !response.allowed {
                     // Fire PermissionDenied hook
                     if self.hooks.has_hooks(HookEvent::PermissionDenied) {

@@ -68,7 +68,7 @@ impl Tool for ReplTool {
         let (cmd, args): (&str, Vec<&str>) = match language {
             "python" => {
                 // Try python3 first, fall back to python
-                if which_exists("python3") {
+                if which_exists("python3").await {
                     ("python3", vec!["-c", code])
                 } else {
                     ("python", vec!["-c", code])
@@ -79,7 +79,7 @@ impl Tool for ReplTool {
                 #[cfg(windows)]
                 {
                     // On Windows, try bash (Git Bash / WSL), fall back to powershell
-                    if which_exists("bash") {
+                    if which_exists("bash").await {
                         ("bash", vec!["-c", code])
                     } else {
                         ("powershell", vec!["-NoProfile", "-Command", code])
@@ -183,7 +183,7 @@ impl Tool for ReplTool {
                     #[cfg(windows)]
                     {
                         use std::process::Command as StdCommand;
-                        let _ = StdCommand::new("taskkill").args(["/F", "/PID", &pid.to_string()]).status();
+                        let _ = StdCommand::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status();
                     }
                 }
                 Ok(ToolResult::error(format!(
@@ -195,11 +195,12 @@ impl Tool for ReplTool {
 }
 
 /// Check if a command exists on PATH.
-fn which_exists(cmd: &str) -> bool {
-    std::process::Command::new(cmd)
+async fn which_exists(cmd: &str) -> bool {
+    tokio::process::Command::new(cmd)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
+        .await
         .is_ok()
 }

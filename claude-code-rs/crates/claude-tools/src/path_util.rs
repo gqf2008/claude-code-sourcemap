@@ -4,12 +4,16 @@
 //! traversal attacks (e.g. `../../../etc/passwd`).
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Maximum tool output size in bytes (30 KB).
 pub const MAX_TOOL_OUTPUT_SIZE: usize = 30 * 1024;
 
 /// Maximum lines to return from a tool output.
 pub const MAX_TOOL_OUTPUT_LINES: usize = 2000;
+
+/// Cache for find_project_root results — avoids repeated git process spawns.
+static PROJECT_ROOT_CACHE: Mutex<Option<(PathBuf, Option<PathBuf>)>> = Mutex::new(None);
 
 /// Resolve a user-supplied file path relative to cwd.
 ///
@@ -62,9 +66,18 @@ fn normalize_path(path: &Path) -> PathBuf {
     result
 }
 
-/// Find the git root directory (if inside a git repo).
+/// Find the git root directory (cached per cwd to avoid repeated process spawns).
 fn find_project_root(cwd: &Path) -> Option<PathBuf> {
-    std::process::Command::new("git")
+    // Check cache first
+    if let Ok(guard) = PROJECT_ROOT_CACHE.lock() {
+        if let Some((cached_cwd, cached_root)) = guard.as_ref() {
+            if cached_cwd == cwd {
+                return cached_root.clone();
+            }
+        }
+    }
+
+    let result = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
         .output()
@@ -77,7 +90,14 @@ fn find_project_root(cwd: &Path) -> Option<PathBuf> {
             } else {
                 None
             }
-        })
+        });
+
+    // Update cache
+    if let Ok(mut guard) = PROJECT_ROOT_CACHE.lock() {
+        *guard = Some((cwd.to_path_buf(), result.clone()));
+    }
+
+    result
 }
 
 // ── Tool output truncation ──────────────────────────────────────────────────
@@ -104,9 +124,14 @@ pub fn truncate_tool_output(output: &str) -> String {
 
     // Byte limit
     if line_truncated.len() > MAX_TOOL_OUTPUT_SIZE {
-        let truncated = &line_truncated[..MAX_TOOL_OUTPUT_SIZE];
+        // Find valid UTF-8 char boundary at or before MAX_TOOL_OUTPUT_SIZE
+        let mut safe_end = MAX_TOOL_OUTPUT_SIZE;
+        while safe_end > 0 && !line_truncated.is_char_boundary(safe_end) {
+            safe_end -= 1;
+        }
+        let truncated = &line_truncated[..safe_end];
         // Find last newline to avoid cutting mid-line
-        let cut_point = truncated.rfind('\n').unwrap_or(MAX_TOOL_OUTPUT_SIZE);
+        let cut_point = truncated.rfind('\n').unwrap_or(safe_end);
         format!(
             "{}\n\n… (output truncated at {} bytes, {} total)",
             &line_truncated[..cut_point],

@@ -45,9 +45,18 @@ impl McpClient {
             .with_context(|| format!("MCP initialize failed for '{}'", config.name))?;
 
         let capabilities: ServerCapabilities = serde_json::from_value(
-            init_result.get("capabilities").cloned().unwrap_or(Value::Null),
+            init_result
+                .get("capabilities")
+                .cloned()
+                .unwrap_or(Value::Object(serde_json::Map::new())),
         )
-        .unwrap_or_default();
+        .with_context(|| {
+            format!(
+                "Failed to parse capabilities from MCP server '{}': {:?}",
+                config.name,
+                init_result.get("capabilities")
+            )
+        })?;
 
         let server_info: Option<ServerInfo> = init_result
             .get("serverInfo")

@@ -121,6 +121,23 @@ impl McpManager {
         Ok(all_tools)
     }
 
+    /// List tools from a specific server only (avoids cross-server pollution).
+    pub async fn list_tools_for(&self, server_name: &str) -> Result<Vec<(String, McpToolDef)>> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{}' not found or not running", server_name))?;
+
+        let tools = client.list_tools().await?;
+        Ok(tools
+            .into_iter()
+            .map(|t| {
+                let prefixed = format_mcp_tool_name(server_name, &t.name);
+                (prefixed, t)
+            })
+            .collect())
+    }
+
     /// Call a tool by its prefixed name (`mcp__server__tool`).
     pub async fn call_tool(
         &self,
@@ -360,11 +377,31 @@ pub fn discover_mcp_configs(cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
         paths.push(project);
     }
 
-    // User-level: ~/.claude/.mcp.json
+    // Project-level: <cwd>/.claude/mcp.json
+    let project_claude = cwd.join(".claude").join("mcp.json");
+    if project_claude.exists() {
+        paths.push(project_claude);
+    }
+
+    // Walk up ancestors for .claude/mcp.json (stop at filesystem root)
+    let mut ancestor = cwd.parent();
+    while let Some(dir) = ancestor {
+        let ancestor_path = dir.join(".claude").join("mcp.json");
+        if ancestor_path.exists() {
+            paths.push(ancestor_path);
+        }
+        ancestor = dir.parent();
+    }
+
+    // User-level: ~/.claude/.mcp.json (legacy) and ~/.claude/mcp.json
     if let Some(home) = dirs::home_dir() {
-        let user = home.join(".claude").join(".mcp.json");
-        if user.exists() {
-            paths.push(user);
+        let user_legacy = home.join(".claude").join(".mcp.json");
+        if user_legacy.exists() {
+            paths.push(user_legacy);
+        }
+        let user_new = home.join(".claude").join("mcp.json");
+        if user_new.exists() && !paths.contains(&user_new) {
+            paths.push(user_new);
         }
     }
 

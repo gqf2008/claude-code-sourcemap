@@ -198,10 +198,12 @@ impl Tool for GrepTool {
                     // Line-by-line matching
                     let lines: Vec<&str> = content.lines().collect();
                     let mut file_hits = Vec::new();
+                    let mut file_match_count = 0usize;
 
                     for (num, line) in lines.iter().enumerate() {
                         if regex.is_match(line) {
                             total_matches += 1;
+                            file_match_count += 1;
 
                             match output_mode.as_str() {
                                 "files_with_matches" => {
@@ -241,13 +243,10 @@ impl Tool for GrepTool {
                         }
                     }
 
-                    if output_mode == "count" && total_matches > 0 {
-                        let file_match_count = lines.iter().filter(|l| regex.is_match(l)).count();
-                        if file_match_count > 0 {
-                            file_count += 1;
-                            results.push(format!("{}:{}", path.display(), file_match_count));
-                            if results.len() >= max_results { break 'outer; }
-                        }
+                    if output_mode == "count" && file_match_count > 0 {
+                        file_count += 1;
+                        results.push(format!("{}:{}", path.display(), file_match_count));
+                        if results.len() >= max_results { break 'outer; }
                     } else if !file_hits.is_empty() {
                         file_count += 1;
                         results.extend(file_hits);
