@@ -21,3 +21,4 @@ pub mod system_prompt;
 pub mod plugin;
 pub mod memory_extractor;
 pub mod bus_adapter;
+pub mod swarm;
