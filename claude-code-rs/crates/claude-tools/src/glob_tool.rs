@@ -51,11 +51,12 @@ impl Tool for GlobTool {
         for entry in glob::glob(&full).map_err(|e| anyhow::anyhow!("Bad glob: {e}"))? {
             match entry {
                 Ok(path) => {
-                    // Resolve symlinks and verify the result stays within the search directory
-                    let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    let search_canonical = search_dir.canonicalize().unwrap_or_else(|_| search_dir.clone());
+                    // Both paths must canonicalize successfully — reject on failure
+                    // to prevent symlink-based boundary escape
+                    let Ok(resolved) = path.canonicalize() else { continue };
+                    let Ok(search_canonical) = search_dir.canonicalize() else { continue };
                     if resolved.starts_with(&search_canonical) {
-                        matches.push(path.display().to_string());
+                        matches.push(resolved.display().to_string());
                     }
                 }
                 Err(_) => continue,

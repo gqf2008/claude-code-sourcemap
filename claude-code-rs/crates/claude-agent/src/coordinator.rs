@@ -357,7 +357,9 @@ impl Tool for SendMessageTool {
         };
 
         // Check the agent is running
-        let task = self.tracker.get(&agent_id).await.unwrap();
+        let Some(task) = self.tracker.get(&agent_id).await else {
+            return Ok(ToolResult::error(format!("Agent '{}' no longer exists", agent_id)));
+        };
         if !matches!(task.status, AgentStatus::Running) {
             return Ok(ToolResult::error(format!(
                 "Agent '{}' is not running (status: {})",

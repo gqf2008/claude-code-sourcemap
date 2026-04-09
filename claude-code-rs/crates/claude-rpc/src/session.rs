@@ -77,7 +77,7 @@ impl RpcSession {
                         Err(TransportError::Json(e)) => {
                             error!("[{}] JSON parse error: {}", session_id, e);
                             let resp = Response::error(
-                                RequestId::Number(0),
+                                RequestId::Null,
                                 RpcError::new(error_codes::PARSE_ERROR, e.to_string()),
                             );
                             if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
@@ -142,6 +142,7 @@ impl RpcSession {
 
     /// Handle an inbound JSON-RPC message from the transport.
     async fn handle_inbound(&mut self, session_id: &str, raw: RawMessage) {
+        let fallback_id = raw.id.clone();
         match raw.classify() {
             Ok(Message::Request(req)) => {
                 let request_id = req.id.clone();
@@ -180,7 +181,10 @@ impl RpcSession {
                 warn!("[{}] Unexpected response from client", session_id);
             }
             Err(rpc_err) => {
-                let resp = Response::error(RequestId::Number(0), rpc_err);
+                let resp = Response::error(
+                    fallback_id.unwrap_or(RequestId::Null),
+                    rpc_err,
+                );
                 if let Err(we) = self.transport.write_message(&RawMessage::from(resp)).await {
                     debug!("[{}] Failed to write classify error response: {}", session_id, we);
                 }

@@ -184,9 +184,18 @@ impl Tool for WebFetchTool {
 
         let mut req = client.get(url);
 
-        // Custom headers
+        // Custom headers (with blocklist for security-sensitive headers)
+        const BLOCKED_HEADERS: &[&str] = &[
+            "host", "authorization", "cookie", "set-cookie",
+            "proxy-authorization", "x-forwarded-for", "x-real-ip",
+            "transfer-encoding", "content-length", "connection",
+        ];
         if let Some(headers) = input["headers"].as_object() {
             for (k, v) in headers {
+                if BLOCKED_HEADERS.iter().any(|&b| k.eq_ignore_ascii_case(b)) {
+                    tracing::warn!("Blocked security-sensitive header: {}", k);
+                    continue;
+                }
                 if let Some(val) = v.as_str() {
                     req = req.header(k.as_str(), val);
                 }

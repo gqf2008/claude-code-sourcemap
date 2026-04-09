@@ -205,9 +205,12 @@ pub fn resolve_symlink_safe(path: &Path, boundary: &Path) -> anyhow::Result<Path
                 path.display()
             );
         }
+        // Save parent BEFORE resolving — for relative symlinks, the base
+        // must be the directory containing the current link, not the original path
+        let base = current.parent().unwrap_or(Path::new(".")).to_path_buf();
         current = std::fs::read_link(&current)?;
         if current.is_relative() {
-            current = path.parent().unwrap_or(Path::new(".")).join(&current);
+            current = base.join(&current);
         }
     }
 

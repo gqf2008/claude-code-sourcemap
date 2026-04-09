@@ -221,9 +221,15 @@ impl Settings {
     /// entries are injected before auth resolution, allowing proxy configs
     /// like `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` to take effect.
     pub fn apply_env(&self) {
+        const SECRET_KEYWORDS: &[&str] = &[
+            "KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "PRIVATE",
+        ];
         for (key, value) in &self.env {
             if !key.is_empty() {
-                debug!("Injecting env from settings: {}={}", key, if key.contains("KEY") || key.contains("TOKEN") { "****" } else { value.as_str() });
+                let upper = key.to_uppercase();
+                let is_secret = SECRET_KEYWORDS.iter().any(|kw| upper.contains(kw));
+                let display_val = if is_secret { "****" } else { value.as_str() };
+                debug!("Injecting env from settings: {key}={display_val}");
                 std::env::set_var(key, value);
             }
         }

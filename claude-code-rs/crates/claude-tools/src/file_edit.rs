@@ -43,7 +43,7 @@ fn file_state_cache() -> &'static Mutex<HashMap<String, FileState>> {
 /// Check if a file has been modified externally since we last saw it.
 fn check_external_modification(path: &std::path::Path, content: &str) -> Option<String> {
     let key = path.to_string_lossy().to_string();
-    let cache = file_state_cache().lock().ok()?;
+    let cache = file_state_cache().lock().unwrap_or_else(|p| p.into_inner());
 
     if let Some(cached) = cache.get(&key) {
         let current = FileState::from_content(content, path);
@@ -60,9 +60,8 @@ fn check_external_modification(path: &std::path::Path, content: &str) -> Option<
 /// Update the file state cache after a successful read or edit.
 fn update_file_state(path: &std::path::Path, content: &str) {
     let key = path.to_string_lossy().to_string();
-    if let Ok(mut cache) = file_state_cache().lock() {
-        cache.insert(key, FileState::from_content(content, path));
-    }
+    let mut cache = file_state_cache().lock().unwrap_or_else(|p| p.into_inner());
+    cache.insert(key, FileState::from_content(content, path));
 }
 
 /// Count lines added and removed between old and new content.

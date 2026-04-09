@@ -83,7 +83,9 @@ pub(super) async fn run_shell_hook(
 
     // Write context JSON to stdin
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(ctx_json.as_bytes()).await.ok();
+        if let Err(e) = stdin.write_all(ctx_json.as_bytes()).await {
+            tracing::warn!("Failed to write hook context to stdin: {}", e);
+        }
         // Drop stdin to signal EOF
     }
 

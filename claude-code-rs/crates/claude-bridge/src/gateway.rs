@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use claude_bus::bus::BusHandle;
 use claude_bus::events::{AgentNotification, AgentRequest};
 
-use crate::adapter::{AdapterResult, ChannelAdapter};
+use crate::adapter::{AdapterError, AdapterResult, ChannelAdapter};
 use crate::config::BridgeConfig;
 use crate::formatter::MessageFormatter;
 use crate::message::{ChannelId, InboundMessage};
@@ -75,12 +75,15 @@ impl ChannelGateway {
     }
 
     /// Register a channel adapter.
-    pub fn register_adapter(&mut self, adapter: Box<dyn ChannelAdapter>) {
+    ///
+    /// Must be called before `run()` — returns error if adapters are already shared.
+    pub fn register_adapter(&mut self, adapter: Box<dyn ChannelAdapter>) -> AdapterResult<()> {
         let platform = adapter.platform().to_string();
-        info!("Registered adapter: {}", platform);
-        Arc::get_mut(&mut self.adapters)
-            .expect("register_adapter must be called before run()")
-            .insert(platform, Arc::new(adapter));
+        info!("Registered adapter: {platform}");
+        let adapters = Arc::get_mut(&mut self.adapters)
+            .ok_or_else(|| AdapterError::Internal("register_adapter must be called before run()".into()))?;
+        adapters.insert(platform, Arc::new(adapter));
+        Ok(())
     }
 
     /// Start all registered adapters and begin message routing.
@@ -92,19 +95,18 @@ impl ChannelGateway {
         };
 
         // Start all adapters
-        for (platform, adapter) in Arc::get_mut(&mut self.adapters)
-            .expect("run() must not be called concurrently")
-            .iter_mut()
-        {
-            info!("Starting adapter: {}", platform);
-            Arc::get_mut(adapter)
-                .expect("adapter must not be shared yet")
-                .start(ctx.clone()).await?;
+        let adapters_mut = Arc::get_mut(&mut self.adapters)
+            .ok_or_else(|| AdapterError::Internal("run() must not be called concurrently".into()))?;
+        for (platform, adapter) in adapters_mut.iter_mut() {
+            info!("Starting adapter: {platform}");
+            let adapter_mut = Arc::get_mut(adapter)
+                .ok_or_else(|| AdapterError::Internal(format!("adapter '{platform}' must not be shared yet")))?;
+            adapter_mut.start(ctx.clone()).await?;
         }
 
         // Process inbound messages
         let mut inbound_rx = self.inbound_rx.take()
-            .expect("Gateway can only be run once");
+            .ok_or_else(|| AdapterError::Internal("Gateway can only be run once".into()))?;
 
         let router = Arc::clone(&self.router);
         let adapters = Arc::clone(&self.adapters);

@@ -199,12 +199,16 @@ pub mod error_codes {
 
 // ── Request ID ───────────────────────────────────────────────────────────────
 
-/// JSON-RPC request identifier — can be a number or string.
+/// JSON-RPC request identifier — can be a number, string, or null.
+///
+/// Per JSON-RPC 2.0 spec, the `id` in error responses MUST be `null`
+/// when the request `id` could not be determined (e.g., parse errors).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
     Number(i64),
     String(String),
+    Null,
 }
 
 impl From<i64> for RequestId {
@@ -234,8 +238,9 @@ impl From<&str> for RequestId {
 impl std::fmt::Display for RequestId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Number(n) => write!(f, "{}", n),
-            Self::String(s) => write!(f, "{}", s),
+            Self::Number(n) => write!(f, "{n}"),
+            Self::String(s) => write!(f, "{s}"),
+            Self::Null => write!(f, "null"),
         }
     }
 }

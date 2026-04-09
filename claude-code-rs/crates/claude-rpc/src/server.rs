@@ -136,9 +136,16 @@ impl RpcServer {
                             let count = Arc::clone(&self.session_count);
                             count.fetch_add(1, Ordering::Relaxed);
                             tokio::spawn(async move {
+                                // Drop guard ensures count is decremented even on panic
+                                struct SessionGuard(Arc<AtomicUsize>, String);
+                                impl Drop for SessionGuard {
+                                    fn drop(&mut self) {
+                                        self.0.fetch_sub(1, Ordering::Relaxed);
+                                        info!("[{}] Session closed", self.1);
+                                    }
+                                }
+                                let _guard = SessionGuard(count, session_id);
                                 session.run().await;
-                                count.fetch_sub(1, Ordering::Relaxed);
-                                info!("[{}] Session closed", session_id);
                             });
                         }
                         Err(e) => {
@@ -200,7 +207,7 @@ async fn authenticate_connection(
     if is_auth && token == Some(expected_token) {
         // Send success response
         let resp = Response::success(
-            msg.id.unwrap_or(crate::protocol::RequestId::Number(0)),
+            msg.id.unwrap_or(crate::protocol::RequestId::Null),
             serde_json::json!({"authenticated": true}),
         );
         transport.write_message(&RawMessage::from(resp)).await
@@ -209,7 +216,7 @@ async fn authenticate_connection(
     } else {
         // Send auth failure
         let resp = Response::error(
-            msg.id.unwrap_or(crate::protocol::RequestId::Number(0)),
+            msg.id.unwrap_or(crate::protocol::RequestId::Null),
             RpcError::new(error_codes::INVALID_PARAMS, "Authentication failed: invalid or missing token"),
         );
         transport.write_message(&RawMessage::from(resp)).await

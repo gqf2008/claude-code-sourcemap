@@ -19,6 +19,8 @@ pub enum AdapterError {
     Network(#[from] reqwest::Error),
     #[error("Serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("Internal error: {0}")]
+    Internal(String),
     #[error("Adapter error: {0}")]
     Other(String),
 }
