@@ -35,14 +35,19 @@ pub struct OAuthToken {
 }
 
 impl OAuthToken {
+    /// Check if the token is expired or will expire within the buffer period.
+    ///
+    /// Uses a 30-second buffer to avoid race conditions between the check and
+    /// the actual API call using the token.
     #[must_use] 
     pub fn is_expired(&self) -> bool {
+        const EXPIRY_BUFFER_SECS: u64 = 30;
         if let Some(expires_at) = self.expires_at {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            now >= expires_at
+            now + EXPIRY_BUFFER_SECS >= expires_at
         } else {
             false
         }
@@ -262,41 +267,52 @@ fn extract_port(uri: &str) -> Option<u16> {
         .parse().ok()
 }
 
-/// Wait for a single HTTP GET on the listener, extract the `code` query param,
-/// and respond with a success page.
+/// Wait for an HTTP GET containing `code` query param, tolerating preflight
+/// and extraneous connections (e.g. browser favicon fetches).
 async fn wait_for_code(listener: &tokio::net::TcpListener) -> anyhow::Result<String> {
-    let (mut stream, _) = listener.accept().await?;
-
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
-    let request = String::from_utf8_lossy(&buf[..n]);
 
-    // Parse: GET /callback?code=ABC&state=XYZ HTTP/1.1
-    let path = request.split_whitespace().nth(1).unwrap_or("");
-    let code = path
-        .split('?')
-        .nth(1)
-        .and_then(|qs| {
+    // Accept up to 10 connections — some may be preflights or favicon requests
+    for _ in 0..10 {
+        let (mut stream, _) = listener.accept().await?;
+        let mut buf = vec![0u8; 4096];
+        let n = match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read(&mut buf),
+        ).await {
+            Ok(Ok(n)) => n,
+            _ => continue, // timeout or read error — try next connection
+        };
+
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let path = request.split_whitespace().nth(1).unwrap_or("");
+
+        // Check if this request contains the code parameter
+        let code = path.split('?').nth(1).and_then(|qs| {
             qs.split('&').find_map(|pair| {
                 let (key, val) = pair.split_once('=')?;
-                
-                
                 if key == "code" { Some(val.to_string()) } else { None }
             })
-        })
-        .ok_or_else(|| anyhow::anyhow!("No 'code' parameter in OAuth callback"))?;
+        });
 
-    let body = "<html><body><h2>✓ Authorization successful!</h2><p>You can close this tab.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
+        if let Some(code) = code {
+            let body = "<html><body><h2>✓ Authorization successful!</h2><p>You can close this tab.</p></body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+            return Ok(code);
+        }
 
-    Ok(code)
+        // Not the callback — respond with 404 and try next connection
+        let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.flush().await;
+    }
+
+    anyhow::bail!("Failed to receive OAuth authorization code after 10 connection attempts")
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +379,30 @@ mod tests {
             ..token.clone()
         };
         assert!(!future.is_expired());
+    }
+
+    #[test]
+    fn test_token_expiry_buffer() {
+        // Token that expires in 15 seconds should be considered expired (30s buffer)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let soon = OAuthToken {
+            access_token: "test".into(),
+            token_type: "Bearer".into(),
+            refresh_token: None,
+            expires_at: Some(now + 15),
+            scopes: vec![],
+        };
+        assert!(soon.is_expired(), "Token expiring in 15s should be expired with 30s buffer");
+
+        // Token that expires in 60 seconds should NOT be expired
+        let later = OAuthToken {
+            expires_at: Some(now + 60),
+            ..soon
+        };
+        assert!(!later.is_expired(), "Token expiring in 60s should not be expired");
     }
 
     #[test]

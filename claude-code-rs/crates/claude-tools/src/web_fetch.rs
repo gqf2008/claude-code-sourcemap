@@ -1,6 +1,70 @@
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
+use std::net::IpAddr;
+
+/// Validate a URL for SSRF protection.
+///
+/// Blocks: file://, ftp://, private/link-local IPs, localhost, metadata endpoints.
+fn validate_url(url: &str) -> Result<(), String> {
+    // Only allow http and https schemes
+    let lower = url.to_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err(format!("Blocked URL scheme — only http:// and https:// are allowed: {url}"));
+    }
+
+    // Extract host from URL: scheme://[user@]host[:port]/path
+    let after_scheme = if lower.starts_with("https://") { &url[8..] } else { &url[7..] };
+    let host_port = after_scheme.split('/').next().unwrap_or("");
+    // Strip user@ if present
+    let host_port = host_port.rsplit('@').next().unwrap_or(host_port);
+    // Strip port
+    let host = if host_port.starts_with('[') {
+        // IPv6: [::1]:8080
+        host_port.trim_start_matches('[').split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+
+    if host.is_empty() {
+        return Err("Invalid URL — no host specified".to_string());
+    }
+
+    // Block localhost and common internal hostnames
+    let host_lower = host.to_lowercase();
+    if host_lower == "localhost" || host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
+        return Err(format!("Blocked URL — cannot fetch localhost/internal hosts: {host}"));
+    }
+
+    // Block cloud metadata endpoints
+    if host == "169.254.169.254" || host_lower == "metadata.google.internal" {
+        return Err("Blocked URL — cloud metadata endpoint".to_string());
+    }
+
+    // Block private/link-local IP ranges
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        let is_private = match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback()             // 127.0.0.0/8
+                || v4.is_private()           // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                || v4.is_link_local()        // 169.254.0.0/16
+                || v4.is_unspecified()       // 0.0.0.0
+                || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64 // 100.64.0.0/10 (CGNAT)
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()             // ::1
+                || v6.is_unspecified()       // ::
+                || v6.segments()[0] == 0xfe80 // link-local
+                || v6.segments()[0] == 0xfc00 || v6.segments()[0] == 0xfd00 // ULA
+            }
+        };
+        if is_private {
+            return Err(format!("Blocked URL — cannot fetch private/internal IPs: {ip}"));
+        }
+    }
+
+    Ok(())
+}
 
 /// Strip HTML tags and convert to basic markdown.
 fn html_to_markdown(html: &str) -> String {
@@ -172,6 +236,12 @@ impl Tool for WebFetchTool {
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
         let url = input["url"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'url'"))?;
+
+        // SSRF protection: block private/internal networks and non-HTTP schemes
+        if let Err(msg) = validate_url(url) {
+            return Ok(ToolResult::error(msg));
+        }
+
         let max_len = (input["max_length"].as_u64().unwrap_or(5000) as usize).min(20_000);
         let raw = input["raw"].as_bool().unwrap_or(false);
         let extract_main = input["extract_main_content"].as_bool().unwrap_or(false);
@@ -364,5 +434,54 @@ mod tests {
         let html = "Just plain text without tags";
         let content = extract_main_content(html);
         assert_eq!(content, "Just plain text without tags");
+    }
+
+    // ── validate_url (SSRF protection) ──────────────────────────
+
+    #[test]
+    fn allows_public_http_urls() {
+        assert!(validate_url("https://example.com/page").is_ok());
+        assert!(validate_url("http://example.com").is_ok());
+        assert!(validate_url("https://8.8.8.8/dns").is_ok());
+    }
+
+    #[test]
+    fn blocks_non_http_schemes() {
+        assert!(validate_url("file:///etc/passwd").is_err());
+        assert!(validate_url("ftp://example.com").is_err());
+        assert!(validate_url("javascript:alert(1)").is_err());
+        assert!(validate_url("data:text/html,<h1>x</h1>").is_err());
+    }
+
+    #[test]
+    fn blocks_localhost() {
+        assert!(validate_url("http://localhost/api").is_err());
+        assert!(validate_url("http://127.0.0.1/api").is_err());
+        assert!(validate_url("http://127.0.0.2").is_err());
+    }
+
+    #[test]
+    fn blocks_private_ips() {
+        assert!(validate_url("http://10.0.0.1/api").is_err());
+        assert!(validate_url("http://172.16.0.1").is_err());
+        assert!(validate_url("http://192.168.1.1").is_err());
+        assert!(validate_url("http://0.0.0.0").is_err());
+    }
+
+    #[test]
+    fn blocks_link_local() {
+        assert!(validate_url("http://169.254.169.254/metadata").is_err());
+    }
+
+    #[test]
+    fn blocks_metadata_endpoints() {
+        assert!(validate_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_url("http://metadata.google.internal/computeMetadata/").is_err());
+    }
+
+    #[test]
+    fn blocks_internal_hostnames() {
+        assert!(validate_url("http://myapp.local/api").is_err());
+        assert!(validate_url("http://service.internal/rpc").is_err());
     }
 }

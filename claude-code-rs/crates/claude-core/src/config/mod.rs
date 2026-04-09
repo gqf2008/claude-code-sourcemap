@@ -61,6 +61,7 @@ impl std::fmt::Display for SettingsSource {
 /// | Local   | `$CWD/.claude/settings.local.json`       |
 /// | CLI     | command-line flags / env vars (runtime)   |
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(clippy::unsafe_derive_deserialize)] // apply_env() uses unsafe set_var; safe at single-threaded init
 pub struct Settings {
     /// Anthropic API key (usually set via `ANTHROPIC_API_KEY` env var).
     #[serde(default)]
@@ -220,19 +221,32 @@ impl Settings {
     /// This mirrors the TS Claude Code behavior where `settings.json` `env`
     /// entries are injected before auth resolution, allowing proxy configs
     /// like `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` to take effect.
-    pub fn apply_env(&self) {
+    ///
+    /// Returns a list of (key, previous_value) pairs so callers can restore
+    /// the original environment if needed.
+    ///
+    /// # Safety
+    /// `std::env::set_var` is not thread-safe in Rust ≥ 1.66 (deprecated).
+    /// This method should only be called during startup, before spawning
+    /// any worker threads.
+    pub fn apply_env(&self) -> Vec<(String, Option<String>)> {
         const SECRET_KEYWORDS: &[&str] = &[
             "KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "PRIVATE",
         ];
+        let mut previous = Vec::with_capacity(self.env.len());
         for (key, value) in &self.env {
             if !key.is_empty() {
                 let upper = key.to_uppercase();
                 let is_secret = SECRET_KEYWORDS.iter().any(|kw| upper.contains(kw));
                 let display_val = if is_secret { "****" } else { value.as_str() };
                 debug!("Injecting env from settings: {key}={display_val}");
-                std::env::set_var(key, value);
+                let old = std::env::var(key).ok();
+                previous.push((key.clone(), old));
+                // SAFETY: must be called single-threaded during init
+                unsafe { std::env::set_var(key, value); }
             }
         }
+        previous
     }
 
     /// Load settings from the legacy XDG path only (backward-compatible).

@@ -560,18 +560,26 @@ pub async fn run(
                 // Submit via bus (preferred) or direct engine (fallback)
                 if let Some(ref mut client) = client {
                     // Bus-based path: send request → render notifications
-                    let request = if images.is_empty() {
-                        AgentRequest::Submit { text, images: vec![] }
-                    } else {
-                        let img_count = images.len();
+                    let bus_images: Vec<claude_bus::ImageAttachment> = images.iter().filter_map(|block| {
+                        if let claude_core::message::ContentBlock::Image { source } = block {
+                            Some(claude_bus::ImageAttachment {
+                                data: source.data.clone(),
+                                media_type: source.media_type.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }).collect();
+
+                    if !bus_images.is_empty() {
                         println!(
                             "\x1b[2m📎 {} image{} attached\x1b[0m",
-                            img_count,
-                            if img_count == 1 { "" } else { "s" }
+                            bus_images.len(),
+                            if bus_images.len() == 1 { "" } else { "s" }
                         );
-                        AgentRequest::Submit { text, images: vec![] }
-                        // TODO: convert ContentBlock images to ImageAttachment for bus
-                    };
+                    }
+
+                    let request = AgentRequest::Submit { text, images: bus_images };
 
                     if let Err(e) = client.send_request(request) {
                         eprintln!("\x1b[31mFailed to send request: {}\x1b[0m", e);

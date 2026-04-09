@@ -61,6 +61,9 @@ impl StdioTransport {
     }
 
     /// Send a JSON-RPC request and wait for the corresponding response.
+    ///
+    /// Times out after 60 seconds to prevent indefinite blocking if the server
+    /// dies or stops responding.
     pub async fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = JsonRpcRequest::new(id, method, params);
@@ -70,25 +73,37 @@ impl StdioTransport {
         self.stdin.write_all(b"\n").await?;
         self.stdin.flush().await?;
 
-        loop {
-            let msg = self.read_message().await?;
-            match msg {
-                JsonRpcMessage::Response(resp) if resp.id == Some(id) => {
-                    if let Some(error) = resp.error {
-                        anyhow::bail!(
-                            "MCP error {}: {} {}",
-                            error.code,
-                            error.message,
-                            error.data.map(|d| d.to_string()).unwrap_or_default()
-                        );
+        const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+        let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            loop {
+                let msg = self.read_message().await?;
+                match msg {
+                    JsonRpcMessage::Response(resp) if resp.id == Some(id) => {
+                        if let Some(error) = resp.error {
+                            anyhow::bail!(
+                                "MCP error {}: {} {}",
+                                error.code,
+                                error.message,
+                                error.data.map(|d| d.to_string()).unwrap_or_default()
+                            );
+                        }
+                        return Ok(resp.result.unwrap_or(Value::Null));
                     }
-                    return Ok(resp.result.unwrap_or(Value::Null));
+                    JsonRpcMessage::Notification(_) => continue,
+                    other => {
+                        tracing::warn!("MCP protocol desync: expected response id={}, got {:?}", id, other);
+                        anyhow::bail!("MCP protocol desynchronization: unexpected message while waiting for id={}", id);
+                    }
                 }
-                JsonRpcMessage::Notification(_) => continue,
-                other => {
-                    tracing::warn!("MCP protocol desync: expected response id={}, got {:?}", id, other);
-                    anyhow::bail!("MCP protocol desynchronization: unexpected message while waiting for id={}", id);
-                }
+            }
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_elapsed) => {
+                anyhow::bail!("MCP request timed out after {}s: method={}", REQUEST_TIMEOUT.as_secs(), method)
             }
         }
     }

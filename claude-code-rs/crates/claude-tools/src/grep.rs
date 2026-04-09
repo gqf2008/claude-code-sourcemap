@@ -92,8 +92,8 @@ impl Tool for GrepTool {
 
         let search_path: PathBuf = match input["path"].as_str() {
             Some(p) => {
-                let pa = std::path::Path::new(p);
-                if pa.is_absolute() { pa.to_path_buf() } else { context.cwd.join(pa) }
+                // Validate path stays within project boundary
+                crate::path_util::resolve_path(p, &context.cwd)?
             }
             None => context.cwd.clone(),
         };

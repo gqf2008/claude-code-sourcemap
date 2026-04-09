@@ -169,8 +169,8 @@ async fn main() -> anyhow::Result<()> {
 
     let settings = config::load_settings()?;
 
-    // Inject env vars from settings.json before auth resolution
-    settings.apply_env();
+    // Inject env vars from settings.json before auth resolution (single-threaded init)
+    let _env_backup = settings.apply_env();
 
     let cwd = match cli.cwd {
         Some(ref dir) => std::path::PathBuf::from(dir),
