@@ -226,7 +226,7 @@ pub(super) fn categorize_error(msg: &str) -> (&'static str, Option<&'static str>
 
 /// Spawn a background thread that listens for ESC key press and triggers abort.
 /// Returns a guard that stops the listener when dropped.
-pub(super) fn spawn_esc_listener(abort: AbortSignal) -> EscListenerGuard {
+pub(crate) fn spawn_esc_listener(abort: AbortSignal) -> EscListenerGuard {
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop2 = stop.clone();
     let handle = std::thread::spawn(move || {
@@ -250,7 +250,7 @@ pub(super) fn spawn_esc_listener(abort: AbortSignal) -> EscListenerGuard {
     EscListenerGuard { stop, handle: Some(handle) }
 }
 
-pub(super) struct EscListenerGuard {
+pub(crate) struct EscListenerGuard {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }

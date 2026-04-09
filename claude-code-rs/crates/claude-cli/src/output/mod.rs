@@ -4,6 +4,7 @@ mod stream;
 
 pub use renderer::OutputRenderer;
 pub use stream::print_stream;
+pub(crate) use helpers::spawn_esc_listener;
 
 use claude_agent::engine::QueryEngine;
 use claude_agent::task_runner::{run_task, CompletionReason};

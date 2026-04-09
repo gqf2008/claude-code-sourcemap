@@ -14,7 +14,7 @@ use rustyline::{Editor, Helper};
 
 use crate::commands::{CommandResult, SlashCommand};
 use crate::config;
-use crate::output::{print_stream, OutputRenderer};
+use crate::output::{print_stream, spawn_esc_listener, OutputRenderer};
 use crate::repl_commands::*;
 
 /// Timeout for command-response notification loops (e.g. ClearHistory, SetModel).
@@ -522,6 +522,8 @@ pub async fn run(
                 // Non-slash input: support multiline
                 // 1. Trailing `\` continues on next line
                 // 2. Triple-backtick ``` starts a code block (read until closing ```)
+                // 3. Unmatched brackets {/[/( auto-continue until balanced
+                // 4. Empty line in continuation mode submits
                 let mut input_buf = line;
 
                 // Check if input starts with ``` (code block mode)
@@ -536,13 +538,32 @@ pub async fn run(
                         input_buf.push('\n');
                     }
                 } else {
-                    // Standard trailing-backslash continuation
-                    while input_buf.ends_with('\\') {
-                        input_buf.pop(); // remove trailing backslash
-                        input_buf.push('\n');
-                        match rl.readline(". ") {
-                            Ok(cont) => input_buf.push_str(&cont),
-                            _ => break,
+                    // Auto-continuation: trailing backslash OR unmatched brackets
+                    loop {
+                        let needs_backslash_cont = input_buf.ends_with('\\');
+                        let bracket_depth = count_bracket_depth(&input_buf);
+                        if needs_backslash_cont {
+                            input_buf.pop(); // remove trailing backslash
+                            input_buf.push('\n');
+                            match rl.readline(". ") {
+                                Ok(cont) => input_buf.push_str(&cont),
+                                _ => break,
+                            }
+                        } else if bracket_depth > 0 {
+                            // Unmatched open brackets — auto-continue
+                            input_buf.push('\n');
+                            match rl.readline("… ") {
+                                Ok(cont) => {
+                                    // Empty line in bracket mode = submit what we have
+                                    if cont.is_empty() {
+                                        break;
+                                    }
+                                    input_buf.push_str(&cont);
+                                }
+                                _ => break,
+                            }
+                        } else {
+                            break;
                         }
                     }
                 }
@@ -599,14 +620,26 @@ pub async fn run(
                     if let Err(e) = client.send_request(request) {
                         eprintln!("\x1b[31mFailed to send request: {}\x1b[0m", e);
                     } else {
+                        // ESC listener for abort during bus-based rendering
+                        let _esc_guard = spawn_esc_listener(engine.abort_signal());
                         // Render notifications until TurnComplete (10min per-notification timeout)
                         let mut renderer = OutputRenderer::new(&model);
                         let render_timeout = Duration::from_secs(600);
                         while let Some(notification) = recv_with_timeout(client, render_timeout).await {
+                            if engine.abort_signal().is_aborted() {
+                                break;
+                            }
                             let done = renderer.render(notification, Some(engine.cost_tracker()));
                             if done {
                                 break;
                             }
+                        }
+                        // Handle abort in bus path (same as direct path)
+                        if engine.abort_signal().is_aborted() {
+                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                            engine.abort_signal().reset();
+                            let _ = engine.save_session().await;
+                            turns_since_save = 0;
                         }
                     }
                 } else {
@@ -776,6 +809,36 @@ fn truncate_path(path: &std::path::Path, max_len: usize) -> String {
     format!("…{}", tail)
 }
 
+/// Count unmatched open brackets in text. Returns positive for unmatched open brackets.
+/// Ignores brackets inside string literals (double-quoted) to avoid false continuations.
+fn count_bracket_depth(s: &str) -> i32 {
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for ch in s.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            match ch {
+                '{' | '[' | '(' => depth += 1,
+                '}' | ']' | ')' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    depth
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,5 +909,40 @@ mod tests {
             let after_at = pair.display.strip_prefix('@').unwrap_or(&pair.display);
             assert!(!after_at.starts_with('.'), "should skip hidden: {}", pair.display);
         }
+    }
+
+    // ── count_bracket_depth ─────────────────────────────────────────
+
+    #[test]
+    fn bracket_depth_empty() {
+        assert_eq!(count_bracket_depth(""), 0);
+        assert_eq!(count_bracket_depth("hello world"), 0);
+    }
+
+    #[test]
+    fn bracket_depth_balanced() {
+        assert_eq!(count_bracket_depth("fn main() { }"), 0);
+        assert_eq!(count_bracket_depth("[1, 2, 3]"), 0);
+        assert_eq!(count_bracket_depth("(a + b)"), 0);
+    }
+
+    #[test]
+    fn bracket_depth_unmatched_open() {
+        assert_eq!(count_bracket_depth("{"), 1);
+        assert_eq!(count_bracket_depth("fn main() {"), 1);
+        assert_eq!(count_bracket_depth("vec!["), 1);
+        assert_eq!(count_bracket_depth("{ {"), 2);
+    }
+
+    #[test]
+    fn bracket_depth_in_string_ignored() {
+        assert_eq!(count_bracket_depth(r#"let x = "{";"#), 0);
+        assert_eq!(count_bracket_depth(r#""[""#), 0);
+    }
+
+    #[test]
+    fn bracket_depth_negative_ignored() {
+        // Extra closing bracket — depth goes negative but we just return the value
+        assert_eq!(count_bracket_depth("}"), -1);
     }
 }
