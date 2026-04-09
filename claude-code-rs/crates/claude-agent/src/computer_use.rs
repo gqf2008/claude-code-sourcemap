@@ -106,6 +106,7 @@ impl Tool for CuToolBridge {
         Ok(ToolResult {
             content,
             is_error: mcp_result.is_error,
+            structured_output: None,
         })
     }
 }

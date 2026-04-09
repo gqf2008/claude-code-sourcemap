@@ -42,6 +42,7 @@ pub mod worktree;
 // ── Interaction tools ───────────────────────────────────────────────────────
 pub mod ask_user;
 pub mod send_message;
+pub mod brief;
 
 // ── Agent / orchestration tools ─────────────────────────────────────────────
 pub mod task;
@@ -55,10 +56,13 @@ pub mod config_tool;
 pub mod context;
 pub mod sleep;
 pub mod tool_search;
+pub mod synthetic_output;
 
 // ── MCP (Model Context Protocol) ────────────────────────────────────────────
 #[cfg(feature = "mcp")]
 pub mod mcp;
+#[cfg(feature = "mcp")]
+pub mod mcp_auth;
 
 // ── Model attribution & git diff ────────────────────────────────────────────
 pub mod attribution;
@@ -227,6 +231,7 @@ impl ToolRegistry {
         // Interaction (always included)
         registry.register(ask_user::AskUserTool);
         registry.register(send_message::SendUserMessageTool);
+        registry.register(brief::BriefTool);
 
         // Agent / orchestration (always included)
         registry.register(task::TaskCreateTool);
@@ -249,6 +254,8 @@ impl ToolRegistry {
         registry.register(tool_search::ToolSearchTool);
         registry.register(context::ContextInspectTool);
         registry.register(context::VerifyTool);
+        // Note: SyntheticOutputTool is registered by CLI when --print is used
+        // Note: McpAuthTool is registered dynamically for unauthenticated MCP servers
 
         // MCP resource tools require a manager — use register_mcp() to add them
         registry

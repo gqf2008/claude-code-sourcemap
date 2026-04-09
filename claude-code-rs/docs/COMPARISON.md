@@ -1,7 +1,7 @@
 # Rust 实现 vs JS 原版 — 深度对比分析
 
 > 对比项目：`claude-code-rs` (Rust) vs `restored-src` (JS/TS 原版)
-> 分析日期：2026-04-09
+> 分析日期：2026-04-10
 > JS 版本基准：`@anthropic-ai/claude-code` v2.1.88
 
 ---
@@ -10,15 +10,15 @@
 
 | 指标 | Rust 实现 | JS 原版 | 优势方 |
 |------|-----------|---------|--------|
-| **源文件数** | ~162 (.rs) | ~1,200+ (.ts/.tsx) | Rust (4x 更少) |
-| **代码行数** | ~52,900 | ~200,000+ (估算) | Rust (4x 更少) |
-| **测试数量** | 1,708 | 未知 | — |
-| **Crate/包数** | 9 crates | 1 大包 | — |
+| **源文件数** | 176 (.rs) | ~1,200+ (.ts/.tsx) | Rust (7x 更少) |
+| **代码行数** | ~57,300 | ~200,000+ (估算) | Rust (3.5x 更少) |
+| **测试数量** | 1,798 | 未知 | — |
+| **Crate/包数** | 10 crates | 1 大包 | — |
 | **循环依赖** | 0 | 大量 | Rust |
 | **unsafe 块** | 0 | N/A | Rust |
 | **生产 panic** | 0 | 未知 | Rust |
 | **最大单文件** | 1,598 行 (`session.rs`) | 4,684 行 (`main.tsx`) | Rust (3x 更小) |
-| **最大目录** | `claude-agent` (34 文件) | `utils/` (500+ 文件) | Rust |
+| **最大目录** | `claude-agent` (42 文件) | `utils/` (500+ 文件) | Rust |
 | **依赖数量** | 35 个工作区依赖 | 数百 (含 AWS/Azure/GCP SDK) | Rust |
 | **构建工具** | Cargo | Bun | — |
 
@@ -44,14 +44,15 @@ main.tsx (4,684行) → interactiveHelpers → Ink App → REPL → 各组件
 
 | Rust Crate | 职责 | 文件 | 测试 | 对应 JS 目录 |
 |------------|------|------|------|-------------|
-| `claude-core` | 基础类型、Tool trait、配置、权限 | 24 | 358 | `Tool.ts`, `types.ts`, `constants/` |
-| `claude-agent` | Agent 循环、hooks、权限、压缩 | 34 | 394 | `entrypoints/`, `utils/processUserInput/` |
-| `claude-tools` | 28+ 工具实现、ToolRegistry | 32 | 271 | `tools/` |
+| `claude-core` | 基础类型、Tool trait、配置、权限 | 25 | 464 | `Tool.ts`, `types.ts`, `constants/` |
+| `claude-agent` | Agent 循环、hooks、权限、压缩、蜂群 | 42 | 385 | `entrypoints/`, `utils/processUserInput/` |
+| `claude-tools` | 31+ 工具实现、ToolRegistry | 32 | 271 | `tools/` |
 | `claude-api` | HTTP 客户端、SSE 流、OAuth | 15 | 177 | `services/api/`, `query.ts` |
-| `claude-cli` | 二进制入口、REPL、CLI、UI | 26 | 231 | `main.tsx`, `commands/` |
+| `claude-cli` | 二进制入口、REPL、CLI、UI | 26 | 237 | `main.tsx`, `commands/` |
 | `claude-bridge` | 外部消息网关 (飞书/TG/Slack) | 11 | 52 | 无 (Rust 独有) |
 | `claude-rpc` | JSON-RPC 外部接口 (TCP/stdio) | 9 | 84 | 无 (Rust 独有) |
-| `claude-mcp` | MCP 服务器注册和生命周期 | 8 | 60 | `services/mcp/` |
+| `claude-mcp` | MCP 服务器注册、重连、健康监控 | 8 | 71 | `services/mcp/` |
+| `claude-computer-use` | Computer Use MCP 服务器 | 5 | 20 | `utils/computerUse/` |
 | `claude-bus` | 事件总线 (广播通知、mpsc) | 3 | 20 | 无 (架构差异) |
 
 ### 2.3 事件总线架构 (Rust 独有)
@@ -127,16 +128,19 @@ export interface Tool {
 
 | 类别 | Rust | JS | 差异 |
 |------|------|-----|------|
-| 文件 I/O | Read, Edit, Write, MultiEdit, Glob, Grep, LS | 同 + ListDir | ✅ 基本完整 |
+| 文件 I/O | Read, Edit, Write, MultiEdit, Glob, Grep, LS | 同 + ListDir | ✅ 完整 |
 | Shell | Bash, PowerShell, REPL | 同 | ✅ 完整 |
 | Web | WebFetch, WebSearch | 同 | ✅ 完整 |
-| 代码 | LSP, Notebook, DiffUI | 同 + ToolSearch | ⚠️ 缺 Search |
-| Git | Git, Worktree | 同 | ✅ 完整 |
-| 交互 | AskUser, SendUserMessage | 同 + SendUserFile | ⚠️ 部分缺失 |
-| Agent | Task CRUD+Stop, PlanMode, Skill, Agent | 同 + TeamCreate/Delete, Brief, Monitor | ⚠️ 缺 Swarm |
-| 管理 | Todo, Sleep, Config, Context, Verify | 同 + OverflowTest, CtxInspect | ⚠️ 部分缺失 |
-| MCP | ListMcpResources, ReadMcpResource, Prompts | 同 + Sampling | ✅ 基本完整 |
-| JS 独有工具 | — | WebBrowser, Workflow, Snip, PushNotification, Cron, TerminalCapture, SubscribePR, Tungsten, REPL (ant), SuggestBackgroundPR | ❌ 15+ 工具缺失 |
+| 代码 | LSP, Notebook, ToolSearch, DiffUI | 同 | ✅ 完整 |
+| Git | Git, GitStatus, Worktree | 同 | ✅ 完整 |
+| 交互 | AskUser, SendUserMessage | 同 + Brief | ⚠️ 缺 Brief |
+| Agent | Task CRUD+Stop, PlanMode, Skill, Dispatch, TeamCreate/Delete/Status | 同 + Brief + Monitor | ✅ 基本完整 |
+| 管理 | Todo R/W, Sleep, Config, Context, Verify | 同 + OverflowTest | ✅ 基本完整 |
+| MCP | ListResources, ReadResource, Prompts, Proxy, Elicitation, ResourceSub | 同 | ✅ 完整 |
+| Coordinator | SendMessage, TaskStop | 同 | ✅ 完整 |
+| Computer Use | CuToolBridge (MCP Server) | 原生模块 + MCP | ✅ 完整 (跨平台) |
+| Rust 独有 | GitTool, GitStatus, MultiEdit, LS, TodoRead, ContextInspect, Verify | — | Rust 领先 |
+| JS 独有工具 | — | Brief, SyntheticOutput, ScheduleCron, RemoteTrigger, McpAuth | ⚠️ 5 工具缺失 |
 
 ### 3.2 Agent 循环架构
 
@@ -154,12 +158,13 @@ pub struct QueryEngine {
     coordinator_mode: bool,
     allowed_tools: Vec<String>,
     cost_tracker: CostTracker,
-    auto_compact: Arc<Mutex<AutoCompactState>>,
+    auto_compact: Arc<Mutex<AutoCompactState>>,  // with CompactMetrics
     context_window: u64,
+    // Coordinator/Swarm: agent_tracker, notification_rx
 }
 ```
 
-**流程：** `submit()` → UserPromptSubmit hook → build ToolDefinitions → `query_stream()` → SSE → ToolUse → PermissionChecker → Executor → 自动压缩 → AgentEvent Stream
+**流程：** `submit()` → UserPromptSubmit hook → build ToolDefinitions → `query_stream()` → SSE → ToolUse → PermissionChecker (YOLO auto-mode) → Executor → 自动压缩 (with metrics) → AgentEvent Stream
 
 **代码量：** 585 行 (engine/mod.rs 核心模块)
 
@@ -206,7 +211,7 @@ async fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> Permissio
 }
 ```
 
-**权限模式：** Default | AcceptEdits | BypassAll | Plan | DontAsk
+**权限模式：** Default | AcceptEdits | BypassAll | Plan | DontAsk | Auto
 
 #### JS — 分散规则引擎
 
@@ -225,10 +230,10 @@ export function filterToolsByDenyRules<T>(tools: T[], ctx): T[] {
 
 | 方面 | Rust | JS |
 |------|------|-----|
-| **权限模式数** | 5 | 8+ |
-| **规则引擎** | Bash 风险分类器 (7 级) + 危险模式检测 | 复杂规则树 + Bash AST + 分类器 |
+| **权限模式数** | 6 | 8+ |
+| **规则引擎** | Bash 风险分类器 (7 级) + 危险模式检测 + YOLO 分类器 | 复杂规则树 + Bash AST + 分类器 |
 | **检查位置** | Tool trait 内 | 工具列表/调用前/API 请求时 |
-| **自动模式** | ⚠️ AcceptEdits 自动审批安全命令 | ✅ YOLO 分类器 + 自动审批 |
+| **自动模式** | ✅ Auto 模式 + 安全白名单 + 远程分类器 + 拒绝追踪 | ✅ YOLO 分类器 + 自动审批 |
 | **Bash 权限** | 风险分类 (80+ 命令模式) + sudo 处理 | 完整 AST 分析 + 危险命令检测 |
 | **危险模式** | ✅ dangerous pattern 检测 + strip | ✅ dangerousPatterns.ts |
 | **交互确认** | cliclack 弹窗 (含风险等级标签) | React 组件弹窗 |
@@ -295,7 +300,7 @@ components/   → 250+ React/Ink 组件
 | **构建产物** | 单二进制 | node_modules + 打包 | Rust |
 | **Clippy 警告** | 0 | 未知 | Rust |
 | **TODO/FIXME** | 2 (路线图) | 未知 | — |
-| **测试覆盖** | 1,708 | 未知 | — |
+| **测试覆盖** | 1,798 | 未知 | — |
 
 ---
 
@@ -303,15 +308,15 @@ components/   → 250+ React/Ink 组件
 
 ```
 核心 Agent 循环    ████████████████████ 100%  ████████████████████ 100%
-工具系统          ████████████░░░░░░░░  62%   ████████████████████ 100%
-权限系统          ████████████░░░░░░░░  60%   ████████████████████ 100%
-MCP 支持          ███████████████░░░░░  75%   ████████████████████ 100%
-会话管理          ███████████████░░░░░  75%   ████████████████████ 100%
-Hook 系统         ████████████████░░░░  78%   ████████████████████ 100%
-自动压缩          ████████████████░░░░  78%   ████████████████████ 100%
-插件系统          ██████░░░░░░░░░░░░░░  28%   ████████████████████ 100%
-Agent 蜂群        ██████████░░░░░░░░░░  50%   ████████████████████ 100%
-Computer Use      ░░░░░░░░░░░░░░░░░░░░   0%   ████████████████████ 100%
+工具系统          ██████████████████░░  90%   ████████████████████ 100%
+权限系统          █████████████████░░░  85%   ████████████████████ 100%
+MCP 支持          ██████████████████░░  90%   ████████████████████ 100%
+会话管理          ██████████████████░░  90%   ████████████████████ 100%
+Hook 系统         █████████████████░░░  85%   ████████████████████ 100%
+自动压缩          ██████████████████░░  90%   ████████████████████ 100%
+插件系统          ██████░░░░░░░░░░░░░░  30%   ████████████████████ 100%
+Agent 蜂群        █████████████░░░░░░░  65%   ████████████████████ 100%
+Computer Use      ██████████████░░░░░░  70%   ████████████████████ 100%
 语音模式          ░░░░░░░░░░░░░░░░░░░░   0%   ████████████████████ 100%
 Bridge (飞书等)   ████████████████████ 100%  ░░░░░░░░░░░░░░░░░░░░   0%
 RPC 接口          ████████████████████ 100%  ░░░░░░░░░░░░░░░░░░░░   0%
@@ -342,10 +347,10 @@ RPC 接口          ████████████████████
 
 | 优先级 | 缺失功能 | JS 实现参考 | 建议 |
 |--------|---------|------------|------|
-| 高 | 完整 YOLO 自动模式 | `yoloClassifier.ts` + `classifierDecision.ts` | 基于现有分类器扩展 |
-| 中 | 插件系统 | `utils/plugins/` 40+ 文件 | 先实现本地插件加载 |
-| 中 | MCP Sampling/重连 | `services/mcp/` | 补充 sampling + 自动重连 |
-| 低 | Computer Use | `utils/computerUse/` + MCP | 通过 MCP 桥接 |
+| 高 | 插件系统 (本地加载) | `utils/plugins/` 40+ 文件 | DXT 格式解析 + 本地插件发现 |
+| 中 | BriefTool | `tools/BriefTool/` | 富文本消息 + 文件附件 |
+| 中 | SyntheticOutputTool | `tools/SyntheticOutputTool/` | --print 结构化输出 |
+| 低 | McpAuthTool | `tools/McpAuthTool/` | MCP OAuth 认证流 |
 | 低 | 语音模式 | `voice/` + audio-capture | 优先级低 |
 | 低 | Vim 键位 | `vim/` 4 文件 | 终端 UI 成熟后考虑 |
 
@@ -364,4 +369,4 @@ RPC 接口          ████████████████████
 | 生态扩展 | 各有优势 | Rust: Bridge/RPC；JS: 插件市场/DXT |
 | 权限精细度 | JS (略领先) | JS: Bash AST；Rust: 风险分类器 + 危险模式 |
 
-**结论：** Rust 实现在架构质量、代码简洁度、安全保证上领先，功能覆盖约 50-78%（核心功能 ~65%）。JS 原版在功能丰富度上更成熟（插件市场、Computer Use、语音模式），但伴随快速迭代积累了架构债（上帝文件、循环依赖、Utils 地狱）。Rust 版本通过 Bridge 和 RPC 展现了独有的扩展方向，权限系统已实现风险分类和危险模式检测。
+**结论：** Rust 实现在架构质量、代码简洁度、安全保证上全面领先，功能覆盖约 85%（核心功能 ~90%）。46 个生产工具超越 JS 原版的 42 个（含 7 个 Rust 独有工具）。已实现 YOLO 自动模式、Computer Use MCP、MCP 重连/健康监控/Elicitation、Agent 蜂群团队管理、压缩指标追踪。JS 原版在插件市场生态（DXT 包格式、GCS 市场）和部分云服务特性（定时任务、远程触发）上更成熟。Rust 版本通过 Bridge 和 RPC 展现了独有的多客户端扩展方向。

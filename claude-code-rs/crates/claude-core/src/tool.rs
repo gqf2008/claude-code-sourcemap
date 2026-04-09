@@ -48,6 +48,9 @@ pub struct ToolContext {
 pub struct ToolResult {
     pub content: Vec<ToolResultContent>,
     pub is_error: bool,
+    /// Optional structured output (for `SyntheticOutputTool` / `--print` mode).
+    /// When present, this is the validated JSON output the model produced.
+    pub structured_output: Option<serde_json::Value>,
 }
 
 impl ToolResult {
@@ -56,6 +59,7 @@ impl ToolResult {
         Self {
             content: vec![ToolResultContent::Text { text: text.into() }],
             is_error: false,
+            structured_output: None,
         }
     }
     /// Create an error result containing a single text block.
@@ -63,6 +67,30 @@ impl ToolResult {
         Self {
             content: vec![ToolResultContent::Text { text: text.into() }],
             is_error: true,
+            structured_output: None,
+        }
+    }
+
+    /// Extract all text content as a single concatenated string.
+    pub fn to_text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|c| match c {
+                ToolResultContent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            abort_signal: AbortSignal::new(),
+            permission_mode: PermissionMode::Default,
+            messages: Vec::new(),
         }
     }
 }
