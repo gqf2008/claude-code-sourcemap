@@ -10,7 +10,7 @@ use crate::permissions::PermissionRule;
 
 mod hooks;
 pub use hooks::{HookCommandDef, HookRule, HooksConfig};
-use hooks::has_any_hooks;
+use hooks::merge_hooks;
 
 #[cfg(test)]
 mod tests;
@@ -177,11 +177,7 @@ fn merge_settings(base: Settings, overlay: &Settings) -> Settings {
             rules.extend(overlay.permission_rules.clone());
             rules
         },
-        hooks: if has_any_hooks(&overlay.hooks) {
-            overlay.hooks.clone()
-        } else {
-            base.hooks
-        },
+        hooks: merge_hooks(base.hooks, &overlay.hooks),
         language: overlay.language.clone().or(base.language),
         output_style: overlay.output_style.clone().or(base.output_style),
         env: {
@@ -317,6 +313,11 @@ impl Settings {
     }
 
     /// Save settings to a specific destination file.
+    ///
+    /// **Warning:** If `self` was produced by `load_merged()`, it contains data
+    /// from all layers. Prefer [`update_field`](Self::update_field) which loads
+    /// only the target layer, applies an update, then saves — avoiding cross-layer
+    /// contamination.
     pub fn save_to(&self, destination: SettingsSource, cwd: &Path) -> anyhow::Result<PathBuf> {
         let path = match destination {
             SettingsSource::User => user_settings_path()

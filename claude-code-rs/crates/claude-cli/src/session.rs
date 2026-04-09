@@ -206,6 +206,7 @@ fn handle_permission_request(req: &PermissionRequest) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn session_status_fields() {
@@ -228,9 +229,11 @@ mod tests {
 
         let (bus_handle, mut client) = EventBus::new(16);
 
+        let _bus = Arc::new(bus_handle);
+        let bus_clone = Arc::clone(&_bus);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            bus_handle.notify(AgentNotification::SessionSaved {
+            bus_clone.notify(AgentNotification::SessionSaved {
                 session_id: "sess-abc".into(),
             });
         });
@@ -247,9 +250,11 @@ mod tests {
 
         let (bus_handle, mut client) = EventBus::new(16);
 
+        let _bus = Arc::new(bus_handle);
+        let bus_clone = Arc::clone(&_bus);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            bus_handle.notify(AgentNotification::CompactComplete { summary_len: 150 });
+            bus_clone.notify(AgentNotification::CompactComplete { summary_len: 150 });
         });
 
         let mut mgr = SessionManager::new(&mut client);
@@ -264,9 +269,12 @@ mod tests {
 
         let (bus_handle, mut client) = EventBus::new(16);
 
+        // Keep bus_handle alive for the duration of the test.
+        let _bus = Arc::new(bus_handle);
+        let bus_clone = Arc::clone(&_bus);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            bus_handle.notify(AgentNotification::SessionStatus {
+            bus_clone.notify(AgentNotification::SessionStatus {
                 session_id: "sess-xyz".into(),
                 model: "claude-sonnet-4-20250514".into(),
                 total_turns: 3,

@@ -13,7 +13,7 @@
 //! PermissionResponse: Client ──mpsc────→ Core        (1:1, paired with request)
 //! ```
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
 use crate::events::{AgentNotification, AgentRequest, PermissionRequest, PermissionResponse, RiskLevel};
@@ -45,6 +45,7 @@ impl EventBus {
         let (request_tx, request_rx) = mpsc::channel(REQUEST_QUEUE_CAP);
         let (perm_req_tx, perm_req_rx) = broadcast::channel(capacity);
         let (perm_resp_tx, perm_resp_rx) = mpsc::channel(PERM_RESP_QUEUE_CAP);
+        let (core_alive_tx, core_alive_rx) = watch::channel(true);
 
         let bus = BusHandle {
             notify_tx: notify_tx.clone(),
@@ -53,6 +54,7 @@ impl EventBus {
             perm_req_tx: perm_req_tx.clone(),
             perm_resp_rx,
             _perm_resp_tx: perm_resp_tx.clone(),
+            core_alive_tx,
         };
 
         let client = ClientHandle {
@@ -62,6 +64,7 @@ impl EventBus {
             perm_req_rx,
             _perm_req_tx: perm_req_tx,
             perm_resp_tx: Some(perm_resp_tx),
+            core_alive_rx,
         };
 
         (bus, client)
@@ -84,6 +87,14 @@ pub struct BusHandle {
     /// Kept alive to prevent the mpsc channel from closing.
     /// Only the primary client gets a clone (secondary clients cannot respond).
     _perm_resp_tx: mpsc::Sender<PermissionResponse>,
+    /// Signals `false` on drop so clients detect core disconnection.
+    core_alive_tx: watch::Sender<bool>,
+}
+
+impl Drop for BusHandle {
+    fn drop(&mut self) {
+        let _ = self.core_alive_tx.send(false);
+    }
 }
 
 impl BusHandle {
@@ -206,24 +217,19 @@ impl BusHandle {
             perm_req_rx: self.perm_req_tx.subscribe(),
             _perm_req_tx: self.perm_req_tx.clone(),
             perm_resp_tx: None, // secondary clients cannot respond to permissions
+            core_alive_rx: self.core_alive_tx.subscribe(),
         }
     }
 
-    /// Subscribe to the request channel as a receiver (for testing).
+    /// Create a dummy request receiver (for testing only).
     ///
-    /// NOTE: The primary request receiver is held by `BusHandle` itself
-    /// (via `recv_request`). This creates a *notification* subscription
-    /// for the purpose of observing requests in tests.
+    /// **Note:** `mpsc` channels are point-to-point — the actual request stream
+    /// is consumed by `recv_request()` on this `BusHandle`. This method returns
+    /// an independent channel that will never receive production requests.
+    /// It exists solely for integration tests that need a `Receiver<AgentRequest>`.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use] 
     pub fn subscribe_requests(&self) -> mpsc::Receiver<AgentRequest> {
-        // This is a workaround: we can't really "subscribe" to mpsc.
-        // For tests, create a new channel pair and swap in the new receiver.
-        // In production, the adapter uses recv_request() on the BusHandle.
-        //
-        // For the RPC server test, we instead just check that the session
-        // handles requests properly through the normal flow.
-        //
-        // We provide a dummy receiver here that will never receive anything.
         let (_tx, rx) = mpsc::channel(1);
         rx
     }
@@ -237,7 +243,7 @@ impl BusHandle {
 /// - Receive permission requests and send responses
 pub struct ClientHandle {
     notify_rx: broadcast::Receiver<AgentNotification>,
-    /// Keep the sender alive so `notify_rx` doesn't get `Closed`.
+    /// Keep the sender alive so `subscribe_notifications()` can create new receivers.
     _notify_tx: broadcast::Sender<AgentNotification>,
     request_tx: mpsc::Sender<AgentRequest>,
     perm_req_rx: broadcast::Receiver<PermissionRequest>,
@@ -246,6 +252,8 @@ pub struct ClientHandle {
     /// Permission response channel. Only the primary client can respond;
     /// secondary clients (via `new_client()`) have `None` to prevent spoofing.
     perm_resp_tx: Option<mpsc::Sender<PermissionResponse>>,
+    /// Watch receiver for core alive status. Returns None when core drops.
+    core_alive_rx: watch::Receiver<bool>,
 }
 
 impl ClientHandle {
@@ -253,15 +261,25 @@ impl ClientHandle {
     ///
     /// If the client falls behind, intermediate messages are skipped
     /// (`broadcast::Lagged`) and this returns the next available message.
+    /// Returns `None` when the core is disconnected (BusHandle dropped).
     pub async fn recv_notification(&mut self) -> Option<AgentNotification> {
         loop {
-            match self.notify_rx.recv().await {
-                Ok(event) => return Some(event),
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("Client lagged by {} notifications, catching up", n);
-                    continue; // Try again with the latest
+            tokio::select! {
+                result = self.notify_rx.recv() => {
+                    match result {
+                        Ok(event) => return Some(event),
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("Client lagged by {} notifications, catching up", n);
+                            continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
                 }
-                Err(broadcast::error::RecvError::Closed) => return None,
+                result = self.core_alive_rx.changed() => {
+                    if result.is_err() || !*self.core_alive_rx.borrow() {
+                        return None; // Core dropped
+                    }
+                }
             }
         }
     }
@@ -277,15 +295,25 @@ impl ClientHandle {
     ///
     /// All clients receive permission requests (broadcast). Only the first
     /// client to respond with a matching `request_id` wins.
+    /// Returns `None` when the core is disconnected.
     pub async fn recv_permission_request(&mut self) -> Option<PermissionRequest> {
         loop {
-            match self.perm_req_rx.recv().await {
-                Ok(req) => return Some(req),
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("Client lagged by {} permission requests, catching up", n);
-                    continue;
+            tokio::select! {
+                result = self.perm_req_rx.recv() => {
+                    match result {
+                        Ok(req) => return Some(req),
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("Client lagged by {} permission requests, catching up", n);
+                            continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
                 }
-                Err(broadcast::error::RecvError::Closed) => return None,
+                result = self.core_alive_rx.changed() => {
+                    if result.is_err() || !*self.core_alive_rx.borrow() {
+                        return None;
+                    }
+                }
             }
         }
     }

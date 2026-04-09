@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
@@ -15,6 +16,20 @@ use crate::commands::{CommandResult, SlashCommand};
 use crate::config;
 use crate::output::{print_stream, OutputRenderer};
 use crate::repl_commands::*;
+
+/// Timeout for command-response notification loops (e.g. ClearHistory, SetModel).
+const CMD_NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Receive next notification with timeout. Returns None on timeout or channel close.
+async fn recv_with_timeout(
+    client: &mut ClientHandle,
+    timeout: Duration,
+) -> Option<claude_bus::events::AgentNotification> {
+    match tokio::time::timeout(timeout, client.recv_notification()).await {
+        Ok(Some(n)) => Some(n),
+        Ok(None) | Err(_) => None,
+    }
+}
 
 /// Tab-completion helper for slash commands.
 pub struct CommandCompleter;
@@ -290,7 +305,7 @@ pub async fn run(
                                 if let Some(ref mut c) = client {
                                     let _ = c.send_request(AgentRequest::ClearHistory);
                                     // Wait for HistoryCleared notification
-                                    while let Some(n) = c.recv_notification().await {
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
                                         if matches!(n, claude_bus::events::AgentNotification::HistoryCleared) {
                                             println!("Conversation history cleared.");
                                             break;
@@ -305,7 +320,7 @@ pub async fn run(
                                 if let Some(ref mut c) = client {
                                     let _ = c.send_request(AgentRequest::SetModel { model: input.clone() });
                                     // Wait for ModelChanged notification
-                                    while let Some(n) = c.recv_notification().await {
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
                                         if let claude_bus::events::AgentNotification::ModelChanged { model, display_name } = n {
                                             println!("Model set to: {} ({})", display_name, model);
                                             // Persist to user settings
@@ -352,7 +367,7 @@ pub async fn run(
                                     println!("\x1b[33mCompacting conversation…\x1b[0m");
                                     let _ = c.send_request(AgentRequest::Compact { instructions });
                                     // Wait for CompactComplete or Error notification
-                                    while let Some(n) = c.recv_notification().await {
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
                                         match n {
                                             claude_bus::events::AgentNotification::CompactComplete { summary_len } => {
                                                 println!("\x1b[32m✓ Compacted ({} chars).\x1b[0m", summary_len);
@@ -389,7 +404,7 @@ pub async fn run(
                             CommandResult::Status => {
                                 if let Some(ref mut c) = client {
                                     let _ = c.send_request(AgentRequest::GetStatus);
-                                    while let Some(n) = c.recv_notification().await {
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
                                         if let claude_bus::events::AgentNotification::SessionStatus {
                                             model, total_turns, total_input_tokens,
                                             total_output_tokens, context_usage_pct, ..
@@ -584,9 +599,10 @@ pub async fn run(
                     if let Err(e) = client.send_request(request) {
                         eprintln!("\x1b[31mFailed to send request: {}\x1b[0m", e);
                     } else {
-                        // Render notifications until TurnComplete
+                        // Render notifications until TurnComplete (10min per-notification timeout)
                         let mut renderer = OutputRenderer::new(&model);
-                        while let Some(notification) = client.recv_notification().await {
+                        let render_timeout = Duration::from_secs(600);
+                        while let Some(notification) = recv_with_timeout(client, render_timeout).await {
                             let done = renderer.render(notification, Some(engine.cost_tracker()));
                             if done {
                                 break;

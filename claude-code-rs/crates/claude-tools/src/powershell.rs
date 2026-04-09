@@ -112,7 +112,7 @@ impl Tool for PowerShellTool {
                         Ok(ToolResult::text(response))
                     }
                 }
-                Ok(Err(e)) => Ok(ToolResult::error(format!("Process error: {e}"))),
+                Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {e}")),
                 Err(_) => Ok(ToolResult::error(format!("Command timed out after {timeout_ms}ms"))),
             }
         }

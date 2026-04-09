@@ -177,7 +177,7 @@ fn export_json_is_valid() {
 }
 
 #[test]
-fn merge_hooks_overlay_replaces_base_entirely() {
+fn merge_hooks_overlay_extends_base() {
     let base = Settings {
         hooks: HooksConfig {
             pre_tool_use: vec![HookRule {
@@ -207,8 +207,9 @@ fn merge_hooks_overlay_replaces_base_entirely() {
         ..Default::default()
     };
     let merged = merge_settings(base, &overlay);
-    // Overlay should entirely replace base hooks
-    assert!(merged.hooks.pre_tool_use.is_empty(), "base pre_tool_use should be gone");
+    // Overlay extends base — base hooks are preserved
+    assert_eq!(merged.hooks.pre_tool_use.len(), 1, "base pre_tool_use should be kept");
+    assert_eq!(merged.hooks.pre_tool_use[0].hooks[0].command, "echo base");
     assert_eq!(merged.hooks.stop.len(), 1);
     assert_eq!(merged.hooks.stop[0].hooks[0].command, "echo overlay");
 }

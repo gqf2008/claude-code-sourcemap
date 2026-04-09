@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Internal event bus and JSON-RPC protocol for claude-code-rs"
 
+[features]
+test-utils = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

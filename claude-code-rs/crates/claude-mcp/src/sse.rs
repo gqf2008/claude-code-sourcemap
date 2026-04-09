@@ -114,6 +114,7 @@ impl SseTransport {
         let (notification_tx, notification_rx) = mpsc::unbounded_channel();
 
         let pending_clone = Arc::clone(&pending);
+        let pending_cleanup = Arc::clone(&pending);
         let listener_handle = tokio::spawn(async move {
             let mut buf = buffer;
             loop {
@@ -137,6 +138,24 @@ impl SseTransport {
                         break;
                     }
                 }
+            }
+            // Clean up pending requests — send error to all waiting callers
+            let mut pending = pending_cleanup.lock().await;
+            let count = pending.len();
+            for (_id, req) in pending.drain() {
+                let _ = req.tx.send(JsonRpcResponse {
+                    jsonrpc: "2.0".into(),
+                    id: None,
+                    result: None,
+                    error: Some(crate::protocol::JsonRpcError {
+                        code: -32000,
+                        message: "SSE stream closed".into(),
+                        data: None,
+                    }),
+                });
+            }
+            if count > 0 {
+                warn!("SSE listener terminated with {} pending requests", count);
             }
         });
 

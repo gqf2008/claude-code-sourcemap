@@ -65,7 +65,10 @@ impl Tool for LsTool {
                 continue;
             }
 
-            let meta = entry.metadata().await?;
+            let meta = match entry.metadata().await {
+                Ok(m) => m,
+                Err(_) => continue, // skip entries with inaccessible metadata
+            };
             let entry_type = if meta.is_dir() { "dir" } else { "file" };
             let size = if meta.is_file() { meta.len() } else { 0 };
 

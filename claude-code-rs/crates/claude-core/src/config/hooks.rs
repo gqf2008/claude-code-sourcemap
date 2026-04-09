@@ -92,29 +92,35 @@ pub struct HooksConfig {
     pub worktree_remove: Vec<HookRule>,
 }
 
-/// Check whether a HooksConfig has any non-empty event lists.
-pub(super) fn has_any_hooks(h: &HooksConfig) -> bool {
-    !h.pre_tool_use.is_empty()
-        || !h.post_tool_use.is_empty()
-        || !h.post_tool_use_failure.is_empty()
-        || !h.stop.is_empty()
-        || !h.stop_failure.is_empty()
-        || !h.session_start.is_empty()
-        || !h.session_end.is_empty()
-        || !h.setup.is_empty()
-        || !h.pre_compact.is_empty()
-        || !h.post_compact.is_empty()
-        || !h.subagent_start.is_empty()
-        || !h.subagent_stop.is_empty()
-        || !h.notification.is_empty()
-        || !h.post_sampling.is_empty()
-        || !h.permission_request.is_empty()
-        || !h.permission_denied.is_empty()
-        || !h.instructions_loaded.is_empty()
-        || !h.user_prompt_submit.is_empty()
-        || !h.teammate_idle.is_empty()
-        || !h.elicitation.is_empty()
-        || !h.elicitation_result.is_empty()
-        || !h.worktree_create.is_empty()
-        || !h.worktree_remove.is_empty()
+/// Merge overlay hooks into base, extending each event's rule list.
+pub(super) fn merge_hooks(mut base: HooksConfig, overlay: &HooksConfig) -> HooksConfig {
+    base.pre_tool_use.extend(overlay.pre_tool_use.clone());
+    base.post_tool_use.extend(overlay.post_tool_use.clone());
+    base.post_tool_use_failure.extend(overlay.post_tool_use_failure.clone());
+    base.stop.extend(overlay.stop.clone());
+    base.stop_failure.extend(overlay.stop_failure.clone());
+    base.user_prompt_submit.extend(overlay.user_prompt_submit.clone());
+    base.session_start.extend(overlay.session_start.clone());
+    base.session_end.extend(overlay.session_end.clone());
+    base.setup.extend(overlay.setup.clone());
+    base.pre_compact.extend(overlay.pre_compact.clone());
+    base.post_compact.extend(overlay.post_compact.clone());
+    base.subagent_start.extend(overlay.subagent_start.clone());
+    base.subagent_stop.extend(overlay.subagent_stop.clone());
+    base.notification.extend(overlay.notification.clone());
+    base.post_sampling.extend(overlay.post_sampling.clone());
+    base.permission_request.extend(overlay.permission_request.clone());
+    base.permission_denied.extend(overlay.permission_denied.clone());
+    base.instructions_loaded.extend(overlay.instructions_loaded.clone());
+    base.cwd_changed.extend(overlay.cwd_changed.clone());
+    base.file_changed.extend(overlay.file_changed.clone());
+    base.config_change.extend(overlay.config_change.clone());
+    base.task_created.extend(overlay.task_created.clone());
+    base.task_completed.extend(overlay.task_completed.clone());
+    base.teammate_idle.extend(overlay.teammate_idle.clone());
+    base.elicitation.extend(overlay.elicitation.clone());
+    base.elicitation_result.extend(overlay.elicitation_result.clone());
+    base.worktree_create.extend(overlay.worktree_create.clone());
+    base.worktree_remove.extend(overlay.worktree_remove.clone());
+    base
 }

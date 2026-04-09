@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use claude_bus::bus::BusHandle;
@@ -42,10 +42,13 @@ impl GatewayContext {
     }
 }
 
+/// Adapter registry type — maps platform name to adapter instance.
+type AdapterMap = HashMap<String, Arc<Box<dyn ChannelAdapter>>>;
+
 /// The main gateway that manages adapters and routes messages.
 pub struct ChannelGateway {
-    /// Registered adapters by platform name (Arc for sharing with consumer tasks).
-    adapters: Arc<HashMap<String, Arc<Box<dyn ChannelAdapter>>>>,
+    /// Registered adapters by platform name (RwLock for dynamic registration).
+    adapters: Arc<RwLock<AdapterMap>>,
     /// Session router (shared across message handling tasks).
     router: Arc<Mutex<SessionRouter>>,
     /// Inbound message channel.
@@ -65,7 +68,7 @@ impl ChannelGateway {
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            adapters: Arc::new(HashMap::new()),
+            adapters: Arc::new(RwLock::new(HashMap::new())),
             router: Arc::new(Mutex::new(router)),
             inbound_tx,
             inbound_rx: Some(inbound_rx),
@@ -76,13 +79,11 @@ impl ChannelGateway {
 
     /// Register a channel adapter.
     ///
-    /// Must be called before `run()` — returns error if adapters are already shared.
-    pub fn register_adapter(&mut self, adapter: Box<dyn ChannelAdapter>) -> AdapterResult<()> {
+    /// Can be called before or after `run()` — adapters are dynamically added.
+    pub async fn register_adapter(&self, adapter: Box<dyn ChannelAdapter>) -> AdapterResult<()> {
         let platform = adapter.platform().to_string();
         info!("Registered adapter: {platform}");
-        let adapters = Arc::get_mut(&mut self.adapters)
-            .ok_or_else(|| AdapterError::Internal("register_adapter must be called before run()".into()))?;
-        adapters.insert(platform, Arc::new(adapter));
+        self.adapters.write().await.insert(platform, Arc::new(adapter));
         Ok(())
     }
 
@@ -95,13 +96,14 @@ impl ChannelGateway {
         };
 
         // Start all adapters
-        let adapters_mut = Arc::get_mut(&mut self.adapters)
-            .ok_or_else(|| AdapterError::Internal("run() must not be called concurrently".into()))?;
-        for (platform, adapter) in adapters_mut.iter_mut() {
-            info!("Starting adapter: {platform}");
-            let adapter_mut = Arc::get_mut(adapter)
-                .ok_or_else(|| AdapterError::Internal(format!("adapter '{platform}' must not be shared yet")))?;
-            adapter_mut.start(ctx.clone()).await?;
+        {
+            let mut adapters = self.adapters.write().await;
+            for (platform, adapter) in adapters.iter_mut() {
+                info!("Starting adapter: {platform}");
+                let adapter_mut = Arc::get_mut(adapter)
+                    .ok_or_else(|| AdapterError::Internal(format!("adapter '{platform}' must not be shared yet")))?;
+                adapter_mut.start(ctx.clone()).await?;
+            }
         }
 
         // Process inbound messages
@@ -112,7 +114,7 @@ impl ChannelGateway {
         let adapters = Arc::clone(&self.adapters);
         let consumer_tasks = Arc::clone(&self.consumer_tasks);
 
-        info!("Gateway running with {} adapters", self.adapters.len());
+        info!("Gateway running with {} adapters", self.adapters.read().await.len());
 
         while let Some(msg) = inbound_rx.recv().await {
             let channel_id = msg.channel_id.clone();
@@ -163,26 +165,42 @@ impl ChannelGateway {
 
                     let task = tokio::spawn(async move {
                         let mut formatter = MessageFormatter::new();
-                        while let Ok(notif) = notif_rx.recv().await {
-                            let is_done = formatter.push(&notif);
+                        let idle_timeout = Duration::from_secs(600); // 10 min no-notification timeout
+                        loop {
+                            match tokio::time::timeout(idle_timeout, notif_rx.recv()).await {
+                                Ok(Ok(notif)) => {
+                                    let is_done = formatter.push(&notif);
 
-                            // Send typing indicator on tool use
-                            if matches!(notif, AgentNotification::ToolUseStart { .. }) {
-                                if let Some(adapter) = adapters_ref.get(&ch.platform) {
-                                    let _ = adapter.send_typing(&ch).await;
-                                }
-                            }
-
-                            if is_done {
-                                let out = formatter.finish();
-                                if !out.text.is_empty() {
-                                    if let Some(adapter) = adapters_ref.get(&ch.platform) {
-                                        if let Err(e) = adapter.send_message(&ch, out).await {
-                                            error!("[{}] Failed to send reply: {}", ch, e);
+                                    // Send typing indicator on tool use
+                                    if matches!(notif, AgentNotification::ToolUseStart { .. }) {
+                                        let adapters = adapters_ref.read().await;
+                                        if let Some(adapter) = adapters.get(&ch.platform) {
+                                            let _ = adapter.send_typing(&ch).await;
                                         }
                                     }
+
+                                    if is_done {
+                                        let out = formatter.finish();
+                                        if !out.text.is_empty() {
+                                            let adapters = adapters_ref.read().await;
+                                            if let Some(adapter) = adapters.get(&ch.platform) {
+                                                if let Err(e) = adapter.send_message(&ch, out).await {
+                                                    error!("[{}] Failed to send reply: {}", ch, e);
+                                                }
+                                            }
+                                        }
+                                        formatter = MessageFormatter::new();
+                                    }
                                 }
-                                formatter = MessageFormatter::new();
+                                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                                    warn!("[{}] Consumer lagged by {} notifications", ch, n);
+                                    continue;
+                                }
+                                Ok(Err(broadcast::error::RecvError::Closed)) => break,
+                                Err(_) => {
+                                    warn!("[{}] Consumer idle timeout ({}s), stopping", ch, idle_timeout.as_secs());
+                                    break;
+                                }
                             }
                         }
                     });
@@ -229,7 +247,8 @@ impl ChannelGateway {
             task.abort();
         }
 
-        for (platform, adapter) in self.adapters.as_ref() {
+        let adapters = self.adapters.read().await;
+        for (platform, adapter) in adapters.iter() {
             if let Err(e) = adapter.stop().await {
                 warn!("Error stopping adapter {}: {}", platform, e);
             }
@@ -242,8 +261,8 @@ impl ChannelGateway {
     }
 
     /// Get the number of registered adapters.
-    pub fn adapter_count(&self) -> usize {
-        self.adapters.len()
+    pub async fn adapter_count(&self) -> usize {
+        self.adapters.read().await.len()
     }
 }
 
@@ -254,12 +273,12 @@ mod tests {
     use super::*;
     use claude_bus::bus::EventBus;
 
-    #[test]
-    fn gateway_creation() {
+    #[tokio::test]
+    async fn gateway_creation() {
         let (bus, _client) = EventBus::new(64);
         let config = BridgeConfig::default();
         let gateway = ChannelGateway::new(bus, config);
-        assert_eq!(gateway.adapter_count(), 0);
+        assert_eq!(gateway.adapter_count().await, 0);
     }
 
     #[test]
