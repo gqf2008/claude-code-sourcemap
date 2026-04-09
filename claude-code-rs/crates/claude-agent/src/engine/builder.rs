@@ -208,25 +208,20 @@ impl QueryEngineBuilder {
         let caps = claude_core::model::model_capabilities(&model_name);
 
         // Apply context window env var overrides:
-        // - CLAUDE_CODE_MAX_CONTEXT_TOKENS: set absolute context window (for third-party providers with large context)
+        // - CLAUDE_CODE_MAX_CONTEXT_TOKENS: set absolute context window (for large-context providers)
         // - CLAUDE_CODE_AUTO_COMPACT_WINDOW: cap context window (can only reduce, matches TS behavior)
         let effective_context_window = {
-            let mut cw = caps.context_window;
-            if let Ok(val) = std::env::var("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
-                if let Ok(parsed) = val.parse::<u64>() {
-                    if parsed > 0 {
-                        cw = parsed;
-                        tracing::info!("CLAUDE_CODE_MAX_CONTEXT_TOKENS={} → context_window={}", parsed, cw);
-                    }
-                }
+            fn env_u64(name: &str) -> Option<u64> {
+                std::env::var(name).ok()?.parse().ok().filter(|&v| v > 0)
             }
-            if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
-                if let Ok(parsed) = val.parse::<u64>() {
-                    if parsed > 0 {
-                        cw = cw.min(parsed);
-                        tracing::info!("CLAUDE_CODE_AUTO_COMPACT_WINDOW={} → context_window={}", parsed, cw);
-                    }
-                }
+            let mut cw = caps.context_window;
+            if let Some(v) = env_u64("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
+                cw = v;
+                tracing::info!("CLAUDE_CODE_MAX_CONTEXT_TOKENS={v} → context_window={cw}");
+            }
+            if let Some(v) = env_u64("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
+                cw = cw.min(v);
+                tracing::info!("CLAUDE_CODE_AUTO_COMPACT_WINDOW={v} → context_window={cw}");
             }
             cw
         };
