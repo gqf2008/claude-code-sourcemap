@@ -3,7 +3,7 @@ mod helpers;
 use std::pin::Pin;
 use std::sync::Arc;
 use futures::Stream;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use claude_api::client::ApiClient;
@@ -12,6 +12,7 @@ use claude_core::message::{
     AssistantMessage, ContentBlock, Message, StopReason, Usage, UserMessage,
 };
 use claude_core::tool::ToolContext;
+use crate::compact::{AutoCompactState, compact_conversation, compact_context_message};
 use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::state::SharedState;
@@ -53,6 +54,10 @@ pub struct QueryConfig {
     /// Model context window size (for accurate percentage display).
     /// Overridden at runtime by engine builder from model capabilities.
     pub context_window: u64,
+    /// Auto-compact state for proactive in-loop compaction.
+    /// When `Some`, the query loop will trigger compaction when token usage
+    /// approaches the context window limit (between tool-use turns).
+    pub auto_compact_state: Option<Arc<tokio::sync::Mutex<AutoCompactState>>>,
 }
 
 impl Default for QueryConfig {
@@ -65,6 +70,7 @@ impl Default for QueryConfig {
             thinking: None,
             token_budget: 0,
             context_window: 200_000, // fallback; prefer runtime value from model capabilities
+            auto_compact_state: None,
         }
     }
 }
@@ -117,6 +123,9 @@ pub fn query_stream_with_injection(
         let mut has_attempted_reactive_compact = false;
         let mut consecutive_errors: u32 = 0;
         let mut retry_delay_ms: u64 = 1_000; // exponential backoff: 1s → 2s → 4s → … → 32s max
+
+        // Track last emitted warning level to avoid spamming the same warning every turn
+        let mut last_warning_level: Option<crate::compact::TokenWarningState> = None;
 
         // Look up model capabilities for smart max_tokens escalation
         let model_name = { state.read().await.model.clone() };
@@ -422,10 +431,13 @@ pub fn query_stream_with_injection(
                     output_tokens: u.output_tokens,
                 };
 
-                // Context usage warning
+                // Context usage warning (only emit when level escalates)
                 let total_input = { state.read().await.total_input_tokens };
-                if let Some(warning_event) = build_context_warning(total_input, config.context_window) {
-                    yield warning_event;
+                if let Some((level, warning_event)) = build_context_warning(total_input, config.context_window) {
+                    if last_warning_level != Some(level) {
+                        last_warning_level = Some(level);
+                        yield warning_event;
+                    }
                 }
 
                 // Budget enforcement
@@ -471,6 +483,51 @@ pub fn query_stream_with_injection(
                     turn_count += 1;
                     stop_hook_retries = 0;
                     { let mut s = state.write().await; s.turn_count = turn_count; }
+
+                    // ── Proactive auto-compact (between tool-use turns) ──────
+                    // Like TS query.ts: check should_auto_compact at each turn
+                    // boundary and compact before next API call to avoid hitting
+                    // context limits mid-conversation.
+                    if let Some(ref ac_state) = config.auto_compact_state {
+                        let current_tokens = claude_core::token_estimation::token_count_with_estimation(&messages)
+                            + claude_core::token_estimation::estimate_system_tokens(&config.system_prompt);
+                        let should_compact = {
+                            let ac = ac_state.lock().await;
+                            ac.should_auto_compact(current_tokens, config.context_window)
+                        };
+                        if should_compact {
+                            yield AgentEvent::CompactStart;
+                            let model = { state.read().await.model.clone() };
+                            match compact_conversation(&client, &messages, &model, None).await {
+                                Ok(summary) => {
+                                    let summary_len = summary.len();
+                                    let context_msg = compact_context_message(&summary, None);
+                                    messages = vec![Message::User(UserMessage {
+                                        uuid: Uuid::new_v4().to_string(),
+                                        content: vec![ContentBlock::Text { text: context_msg }],
+                                    })];
+                                    {
+                                        let mut s = state.write().await;
+                                        s.messages = messages.clone();
+                                        s.total_input_tokens = 0;
+                                        s.total_output_tokens = 0;
+                                    }
+                                    ac_state.lock().await.record_success();
+                                    last_warning_level = None; // reset after compaction
+                                    has_attempted_reactive_compact = false;
+                                    info!("Proactive auto-compact succeeded (summary {} chars)", summary_len);
+                                    yield AgentEvent::CompactComplete { summary_len };
+                                }
+                                Err(e) => {
+                                    ac_state.lock().await.record_failure();
+                                    warn!("Proactive auto-compact failed: {}", e);
+                                    yield AgentEvent::TextDelta(format!(
+                                        "\n\x1b[33m[Auto-compact failed: {} — continuing…]\x1b[0m\n", e
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
 
                 StopReason::MaxTokens => {

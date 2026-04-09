@@ -124,13 +124,16 @@ pub(super) fn error_category(err_str: &str) -> &'static str {
 // ── Context & recovery ───────────────────────────────────────────────────────
 
 /// Build a context warning event if token usage is elevated.
-pub(super) fn build_context_warning(total_input: u64, context_window: u64) -> Option<AgentEvent> {
+/// Returns `(warning_level, event)` — caller should deduplicate by level.
+pub(super) fn build_context_warning(
+    total_input: u64,
+    context_window: u64,
+) -> Option<(crate::compact::TokenWarningState, AgentEvent)> {
     let threshold = crate::compact::get_auto_compact_threshold(context_window);
     let warning = crate::compact::calculate_token_warning(total_input, threshold);
     if warning == crate::compact::TokenWarningState::Normal {
         return None;
     }
-    // Display percentage relative to the actual context window (clamped 0-100%)
     let pct = if context_window > 0 {
         (total_input as f64 / context_window as f64).min(1.0)
     } else {
@@ -145,7 +148,7 @@ pub(super) fn build_context_warning(total_input: u64, context_window: u64) -> Op
             "Context limit imminent — auto-compaction will trigger".to_string(),
         _ => return None,
     };
-    Some(AgentEvent::ContextWarning { usage_pct: pct, message: msg })
+    Some((warning, AgentEvent::ContextWarning { usage_pct: pct, message: msg }))
 }
 
 /// Create a continuation message for max_tokens recovery.

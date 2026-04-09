@@ -344,6 +344,7 @@ impl Tool for DispatchAgentTool {
             thinking: None,
             token_budget: 0,
             context_window: self.config.context_window,
+            auto_compact_state: None, // sub-agents don't proactively compact
         };
 
         // Sub-agents run without user-defined hooks to avoid re-entrant side effects

@@ -146,15 +146,7 @@ impl QueryEngine {
             self.executor.clone(),
             self.state.clone(),
             tool_context,
-            QueryConfig {
-                system_prompt: self.config.system_prompt.clone(),
-                max_turns: self.config.max_turns,
-                max_tokens: self.config.max_tokens,
-                temperature: self.config.temperature,
-                thinking: self.config.thinking.clone(),
-                token_budget: self.config.token_budget,
-                context_window: self.context_window,
-            },
+            self.build_query_config(),
             messages,
             tools,
             self.hooks.clone(),
@@ -225,15 +217,7 @@ impl QueryEngine {
             self.executor.clone(),
             self.state.clone(),
             tool_context,
-            QueryConfig {
-                system_prompt: self.config.system_prompt.clone(),
-                max_turns: self.config.max_turns,
-                max_tokens: self.config.max_tokens,
-                temperature: self.config.temperature,
-                thinking: self.config.thinking.clone(),
-                token_budget: self.config.token_budget,
-                context_window: self.context_window,
-            },
+            self.build_query_config(),
             messages,
             tools,
             self.hooks.clone(),
@@ -242,6 +226,22 @@ impl QueryEngine {
 
     pub fn state(&self) -> &SharedState {
         &self.state
+    }
+
+    /// Build a `QueryConfig` with shared auto-compact state from this engine.
+    fn build_query_config(&self) -> QueryConfig {
+        QueryConfig {
+            system_prompt: self.config.system_prompt.clone(),
+            max_turns: self.config.max_turns,
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+            thinking: self.config.thinking.clone(),
+            token_budget: self.config.token_budget,
+            context_window: self.context_window,
+            auto_compact_state: Some(Arc::new(tokio::sync::Mutex::new(
+                AutoCompactState::new(),
+            ))),
+        }
     }
 
     /// Get the cost tracker for displaying usage stats.
