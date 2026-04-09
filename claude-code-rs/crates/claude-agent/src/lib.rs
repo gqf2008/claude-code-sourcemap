@@ -22,3 +22,4 @@ pub mod plugin;
 pub mod memory_extractor;
 pub mod bus_adapter;
 pub mod swarm;
+pub mod cron_scheduler;

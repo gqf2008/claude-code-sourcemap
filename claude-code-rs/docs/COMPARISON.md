@@ -140,7 +140,8 @@ export interface Tool {
 | Coordinator | SendMessage, TaskStop | 同 | ✅ 完整 |
 | Computer Use | CuToolBridge (MCP Server + 剪贴板 + 平台检测 + 终端排除) | 原生模块 + MCP | ✅ 完整 (跨平台) |
 | Rust 独有 | GitTool, GitStatus, MultiEdit, LS, TodoRead, ContextInspect, Verify | — | Rust 领先 |
-| JS 独有工具 | — | Brief, SyntheticOutput, ScheduleCron, RemoteTrigger, McpAuth | ⚠️ 5 工具缺失 |
+| JS 独有工具 | — | Brief, SyntheticOutput, RemoteTrigger, McpAuth | ⚠️ 4 工具缺失 |
+| Cron 调度 | CronCreate, CronList, CronDelete + 调度器 + 文件锁 | ScheduleCronTool | ✅ 完整 |
 
 ### 3.2 Agent 循环架构
 
@@ -349,7 +350,6 @@ RPC 接口          ████████████████████
 |--------|---------|------------|------|
 | 低 | 语音模式 | `voice/` + audio-capture | 需要原生音频捕获 |
 | 低 | Vim 键位 | `vim/` 4 文件 | 终端 UI 成熟后考虑 |
-| 低 | ScheduleCronTool | `tools/ScheduleCronTool/` | 云/daemon 特性 |
 | 低 | RemoteTriggerTool | `tools/RemoteTriggerTool/` | 云 API 特性 |
 
 ---
