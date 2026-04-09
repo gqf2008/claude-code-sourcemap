@@ -29,8 +29,16 @@ pub struct PermissionChecker {
 
 impl PermissionChecker {
     pub fn new(mode: PermissionMode, rules: Vec<PermissionRule>) -> Self {
+        // In AcceptEdits mode, strip dangerous permission rules that would
+        // bypass security (e.g., python:*, eval:*, sudo:*)
+        let effective_rules = if mode == PermissionMode::AcceptEdits {
+            let (safe, _stripped) = bash_classifier::strip_dangerous_rules(&rules);
+            safe
+        } else {
+            rules
+        };
         Self {
-            rules,
+            rules: effective_rules,
             mode,
             session_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
         }

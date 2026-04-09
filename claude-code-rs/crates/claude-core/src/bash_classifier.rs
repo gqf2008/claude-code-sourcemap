@@ -318,6 +318,111 @@ fn cmd_matches(base: &str, pattern: &str) -> bool {
     }
 }
 
+// ── Dangerous permission patterns ────────────────────────────────────────────
+
+/// Command prefixes that would allow arbitrary code execution if auto-approved.
+/// Permission rules matching these patterns should be stripped in auto-approve modes.
+const DANGEROUS_BASH_PREFIXES: &[&str] = &[
+    // Interpreters
+    "python", "python3", "python2", "node", "ruby", "perl", "php", "lua",
+    "bash", "sh", "zsh", "fish", "ksh", "csh", "dash",
+    // Package runners
+    "npm run", "yarn run", "npx", "bunx", "pnpm exec",
+    // Execution / escalation
+    "eval", "exec", "env", "xargs", "sudo", "su",
+    // Remote
+    "ssh", "curl", "wget",
+];
+
+/// Command prefixes that would allow arbitrary code execution in PowerShell.
+const DANGEROUS_POWERSHELL_PREFIXES: &[&str] = &[
+    // Nested shells
+    "pwsh", "powershell", "cmd", "wsl",
+    // Evaluators
+    "iex", "invoke-expression", "icm", "invoke-command",
+    // Process spawners
+    "start-process", "start-job",
+    // .NET escapes
+    "add-type", "new-object",
+    // Scripting
+    "python", "python3", "node", "ruby", "perl", "php",
+];
+
+/// Check if a permission rule pattern is dangerous (would bypass security).
+///
+/// A pattern is dangerous if it would auto-allow commands that can execute
+/// arbitrary code (interpreters, package runners, shells, sudo, etc).
+///
+/// Returns `Some(reason)` if dangerous, `None` if safe.
+pub fn is_dangerous_permission(tool_name: &str, pattern: &str) -> Option<&'static str> {
+    let lower_tool = tool_name.to_lowercase();
+    let lower_pat = pattern.to_lowercase();
+
+    if lower_tool.contains("bash") || lower_tool == "shell" {
+        for &prefix in DANGEROUS_BASH_PREFIXES {
+            if lower_pat.starts_with(prefix)
+                || lower_pat == format!("{}*", prefix)
+                || lower_pat == format!("{}:*", prefix)
+            {
+                return Some("allows arbitrary code execution via shell");
+            }
+        }
+        // Wildcard-only patterns are dangerous
+        if lower_pat == "*" || lower_pat == "**" {
+            return Some("wildcard allows all commands");
+        }
+    }
+
+    if lower_tool.contains("powershell") {
+        for &prefix in DANGEROUS_POWERSHELL_PREFIXES {
+            if lower_pat.starts_with(prefix)
+                || lower_pat == format!("{}*", prefix)
+                || lower_pat == format!("{}:*", prefix)
+            {
+                return Some("allows arbitrary code execution via PowerShell");
+            }
+        }
+        if lower_pat == "*" || lower_pat == "**" {
+            return Some("wildcard allows all commands");
+        }
+    }
+
+    // Agent wildcard is dangerous — bypasses delegation safety
+    if lower_tool.contains("agent") && (lower_pat == "*" || lower_pat.is_empty()) {
+        return Some("wildcard agent permission bypasses delegation safety");
+    }
+
+    None
+}
+
+/// Filter out dangerous permission rules from a rule set.
+/// Returns the safe subset plus a list of stripped rule descriptions.
+pub fn strip_dangerous_rules(
+    rules: &[crate::permissions::PermissionRule],
+) -> (Vec<crate::permissions::PermissionRule>, Vec<String>) {
+    let mut safe = Vec::new();
+    let mut stripped = Vec::new();
+
+    for rule in rules {
+        if rule.behavior != crate::permissions::PermissionBehavior::Allow {
+            safe.push(rule.clone());
+            continue;
+        }
+        if let Some(ref pattern) = rule.pattern {
+            if let Some(reason) = is_dangerous_permission(&rule.tool_name, pattern) {
+                stripped.push(format!(
+                    "Stripped rule: {}({}) — {}",
+                    rule.tool_name, pattern, reason
+                ));
+                continue;
+            }
+        }
+        safe.push(rule.clone());
+    }
+
+    (safe, stripped)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -482,5 +587,72 @@ mod tests {
         assert_eq!(classify("sudo python3 script.py").risk, RiskLevel::System);
         // "sudo rm file" → inner is ProjectWrite, elevated to System
         assert_eq!(classify("sudo rm file").risk, RiskLevel::System);
+    }
+
+    // ── dangerous permission detection ──────────────────────────────
+
+    #[test]
+    fn dangerous_bash_patterns() {
+        assert!(is_dangerous_permission("Bash", "python*").is_some());
+        assert!(is_dangerous_permission("Bash", "node*").is_some());
+        assert!(is_dangerous_permission("Bash", "sh*").is_some());
+        assert!(is_dangerous_permission("Bash", "sudo*").is_some());
+        assert!(is_dangerous_permission("Bash", "eval*").is_some());
+        assert!(is_dangerous_permission("Bash", "ssh*").is_some());
+        assert!(is_dangerous_permission("Bash", "npm run*").is_some());
+        assert!(is_dangerous_permission("Bash", "*").is_some());
+    }
+
+    #[test]
+    fn safe_bash_patterns() {
+        assert!(is_dangerous_permission("Bash", "git*").is_none());
+        assert!(is_dangerous_permission("Bash", "cargo*").is_none());
+        assert!(is_dangerous_permission("Bash", "ls*").is_none());
+        assert!(is_dangerous_permission("Bash", "cat*").is_none());
+    }
+
+    #[test]
+    fn dangerous_powershell_patterns() {
+        assert!(is_dangerous_permission("PowerShell", "iex*").is_some());
+        assert!(is_dangerous_permission("PowerShell", "invoke-expression*").is_some());
+        assert!(is_dangerous_permission("PowerShell", "cmd*").is_some());
+        assert!(is_dangerous_permission("PowerShell", "start-process*").is_some());
+        assert!(is_dangerous_permission("PowerShell", "*").is_some());
+    }
+
+    #[test]
+    fn dangerous_agent_wildcard() {
+        assert!(is_dangerous_permission("Agent", "*").is_some());
+        assert!(is_dangerous_permission("Agent", "").is_some());
+        // Specific agent names are OK
+        assert!(is_dangerous_permission("Agent", "code-review").is_none());
+    }
+
+    #[test]
+    fn strip_dangerous_rules_filters() {
+        use crate::permissions::{PermissionBehavior, PermissionRule};
+
+        let rules = vec![
+            PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: Some("python*".into()),
+                behavior: PermissionBehavior::Allow,
+            },
+            PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: Some("git*".into()),
+                behavior: PermissionBehavior::Allow,
+            },
+            PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: Some("rm*".into()),
+                behavior: PermissionBehavior::Deny,
+            },
+        ];
+
+        let (safe, stripped) = strip_dangerous_rules(&rules);
+        assert_eq!(safe.len(), 2); // git* (allow) + rm* (deny kept)
+        assert_eq!(stripped.len(), 1); // python* stripped
+        assert!(stripped[0].contains("python"));
     }
 }

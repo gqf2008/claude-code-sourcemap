@@ -222,6 +222,43 @@ impl McpManager {
         client.list_resources().await
     }
 
+    /// List all prompts across all connected MCP servers.
+    /// Returns tuples of (server_name, prompt).
+    pub async fn list_all_prompts(&self) -> Result<Vec<(String, crate::types::McpPrompt)>> {
+        let mut all = Vec::new();
+        let mut servers = self.servers.write().await;
+
+        for (name, client) in servers.iter_mut() {
+            match client.list_prompts().await {
+                Ok(prompts) => {
+                    for prompt in prompts {
+                        all.push((name.clone(), prompt));
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to list prompts from MCP server '{}': {}", name, e);
+                }
+            }
+        }
+
+        Ok(all)
+    }
+
+    /// Get a prompt from a specific MCP server.
+    pub async fn get_prompt(
+        &self,
+        server_name: &str,
+        prompt_name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<Vec<crate::types::McpPromptMessage>> {
+        let mut servers = self.servers.write().await;
+        let client = servers
+            .get_mut(server_name)
+            .with_context(|| format!("MCP server '{server_name}' not found"))?;
+
+        client.get_prompt(prompt_name, arguments).await
+    }
+
     /// Connect to an MCP server from config and register it (backwards-compat).
     pub async fn connect_server(&self, config: &McpServerConfig) -> Result<()> {
         self.start_server(config).await

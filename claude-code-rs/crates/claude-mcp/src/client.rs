@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::transport::StdioTransport;
-use crate::types::{ServerInfo, ServerCapabilities, McpToolDef, McpServerConfig, McpToolResult, McpResource, McpContent};
+use crate::types::{ServerInfo, ServerCapabilities, McpToolDef, McpServerConfig, McpToolResult, McpResource, McpContent, McpPrompt, McpPromptMessage};
 
 /// MCP client wrapping a transport with protocol-level operations.
 pub struct McpClient {
@@ -163,6 +163,52 @@ impl McpClient {
         .context("Failed to parse MCP resource contents")?;
 
         Ok(contents)
+    }
+
+    /// List prompts provided by this MCP server.
+    pub async fn list_prompts(&mut self) -> Result<Vec<McpPrompt>> {
+        if self.capabilities.prompts.is_none() {
+            return Ok(Vec::new());
+        }
+
+        let result = self
+            .transport
+            .request("prompts/list", Some(json!({})))
+            .await
+            .context("MCP prompts/list failed")?;
+
+        let prompts: Vec<McpPrompt> = serde_json::from_value(
+            result.get("prompts").cloned().unwrap_or(Value::Array(vec![])),
+        )
+        .context("Failed to parse MCP prompts list")?;
+
+        info!("MCP server '{}': {} prompts available", self.server_name, prompts.len());
+        Ok(prompts)
+    }
+
+    /// Get a specific prompt by name, with optional arguments.
+    pub async fn get_prompt(
+        &mut self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, Value>>,
+    ) -> Result<Vec<McpPromptMessage>> {
+        let mut params = json!({ "name": name });
+        if let Some(args) = arguments {
+            params["arguments"] = Value::Object(args);
+        }
+
+        let result = self
+            .transport
+            .request("prompts/get", Some(params))
+            .await
+            .with_context(|| format!("MCP prompts/get '{name}' failed"))?;
+
+        let messages: Vec<McpPromptMessage> = serde_json::from_value(
+            result.get("messages").cloned().unwrap_or(Value::Array(vec![])),
+        )
+        .context("Failed to parse MCP prompt messages")?;
+
+        Ok(messages)
     }
 
     /// Disconnect from the MCP server.

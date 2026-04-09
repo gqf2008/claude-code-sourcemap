@@ -102,6 +102,55 @@ impl McpToolResult {
     }
 }
 
+// ── Prompt definitions ────────────────────────────────────────────────────────
+
+/// An MCP prompt definition returned by `prompts/list`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPrompt {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+/// An argument for an MCP prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptArgument {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A message returned by `prompts/get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptMessage {
+    pub role: String,
+    pub content: McpPromptContent,
+}
+
+/// Content within a prompt message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum McpPromptContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "resource")]
+    Resource { resource: McpResourceRef },
+}
+
+/// Reference to a resource within a prompt message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceRef {
+    pub uri: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: Option<String>,
+}
+
 // ── Server configuration ─────────────────────────────────────────────────────
 
 /// Configuration for connecting to an MCP server via stdio.
@@ -307,5 +356,46 @@ mod tests {
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("test_tool"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn prompt_deserialize() {
+        let json = r#"{
+            "name": "code-review",
+            "description": "Review code changes",
+            "arguments": [
+                {"name": "diff", "description": "The diff to review", "required": true},
+                {"name": "style", "description": "Review style"}
+            ]
+        }"#;
+        let prompt: McpPrompt = serde_json::from_str(json).unwrap();
+        assert_eq!(prompt.name, "code-review");
+        assert_eq!(prompt.arguments.len(), 2);
+        assert!(prompt.arguments[0].required);
+        assert!(!prompt.arguments[1].required);
+    }
+
+    #[test]
+    fn prompt_message_text() {
+        let json = r#"{"role": "user", "content": {"type": "text", "text": "Review this code"}}"#;
+        let msg: McpPromptMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.role, "user");
+        match msg.content {
+            McpPromptContent::Text { ref text } => assert_eq!(text, "Review this code"),
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[test]
+    fn prompt_message_resource() {
+        let json = r#"{"role": "user", "content": {"type": "resource", "resource": {"uri": "file:///code.rs", "text": "fn main() {}"}}}"#;
+        let msg: McpPromptMessage = serde_json::from_str(json).unwrap();
+        match msg.content {
+            McpPromptContent::Resource { ref resource } => {
+                assert_eq!(resource.uri, "file:///code.rs");
+                assert_eq!(resource.text.as_deref(), Some("fn main() {}"));
+            }
+            _ => panic!("expected resource content"),
+        }
     }
 }

@@ -325,6 +325,49 @@ use serde_json::{json, Value};
     // ── session_allow ────────────────────────────────────────────────
 
     #[tokio::test]
+    async fn test_accept_edits_strips_dangerous_rules() {
+        // python* rule should be stripped in AcceptEdits mode
+        let rules = vec![
+            PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: Some("python*".into()),
+                behavior: PermissionBehavior::Allow,
+            },
+            PermissionRule {
+                tool_name: "Bash".into(),
+                pattern: Some("git*".into()),
+                behavior: PermissionBehavior::Allow,
+            },
+        ];
+        let checker = PermissionChecker::new(PermissionMode::AcceptEdits, rules);
+        // python3 should NOT be auto-allowed (rule was stripped)
+        let r1 = checker
+            .check(&shell_tool(), &json!({"command": "python3 exploit.py"}), None)
+            .await;
+        assert_eq!(r1.behavior, PermissionBehavior::Ask);
+        // git should still be allowed (safe rule kept)
+        let r2 = checker
+            .check(&shell_tool(), &json!({"command": "git status"}), None)
+            .await;
+        assert_eq!(r2.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_default_mode_keeps_all_rules() {
+        // In Default mode, even dangerous rules are kept (user explicitly configured them)
+        let rules = vec![PermissionRule {
+            tool_name: "Bash".into(),
+            pattern: Some("python*".into()),
+            behavior: PermissionBehavior::Allow,
+        }];
+        let checker = PermissionChecker::new(PermissionMode::Default, rules);
+        let result = checker
+            .check(&shell_tool(), &json!({"command": "python3 script.py"}), None)
+            .await;
+        assert_eq!(result.behavior, PermissionBehavior::Allow);
+    }
+
+    #[tokio::test]
     async fn test_session_allow_persists() {
         let checker = PermissionChecker::new(PermissionMode::Default, vec![]);
         let r1 = checker.check(&shell_tool(), &json!({}), None).await;
