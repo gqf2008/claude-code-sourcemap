@@ -52,7 +52,7 @@ impl EventBus {
             request_tx: request_tx.clone(),
             perm_req_tx: perm_req_tx.clone(),
             perm_resp_rx,
-            perm_resp_tx: perm_resp_tx.clone(),
+            _perm_resp_tx: perm_resp_tx.clone(),
         };
 
         let client = ClientHandle {
@@ -61,7 +61,7 @@ impl EventBus {
             request_tx,
             perm_req_rx,
             _perm_req_tx: perm_req_tx,
-            perm_resp_tx,
+            perm_resp_tx: Some(perm_resp_tx),
         };
 
         (bus, client)
@@ -81,7 +81,9 @@ pub struct BusHandle {
     request_tx: mpsc::Sender<AgentRequest>,
     perm_req_tx: broadcast::Sender<PermissionRequest>,
     perm_resp_rx: mpsc::Receiver<PermissionResponse>,
-    perm_resp_tx: mpsc::Sender<PermissionResponse>,
+    /// Kept alive to prevent the mpsc channel from closing.
+    /// Only the primary client gets a clone (secondary clients cannot respond).
+    _perm_resp_tx: mpsc::Sender<PermissionResponse>,
 }
 
 impl BusHandle {
@@ -192,7 +194,9 @@ impl BusHandle {
     ///
     /// Multiple clients can coexist — all receive notifications (broadcast),
     /// and all share the same request channel (mpsc to core).
-    /// Permission requests are broadcast to all clients; first responder wins.
+    /// Permission requests are broadcast to all clients for display purposes,
+    /// but only the primary client can respond (secondary clients have no
+    /// permission response channel to prevent spoofing).
     #[must_use] 
     pub fn new_client(&self) -> ClientHandle {
         ClientHandle {
@@ -201,7 +205,7 @@ impl BusHandle {
             request_tx: self.request_tx.clone(),
             perm_req_rx: self.perm_req_tx.subscribe(),
             _perm_req_tx: self.perm_req_tx.clone(),
-            perm_resp_tx: self.perm_resp_tx.clone(),
+            perm_resp_tx: None, // secondary clients cannot respond to permissions
         }
     }
 
@@ -239,7 +243,9 @@ pub struct ClientHandle {
     perm_req_rx: broadcast::Receiver<PermissionRequest>,
     /// Keep the sender alive so `perm_req_rx` doesn't get `Closed`.
     _perm_req_tx: broadcast::Sender<PermissionRequest>,
-    perm_resp_tx: mpsc::Sender<PermissionResponse>,
+    /// Permission response channel. Only the primary client can respond;
+    /// secondary clients (via `new_client()`) have `None` to prevent spoofing.
+    perm_resp_tx: Option<mpsc::Sender<PermissionResponse>>,
 }
 
 impl ClientHandle {
@@ -285,10 +291,13 @@ impl ClientHandle {
     }
 
     /// Respond to a permission request.
+    ///
+    /// Only the primary client can respond; secondary clients return `Err`.
     pub fn send_permission_response(&self, response: PermissionResponse) -> Result<(), SendError> {
-        self.perm_resp_tx
-            .try_send(response)
-            .map_err(|_| SendError::DISCONNECTED)
+        match &self.perm_resp_tx {
+            Some(tx) => tx.try_send(response).map_err(|_| SendError::DISCONNECTED),
+            None => Err(SendError::DISCONNECTED), // secondary client — not authorized
+        }
     }
 
     /// Convenience: submit a user message.

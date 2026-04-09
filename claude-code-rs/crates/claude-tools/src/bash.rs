@@ -233,12 +233,24 @@ impl Tool for BashTool {
             return Ok(ToolResult::error(format!("🚫 {reason}\nCommand: {command}")));
         }
 
-        // Resolve working directory (allow override)
+        // Resolve working directory (allow override within project boundary)
         let cwd = match input["working_directory"].as_str() {
             Some(dir) => {
                 let p = std::path::Path::new(dir);
-                if p.is_absolute() && p.is_dir() { p.to_path_buf() }
-                else { context.cwd.clone() }
+                if p.is_absolute() && p.is_dir() {
+                    // Validate the directory is within the project boundary
+                    match crate::path_util::resolve_path(dir, &context.cwd) {
+                        Ok(resolved) if resolved.is_dir() => resolved,
+                        _ => {
+                            return Ok(ToolResult::error(format!(
+                                "working_directory '{}' is outside the allowed project boundary",
+                                dir
+                            )));
+                        }
+                    }
+                } else {
+                    context.cwd.clone()
+                }
             }
             None => context.cwd.clone(),
         };

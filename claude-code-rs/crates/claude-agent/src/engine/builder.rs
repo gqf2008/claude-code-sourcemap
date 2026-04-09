@@ -396,7 +396,7 @@ impl QueryEngineBuilder {
             cost_tracker: CostTracker::new(),
             cancel_tokens: coord_cancel_tokens,
             agent_channels: coord_agent_channels,
-            auto_compact: tokio::sync::Mutex::new(AutoCompactState::new()),
+            auto_compact: Arc::new(tokio::sync::Mutex::new(AutoCompactState::new())),
             context_window: effective_context_window,
         }
     }

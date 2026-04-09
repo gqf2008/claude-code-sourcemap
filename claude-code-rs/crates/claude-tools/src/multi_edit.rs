@@ -110,15 +110,22 @@ impl Tool for MultiEditTool {
             }
         }
 
-        // Apply edits sequentially (safe since we pre-validated)
+        // Apply edits using offset-based replacement on the original content.
+        // We already know each old_string's position in the original (from regions).
+        // Sort regions by start position descending so replacements don't shift
+        // earlier offsets.
         let mut content = original.clone();
-        for (i, edit) in edits.iter().enumerate() {
-            let old_str = edit["old_string"].as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {i} missing 'old_string'"))?;
-            let new_str = edit["new_string"]
+        let mut indexed_edits: Vec<(usize, usize, &str)> = Vec::new(); // (start, end, new_string)
+        for &(start, end, edit_idx) in &regions {
+            let new_str = edits[edit_idx]["new_string"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Edit {i} missing 'new_string'"))?;
-            content = content.replacen(old_str, new_str, 1);
+                .ok_or_else(|| anyhow::anyhow!("Edit {} missing 'new_string'", edit_idx))?;
+            indexed_edits.push((start, end, new_str));
+        }
+        // Apply from end to start so byte offsets remain valid
+        indexed_edits.sort_by(|a, b| b.0.cmp(&a.0));
+        for (start, end, new_str) in indexed_edits {
+            content.replace_range(start..end, new_str);
         }
 
         tokio::fs::write(&path, &content).await?;

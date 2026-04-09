@@ -51,7 +51,10 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::CurDir => {} // skip `.`
             Component::ParentDir => {
-                result.pop(); // go up one level
+                // Don't pop the root component (e.g. `C:\` or `/`)
+                if result.parent().is_some() && result != result.ancestors().last().unwrap_or(Path::new("")) {
+                    result.pop();
+                }
             }
             other => result.push(other),
         }

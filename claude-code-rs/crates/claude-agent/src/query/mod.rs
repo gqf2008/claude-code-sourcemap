@@ -506,10 +506,13 @@ pub fn query_stream_with_injection(
                                         uuid: Uuid::new_v4().to_string(),
                                         content: vec![ContentBlock::Text { text: context_msg }],
                                     })];
+                                    // Re-estimate tokens so warning system stays accurate
+                                    let new_tokens = claude_core::token_estimation::token_count_with_estimation(&messages)
+                                        + claude_core::token_estimation::estimate_system_tokens(&config.system_prompt);
                                     {
                                         let mut s = state.write().await;
                                         s.messages = messages.clone();
-                                        s.total_input_tokens = 0;
+                                        s.total_input_tokens = new_tokens;
                                         s.total_output_tokens = 0;
                                     }
                                     ac_state.lock().await.record_success();

@@ -52,7 +52,8 @@ pub struct QueryEngine {
     /// Sub-agent message channels (coordinator mode only).
     agent_channels: Option<AgentChannelMap>,
     /// Auto-compact state machine (circuit breaker, dynamic threshold).
-    auto_compact: tokio::sync::Mutex<AutoCompactState>,
+    /// Shared via `Arc` so the query loop can reuse the same state across submits.
+    auto_compact: Arc<tokio::sync::Mutex<AutoCompactState>>,
     /// Model context window size (for auto-compact threshold calculation).
     context_window: u64,
 }
@@ -238,9 +239,7 @@ impl QueryEngine {
             thinking: self.config.thinking.clone(),
             token_budget: self.config.token_budget,
             context_window: self.context_window,
-            auto_compact_state: Some(Arc::new(tokio::sync::Mutex::new(
-                AutoCompactState::new(),
-            ))),
+            auto_compact_state: Some(Arc::clone(&self.auto_compact)),
         }
     }
 
@@ -522,8 +521,22 @@ impl QueryEngine {
     /// Removes both the last assistant message and the last user message from history.
     /// Used by `/retry` to resend the last user prompt.
     pub async fn pop_last_turn(&self) -> Option<String> {
-        let prompt = self.last_user_prompt().await?;
         let mut s = self.state.write().await;
+
+        // Extract the last user prompt while holding the write lock
+        let prompt = s.messages.iter().rev().find_map(|m| {
+            if let Message::User(u) = m {
+                u.content.iter().find_map(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        })?;
 
         // Pop messages from the end until we've removed the last assistant + user pair
         let mut removed_assistant = false;

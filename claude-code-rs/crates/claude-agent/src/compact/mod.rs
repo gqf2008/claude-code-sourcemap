@@ -94,6 +94,7 @@ paying special attention to the most recent messages from both user and assistan
 IMPORTANT: ensure that this step is DIRECTLY in line with the user's most recent explicit requests, \
 and the task you were working on immediately before this summary request. If your last task was concluded, \
 then only list next steps if they are explicitly in line with the users request. \
+Do not start on tangential requests or really old requests that were already completed without confirming with the user first. \
 If there is a next step, include direct quotes from the most recent conversation showing exactly what task \
 you were working on and where you left off. This should be verbatim to ensure there's no drift in task interpretation.
 
@@ -148,9 +149,14 @@ Please provide your summary based on the conversation so far, following this str
 ensuring precision and thoroughness in your response.
 
 There may be additional summarization instructions provided in the included context. \
-If so, remember to follow these instructions when creating the above summary.
+If so, remember to follow these instructions when creating the above summary.";
 
-REMINDER: Do NOT call any tools. Respond with plain text only.";
+/// Trailer appended AFTER custom instructions to reinforce no-tool constraint.
+/// TS `prompt.ts:293-302`: added to prevent 2.79% tool-call fallthrough rate.
+const NO_TOOLS_TRAILER: &str = "\n\n\
+REMINDER: Do NOT call any tools. Respond with plain text only — \
+an <analysis> block followed by a <summary> block. \
+Tool calls will be rejected and you will fail the task.";
 
 // ── Summary formatting ────────────────────────────────────────────────────────
 
@@ -309,6 +315,8 @@ pub async fn compact_conversation(
             compact_prompt.push_str(&format!("\n\nAdditional Instructions:\n{}", instructions));
         }
     }
+    // Append trailer AFTER custom instructions to reinforce no-tool constraint
+    compact_prompt.push_str(NO_TOOLS_TRAILER);
 
     let system = vec![SystemBlock {
         block_type: "text".into(),
