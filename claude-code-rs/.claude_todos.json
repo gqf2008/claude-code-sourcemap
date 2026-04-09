@@ -1,38 +1,20 @@
 [
   {
-    "id": "read-cargo-toml",
-    "content": "Read root Cargo.toml and project structure",
-    "status": "completed",
+    "id": "explore-rs",
+    "content": "探索 Rust 项目结构和源码统计",
+    "status": "in_progress",
     "priority": "high"
   },
   {
-    "id": "read-architecture",
-    "content": "Read ARCHITECTURE.md for design overview",
-    "status": "completed",
+    "id": "explore-js",
+    "content": "探索 JS 项目结构和源码统计",
+    "status": "pending",
     "priority": "high"
   },
   {
-    "id": "read-crates",
-    "content": "Read each crate's Cargo.toml and key source files",
-    "status": "completed",
-    "priority": "high"
-  },
-  {
-    "id": "check-tests",
-    "content": "Review test coverage and test quality",
-    "status": "completed",
-    "priority": "medium"
-  },
-  {
-    "id": "check-security",
-    "content": "Check for security issues",
-    "status": "completed",
-    "priority": "medium"
-  },
-  {
-    "id": "compile-results",
-    "content": "Compile review findings and provide summary",
-    "status": "completed",
+    "id": "compare",
+    "content": "对比分析两个项目的架构、质量、差异",
+    "status": "pending",
     "priority": "high"
   }
 ]
