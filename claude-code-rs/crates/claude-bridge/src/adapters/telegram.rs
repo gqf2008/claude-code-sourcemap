@@ -12,8 +12,8 @@
 //! 3. Configure `BridgeConfig.telegram` with the bot token
 
 use async_trait::async_trait;
-use tokio::sync::watch;
-use tracing::{error, info};
+use tokio::sync::{watch, Mutex};
+use tracing::{error, info, warn};
 
 use crate::adapter::{AdapterError, AdapterResult, ChannelAdapter};
 use crate::config::TelegramConfig;
@@ -30,7 +30,8 @@ pub struct TelegramAdapter {
     /// Gateway context (set on start).
     ctx: Option<GatewayContext>,
     /// Polling task handle + cancel signal.
-    poll_task: Option<(tokio::task::JoinHandle<()>, watch::Sender<bool>)>,
+    /// Wrapped in Mutex so `stop(&self)` can take ownership.
+    poll_task: Mutex<Option<(tokio::task::JoinHandle<()>, watch::Sender<bool>)>>,
 }
 
 #[allow(dead_code)]
@@ -41,7 +42,7 @@ impl TelegramAdapter {
             config,
             http: reqwest::Client::new(),
             ctx: None,
-            poll_task: None,
+            poll_task: Mutex::new(None),
         }
     }
 
@@ -223,7 +224,7 @@ impl ChannelAdapter for TelegramAdapter {
                 }
             });
 
-            self.poll_task = Some((poll_task, cancel_tx));
+            *self.poll_task.lock().await = Some((poll_task, cancel_tx));
         }
 
         Ok(())
@@ -239,15 +240,15 @@ impl ChannelAdapter for TelegramAdapter {
     }
 
     async fn stop(&self) -> AdapterResult<()> {
-        if let Some((ref task, ref cancel_tx)) = self.poll_task {
+        if let Some((task, cancel_tx)) = self.poll_task.lock().await.take() {
             // Signal graceful shutdown
             let _ = cancel_tx.send(true);
-            // Wait briefly for clean exit, then abort if stuck
-            tokio::select! {
-                _ = async { task } => {}
-                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
-                    task.abort();
-                }
+            // Wait for clean exit, then abort if stuck
+            if tokio::time::timeout(std::time::Duration::from_secs(3), task)
+                .await
+                .is_err()
+            {
+                warn!("Telegram polling task did not stop in 3s, detaching");
             }
         }
         info!("Telegram adapter stopped");

@@ -50,9 +50,10 @@ impl FeishuAdapter {
 
     /// Get or refresh the tenant access token.
     ///
-    /// Uses `RwLock` for interior mutability so this works through `&self`.
+    /// Uses double-check locking: fast read-lock path for cached tokens,
+    /// then write-lock with re-check to prevent concurrent HTTP fetches.
     async fn ensure_token(&self) -> AdapterResult<String> {
-        // Fast path: token already cached
+        // Fast path: token already cached (read lock)
         {
             let guard = self.access_token.read().await;
             if let Some(ref token) = *guard {
@@ -60,7 +61,13 @@ impl FeishuAdapter {
             }
         }
 
-        // Slow path: fetch a new token
+        // Slow path: acquire write lock, double-check, then fetch
+        let mut guard = self.access_token.write().await;
+        if let Some(ref token) = *guard {
+            // Another task fetched the token while we waited for the write lock
+            return Ok(token.clone());
+        }
+
         let url = format!("{}/auth/v3/tenant_access_token/internal", FEISHU_API_BASE);
         let resp = self.http.post(&url)
             .json(&serde_json::json!({
@@ -77,7 +84,6 @@ impl FeishuAdapter {
             .to_string();
 
         info!("Feishu access token acquired");
-        let mut guard = self.access_token.write().await;
         *guard = Some(token.clone());
         Ok(token)
     }

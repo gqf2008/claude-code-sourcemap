@@ -185,12 +185,20 @@ impl AgentCoreAdapter {
                     });
                 }
                 AgentRequest::SendAgentMessage { agent_id, message } => {
-                    debug!("SendAgentMessage to {}: {}", agent_id, message);
-                    // TODO: dispatch to sub-agent via coordinator
+                    warn!("SendAgentMessage to {}: {} — sub-agent dispatch not yet implemented", agent_id, message);
+                    let bus = self.bus.lock().await;
+                    bus.notify(AgentNotification::Error {
+                        code: ErrorCode::InternalError,
+                        message: format!("Sub-agent message dispatch not yet implemented (target: {})", agent_id),
+                    });
                 }
                 AgentRequest::StopAgent { agent_id } => {
-                    debug!("StopAgent: {}", agent_id);
-                    // TODO: cancel sub-agent via coordinator
+                    warn!("StopAgent: {} — sub-agent cancellation not yet implemented", agent_id);
+                    let bus = self.bus.lock().await;
+                    bus.notify(AgentNotification::Error {
+                        code: ErrorCode::InternalError,
+                        message: format!("Sub-agent cancellation not yet implemented (target: {})", agent_id),
+                    });
                 }
                 AgentRequest::PermissionResponse { .. } => {
                     // Permission responses are handled via the dedicated channel,

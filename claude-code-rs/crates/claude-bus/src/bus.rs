@@ -103,12 +103,37 @@ impl BusHandle {
     /// This is the primary mechanism for tool permission checks in the
     /// decoupled architecture. The core sends a request describing what
     /// the tool wants to do, and blocks until the UI responds.
+    ///
+    /// Returns `None` if the UI is disconnected or no client responds
+    /// within the timeout (default 30s). Callers should treat `None`
+    /// as denial.
     pub async fn request_permission(
         &mut self,
         tool_name: &str,
         input: serde_json::Value,
         risk_level: RiskLevel,
         description: &str,
+    ) -> Option<PermissionResponse> {
+        self.request_permission_with_timeout(
+            tool_name,
+            input,
+            risk_level,
+            description,
+            std::time::Duration::from_secs(30),
+        )
+        .await
+    }
+
+    /// Like [`request_permission`](Self::request_permission) but with a
+    /// custom timeout. Useful for non-interactive clients (RPC, Bridge)
+    /// that may not have a permission UI.
+    pub async fn request_permission_with_timeout(
+        &mut self,
+        tool_name: &str,
+        input: serde_json::Value,
+        risk_level: RiskLevel,
+        description: &str,
+        timeout: std::time::Duration,
     ) -> Option<PermissionResponse> {
         let request_id = Uuid::new_v4().to_string();
         let req = PermissionRequest {
@@ -124,20 +149,33 @@ impl BusHandle {
             return None; // UI disconnected
         }
 
-        // Wait for matching response
-        // In a real multi-request scenario we'd need a map; for now
-        // we assume sequential permission checks (which matches TS behavior).
-        while let Some(resp) = self.perm_resp_rx.recv().await {
-            if resp.request_id == request_id {
-                return Some(resp);
+        // Wait for matching response with timeout.
+        // Without a timeout, non-interactive clients (Bridge, RPC without
+        // permission handler) would hang forever.
+        let wait = async {
+            while let Some(resp) = self.perm_resp_rx.recv().await {
+                if resp.request_id == request_id {
+                    return Some(resp);
+                }
+                tracing::warn!(
+                    "Received permission response for unknown request: {}",
+                    resp.request_id
+                );
             }
-            // Stale response for a different request — skip
-            tracing::warn!(
-                "Received permission response for unknown request: {}",
-                resp.request_id
-            );
+            None // Channel closed
+        };
+
+        match tokio::time::timeout(timeout, wait).await {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(
+                    "Permission request timed out for tool '{}' after {:?}, auto-denying",
+                    tool_name,
+                    timeout,
+                );
+                None
+            }
         }
-        None // Channel closed
     }
 
     /// Get the notification sender (for cloning to sub-agents).
@@ -503,5 +541,53 @@ mod tests {
 
         let e3 = client.recv_notification().await.unwrap();
         assert!(matches!(e3, AgentNotification::AgentComplete { .. }));
+    }
+
+    #[tokio::test]
+    async fn permission_request_timeout_auto_denies() {
+        let (mut bus, _client) = EventBus::new(16);
+
+        // No one handles the permission request → should timeout and return None
+        let result = bus
+            .request_permission_with_timeout(
+                "Bash",
+                serde_json::json!({"cmd": "rm -rf /"}),
+                RiskLevel::High,
+                "Delete everything",
+                std::time::Duration::from_millis(50),
+            )
+            .await;
+
+        assert!(result.is_none(), "Timed-out permission request should return None (deny)");
+    }
+
+    #[tokio::test]
+    async fn permission_response_within_timeout() {
+        let (mut bus, mut client) = EventBus::new(16);
+
+        let core = tokio::spawn(async move {
+            let resp = bus
+                .request_permission_with_timeout(
+                    "FileRead",
+                    serde_json::json!({}),
+                    RiskLevel::Low,
+                    "Read a file",
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .unwrap();
+            assert!(resp.granted);
+        });
+
+        let perm = client.recv_permission_request().await.unwrap();
+        client
+            .send_permission_response(PermissionResponse {
+                request_id: perm.request_id,
+                granted: true,
+                remember: false,
+            })
+            .unwrap();
+
+        core.await.unwrap();
     }
 }
