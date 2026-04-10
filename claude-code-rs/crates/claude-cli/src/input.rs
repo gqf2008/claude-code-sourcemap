@@ -26,6 +26,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
     "/fast", "/add-dir", "/summary", "/rename", "/copy", "/share", "/files",
     "/env", "/agents", "/theme", "/plan", "/think", "/break-cache", "/rewind",
+    "/vim", "/stickers", "/effort", "/tag", "/release-notes", "/feedback",
 ];
 
 /// Continuation prompt for multiline input.
@@ -206,16 +207,19 @@ impl InputReader {
                     return Ok(InputResult::Eof);
                 }
 
-                // ── Ctrl+U: clear current line ───────────────────────
+                // ── Ctrl+U: clear from start to cursor ────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Char('u'),
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(last) = lines.last_mut() {
-                        last.clear();
+                        if cursor > 0 {
+                            let byte_pos = last.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(last.len());
+                            last.drain(..byte_pos);
+                            cursor = 0;
+                        }
                     }
-                    cursor = 0;
                     redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 

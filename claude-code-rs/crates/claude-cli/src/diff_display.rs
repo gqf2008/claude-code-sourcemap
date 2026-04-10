@@ -39,6 +39,34 @@ fn highlight_line(line: &str, hl: &mut HighlightLines, ss: &SyntaxSet) -> String
     }
 }
 
+/// Render a delete/insert line pair with word-level highlighting.
+/// Changed words get a bright background; unchanged parts use dim coloring.
+fn render_word_diff_pair(old_line: &str, new_line: &str) {
+    let word_diff = TextDiff::from_words(old_line, new_line);
+
+    // Render deleted line with highlighted removed words
+    eprint!("\x1b[31m- ");
+    for change in word_diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => eprint!("\x1b[41;97m{}\x1b[0m\x1b[31m", change.value()),
+            ChangeTag::Equal => eprint!("{}", change.value()),
+            ChangeTag::Insert => {} // skip inserts on the delete line
+        }
+    }
+    eprintln!("\x1b[0m");
+
+    // Render inserted line with highlighted added words
+    eprint!("\x1b[32m+ ");
+    for change in word_diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => eprint!("\x1b[42;97m{}\x1b[0m\x1b[32m", change.value()),
+            ChangeTag::Equal => eprint!("{}", change.value()),
+            ChangeTag::Delete => {} // skip deletes on the insert line
+        }
+    }
+    eprintln!("\x1b[0m");
+}
+
 /// Display a unified diff between two strings with colored + syntax-highlighted output.
 ///
 /// Red (`-`) for removed lines, green (`+`) for added lines, dim for context.
@@ -76,12 +104,31 @@ pub fn print_diff(old: &str, new: &str, file_path: Option<&str>) {
         );
 
         for op in &group {
-            for change in diff.iter_changes(op) {
+            // Collect changes for word-level diff detection
+            let changes: Vec<_> = diff.iter_changes(op).collect();
+            let mut i = 0;
+            while i < changes.len() {
+                let change = &changes[i];
                 let line = change.value();
                 let trimmed = line.strip_suffix('\n').unwrap_or(line);
 
                 match change.tag() {
                     ChangeTag::Delete => {
+                        // Look ahead: if next change is Insert, render word-level diff
+                        if i + 1 < changes.len() && changes[i + 1].tag() == ChangeTag::Insert {
+                            let ins_line = changes[i + 1].value();
+                            let ins_trimmed = ins_line.strip_suffix('\n').unwrap_or(ins_line);
+                            render_word_diff_pair(trimmed, ins_trimmed);
+                            // Advance highlighters on both lines to keep state in sync
+                            if let Some(ref mut hl) = hl_old {
+                                let _ = highlight_line(trimmed, hl, &res.ss);
+                            }
+                            if let Some(ref mut hl) = hl_new {
+                                let _ = highlight_line(ins_trimmed, hl, &res.ss);
+                            }
+                            i += 2;
+                            continue;
+                        }
                         if let Some(ref mut hl) = hl_old {
                             let highlighted = highlight_line(trimmed, hl, &res.ss);
                             eprint!("\x1b[41m\x1b[97m-\x1b[0m ");
@@ -112,6 +159,7 @@ pub fn print_diff(old: &str, new: &str, file_path: Option<&str>) {
                         }
                     }
                 }
+                i += 1;
             }
         }
     }
@@ -214,5 +262,19 @@ mod tests {
         let s = format!("{}", stats);
         assert!(s.contains("+5"));
         assert!(s.contains("-3"));
+    }
+
+    #[test]
+    fn print_diff_runs_without_panic() {
+        // Smoke test: word-level diff should not panic on various inputs
+        print_diff("hello world\n", "hello rust\n", Some("test.rs"));
+        print_diff("a\nb\nc\n", "a\nB\nc\n", None);
+        print_diff("", "new\n", None);
+        print_diff("old\n", "", None);
+    }
+
+    #[test]
+    fn print_inline_diff_runs_without_panic() {
+        print_inline_diff("hello world", "hello rust");
     }
 }

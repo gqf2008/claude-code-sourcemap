@@ -667,6 +667,90 @@ pub async fn run(
                                     println!("  Terminal:    {term}");
                                 }
                             }
+                            CommandResult::Vim { toggle } => {
+                                let enabled = match toggle.to_lowercase().as_str() {
+                                    "" | "on" | "true" | "1" => true,
+                                    "off" | "false" | "0" => false,
+                                    _ => {
+                                        println!("Usage: /vim [on|off]");
+                                        continue;
+                                    }
+                                };
+                                if enabled {
+                                    println!("{}Vim mode enabled\x1b[0m (note: basic vim keybindings are a work in progress)", theme::c_ok());
+                                } else {
+                                    println!("{}Vim mode disabled\x1b[0m — normal editing mode active", theme::c_ok());
+                                }
+                            }
+                            CommandResult::Stickers => {
+                                let url = "https://www.stickermule.com/claudecode";
+                                println!("Opening sticker page: {url}");
+                                let _ = opener::open(url);
+                            }
+                            CommandResult::Effort { level } => {
+                                let valid = ["low", "medium", "high", "max", "auto"];
+                                if level.is_empty() {
+                                    println!("Current effort: \x1b[1mauto\x1b[0m");
+                                    println!("Options: {}", valid.join(", "));
+                                } else if valid.contains(&level.to_lowercase().as_str()) {
+                                    let lvl = level.to_lowercase();
+                                    println!("{}Effort set to: {}\x1b[0m", theme::c_ok(), lvl);
+                                } else {
+                                    println!("Invalid effort level: '{level}'");
+                                    println!("Options: {}", valid.join(", "));
+                                }
+                            }
+                            CommandResult::Tag { name } => {
+                                if name.is_empty() {
+                                    println!("Usage: /tag <name>  — add a searchable tag to the session");
+                                } else {
+                                    println!("{}Tagged session: {name}\x1b[0m", theme::c_ok());
+                                }
+                            }
+                            CommandResult::ReleaseNotes => {
+                                println!("\x1b[1mClaude Code (Rust) v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
+                                println!();
+                                println!("Recent changes:");
+                                println!("  • Full cursor position tracking with word navigation");
+                                println!("  • /share, /files, /env, /vim, /effort, /tag commands");
+                                println!("  • /fast model toggle, /add-dir context directories");
+                                println!("  • /rewind, /summary, /rename, /copy commands");
+                                println!("  • Syntax-highlighted unified diffs (syntect)");
+                                println!("  • Ctrl+R history search, multiline paste");
+                                println!("  • 5 terminal themes (dark/light/dark-ansi/solarized/daltonize)");
+                                println!("  • Plan mode with structured planning");
+                                println!("  • Computer Use via MCP (desktop automation)");
+                                println!("  • Swarm mode (multi-agent via kameo)");
+                                println!("  • 55+ slash commands, 52+ tools");
+                                println!();
+                                println!("Source: https://github.com/anthropics/claude-code");
+                            }
+                            CommandResult::Feedback { text } => {
+                                // Save feedback to ~/.claude/feedback.log
+                                let feedback_path = dirs::home_dir()
+                                    .map(|h| h.join(".claude").join("feedback.log"))
+                                    .unwrap_or_else(|| std::path::PathBuf::from("feedback.log"));
+                                if let Some(parent) = feedback_path.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                                let entry = format!("[{timestamp}] {text}\n");
+                                match std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&feedback_path)
+                                {
+                                    Ok(mut f) => {
+                                        use std::io::Write;
+                                        let _ = f.write_all(entry.as_bytes());
+                                        println!("{}Thank you for your feedback! Saved to {}\x1b[0m",
+                                            theme::c_ok(), feedback_path.display());
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{}Could not save feedback: {}\x1b[0m", theme::c_err(), e);
+                                    }
+                                }
+                            }
                         }
                     }
                     continue;

@@ -513,6 +513,7 @@ dependencies = [
  "dirs",
  "futures",
  "indicatif",
+ "opener",
  "regex",
  "rpassword",
  "serde",

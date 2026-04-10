@@ -65,6 +65,18 @@ pub enum SlashCommand {
     Files { pattern: String },
     /// Show environment information.
     Env,
+    /// Toggle vim editing mode.
+    Vim { toggle: String },
+    /// Open stickers page in browser.
+    Stickers,
+    /// Set effort level (low|medium|high|max|auto).
+    Effort { level: String },
+    /// Tag current session.
+    Tag { name: String },
+    /// Show release notes / changelog.
+    ReleaseNotes,
+    /// Submit feedback.
+    Feedback { text: String },
     Exit,
     Unknown(String),
 }
@@ -127,6 +139,12 @@ impl SlashCommand {
             "share" => Self::Share,
             "files" | "ls" => Self::Files { pattern: args },
             "env" | "environment" => Self::Env,
+            "vim" => Self::Vim { toggle: args },
+            "stickers" => Self::Stickers,
+            "effort" => Self::Effort { level: args },
+            "tag" => Self::Tag { name: args },
+            "release-notes" | "changelog" => Self::ReleaseNotes,
+            "feedback" => Self::Feedback { text: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -243,6 +261,18 @@ impl SlashCommand {
             Self::Share => CommandResult::Share,
             Self::Files { pattern } => CommandResult::Files { pattern: pattern.clone() },
             Self::Env => CommandResult::Env,
+            Self::Vim { toggle } => CommandResult::Vim { toggle: toggle.clone() },
+            Self::Stickers => CommandResult::Stickers,
+            Self::Effort { level } => CommandResult::Effort { level: level.clone() },
+            Self::Tag { name } => CommandResult::Tag { name: name.clone() },
+            Self::ReleaseNotes => CommandResult::ReleaseNotes,
+            Self::Feedback { text } => {
+                if text.is_empty() {
+                    CommandResult::Print("Usage: /feedback <your feedback text>".into())
+                } else {
+                    CommandResult::Feedback { text: text.clone() }
+                }
+            }
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -314,6 +344,18 @@ pub enum CommandResult {
     Files { pattern: String },
     /// Show environment information (/env).
     Env,
+    /// Toggle vim editing mode (/vim [on|off]).
+    Vim { toggle: String },
+    /// Open stickers page (/stickers).
+    Stickers,
+    /// Set effort level (/effort [low|medium|high|max|auto]).
+    Effort { level: String },
+    /// Tag current session (/tag <name>).
+    Tag { name: String },
+    /// Show release notes (/release-notes).
+    ReleaseNotes,
+    /// Submit feedback (/feedback <text>).
+    Feedback { text: String },
     Exit,
 }
 
@@ -371,6 +413,8 @@ const HELP_TEXT_BASE: &str = "\
   /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
   /fast [off]        Toggle fast/cheap model (haiku)
   /think [on|off|N]  Toggle extended thinking (N = token budget)
+  /effort [level]    Set effort (low|medium|high|max|auto)
+  /vim [on|off]      Toggle vim editing mode
   /theme [name]      Switch terminal theme (dark, light, dark-ansi, etc.)
   /break-cache       Force next request to skip prompt cache
   /login             Set API key interactively
@@ -389,6 +433,7 @@ const HELP_TEXT_BASE: &str = "\
   /session delete <id> Delete a saved session
   /summary           Generate a conversation summary
   /rename <name>     Rename current session
+  /tag <name>        Tag or untag current session
   /copy              Copy last assistant response to clipboard
   /share             Export session to shareable markdown file
   /export [format]   Export session (markdown or json)
@@ -407,6 +452,9 @@ const HELP_TEXT_BASE: &str = "\
   /files [pattern]   List files in current directory
   /env               Show environment information
   /version           Show version info
+  /release-notes     Show version and release notes
+  /stickers          Order Claude Code stickers!
+  /feedback <text>   Submit feedback about Claude Code
 
 \x1b[1mTips\x1b[0m
   • End a line with \\ to continue on the next line (multiline)
@@ -1345,7 +1393,76 @@ mod tests {
         assert!(text.contains("/share"));
         assert!(text.contains("/files"));
         assert!(text.contains("/env"));
+        assert!(text.contains("/vim"));
+        assert!(text.contains("/effort"));
+        assert!(text.contains("/stickers"));
+        assert!(text.contains("/tag"));
+        assert!(text.contains("/release-notes"));
+        assert!(text.contains("/feedback"));
         assert!(text.contains("Alt+Left"));
         assert!(text.contains("Alt+Backspace"));
+    }
+
+    // ── New command parse tests ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_vim() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/vim", &s), Some(SlashCommand::Vim { toggle }) if toggle.is_empty()));
+        assert!(matches!(SlashCommand::parse("/vim on", &s), Some(SlashCommand::Vim { toggle }) if toggle == "on"));
+        assert!(matches!(SlashCommand::parse("/vim off", &s), Some(SlashCommand::Vim { toggle }) if toggle == "off"));
+    }
+
+    #[test]
+    fn test_parse_stickers() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/stickers", &s), Some(SlashCommand::Stickers)));
+    }
+
+    #[test]
+    fn test_parse_effort() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/effort", &s), Some(SlashCommand::Effort { level }) if level.is_empty()));
+        assert!(matches!(SlashCommand::parse("/effort high", &s), Some(SlashCommand::Effort { level }) if level == "high"));
+    }
+
+    #[test]
+    fn test_parse_tag() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/tag", &s), Some(SlashCommand::Tag { name }) if name.is_empty()));
+        assert!(matches!(SlashCommand::parse("/tag important", &s), Some(SlashCommand::Tag { name }) if name == "important"));
+    }
+
+    #[test]
+    fn test_parse_release_notes() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/release-notes", &s), Some(SlashCommand::ReleaseNotes)));
+        assert!(matches!(SlashCommand::parse("/changelog", &s), Some(SlashCommand::ReleaseNotes)));
+    }
+
+    #[test]
+    fn test_parse_feedback() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/feedback", &s), Some(SlashCommand::Feedback { text }) if text.is_empty()));
+        assert!(matches!(SlashCommand::parse("/feedback great tool!", &s), Some(SlashCommand::Feedback { text }) if text == "great tool!"));
+    }
+
+    #[test]
+    fn test_execute_effort_empty() {
+        let cmd = SlashCommand::parse("/effort", &no_skills()).unwrap();
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Effort { level } if level.is_empty()));
+    }
+
+    #[test]
+    fn test_execute_feedback_empty() {
+        let cmd = SlashCommand::parse("/feedback", &no_skills()).unwrap();
+        // Empty feedback should yield a Print hint
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Print(_)));
+    }
+
+    #[test]
+    fn test_execute_feedback_with_text() {
+        let cmd = SlashCommand::parse("/feedback hello", &no_skills()).unwrap();
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Feedback { text } if text == "hello"));
     }
 }
