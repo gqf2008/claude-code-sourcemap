@@ -398,7 +398,6 @@ pub async fn start_lsp_client_async(config: LspServerConfig, root_path: std::pat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_path_to_uri_absolute() {
