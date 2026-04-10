@@ -347,6 +347,12 @@ pub async fn run(
                             CommandResult::Agents { sub } => {
                                 handle_agents_command(&sub, &cwd, None);
                             }
+                            CommandResult::Theme { name } => {
+                                handle_theme_command(&name);
+                            }
+                            CommandResult::Plan { args } => {
+                                handle_plan_command(&args, &engine, &cwd).await;
+                            }
                         }
                     }
                     continue;

@@ -20,6 +20,8 @@ mod mcp;
 mod pr_comments;
 mod branch;
 mod agents;
+mod theme;
+mod plan;
 
 // Re-export all handlers so callers can `use crate::repl_commands::*`
 pub(crate) use memory::handle_memory_command;
@@ -33,6 +35,8 @@ pub(crate) use mcp::handle_mcp_command;
 pub(crate) use pr_comments::handle_pr_comments;
 pub(crate) use branch::handle_branch;
 pub(crate) use agents::handle_agents_command;
+pub(crate) use theme::handle_theme_command;
+pub(crate) use plan::handle_plan_command;
 
 use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;

@@ -103,6 +103,9 @@ pub struct Settings {
     /// Auto-approve mode configuration (from settings.json `autoMode`).
     #[serde(default, rename = "autoMode")]
     pub auto_mode: Option<crate::permissions::AutoModeConfig>,
+    /// Terminal theme preference (e.g. `"dark"`, `"light"`, `"auto"`).
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 // ── File paths ──────────────────────────────────────────────────────────────
@@ -189,6 +192,7 @@ fn merge_settings(base: Settings, overlay: &Settings) -> Settings {
             env
         },
         auto_mode: overlay.auto_mode.clone().or(base.auto_mode),
+        theme: overlay.theme.clone().or(base.theme),
     }
 }
 

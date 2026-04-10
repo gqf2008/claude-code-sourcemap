@@ -39,6 +39,10 @@ pub enum SlashCommand {
     RunPluginCommand { name: String, prompt: String },
     /// Agent definitions management.
     Agents { sub: String },
+    /// Switch terminal theme.
+    Theme { name: String },
+    /// Plan mode management.
+    Plan { args: String },
     Exit,
     Unknown(String),
 }
@@ -88,6 +92,8 @@ impl SlashCommand {
             "mcp" => Self::Mcp { sub: args },
             "plugin" | "plugins" => Self::Plugin { sub: args },
             "agents" | "agent" => Self::Agents { sub: args },
+            "theme" => Self::Theme { name: args },
+            "plan" => Self::Plan { args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -191,6 +197,8 @@ impl SlashCommand {
                 prompt: prompt.clone(),
             },
             Self::Agents { sub } => CommandResult::Agents { sub: sub.clone() },
+            Self::Theme { name } => CommandResult::Theme { name: name.clone() },
+            Self::Plan { args } => CommandResult::Plan { args: args.clone() },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -236,6 +244,10 @@ pub enum CommandResult {
     RunPluginCommand { name: String, prompt: String },
     /// Agent definitions management (/agents list, info, create, delete).
     Agents { sub: String },
+    /// Theme switching (/theme [name]).
+    Theme { name: String },
+    /// Plan mode (/plan [open|description]).
+    Plan { args: String },
     Exit,
 }
 
@@ -290,6 +302,7 @@ const HELP_TEXT_BASE: &str = "\
 
 \x1b[1mConfiguration\x1b[0m
   /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
+  /theme [name]      Switch terminal theme (dark, light, dark-ansi, etc.)
   /login             Set API key interactively
   /logout            Clear saved API key
   /config            Show current configuration
@@ -307,6 +320,10 @@ const HELP_TEXT_BASE: &str = "\
   /export [format]   Export session (markdown or json)
   /memory list       List memory files
   /memory open <f>   Open a memory file
+
+\x1b[1mPlanning\x1b[0m
+  /plan              Toggle plan mode (read-only tools, structured planning)
+  /plan open         Open plan file in external editor
 
 \x1b[1mSystem\x1b[0m
   /doctor            Check environment health

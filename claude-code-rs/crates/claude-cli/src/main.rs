@@ -9,6 +9,7 @@ mod output;
 mod markdown;
 mod diff_display;
 mod session;
+pub mod theme;
 mod ui;
 
 use std::sync::Arc;
@@ -202,6 +203,21 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(filter).init();
 
     let settings = config::load_settings()?;
+
+    // Initialize terminal theme from settings
+    {
+        let theme_setting = settings.theme.as_deref()
+            .and_then(|s| s.parse::<theme::ThemeName>().ok().map(|n| match n {
+                theme::ThemeName::Dark => theme::ThemeSetting::Dark,
+                theme::ThemeName::Light => theme::ThemeSetting::Light,
+                theme::ThemeName::DarkDaltonized => theme::ThemeSetting::DarkDaltonized,
+                theme::ThemeName::LightDaltonized => theme::ThemeSetting::LightDaltonized,
+                theme::ThemeName::DarkAnsi => theme::ThemeSetting::DarkAnsi,
+                theme::ThemeName::LightAnsi => theme::ThemeSetting::LightAnsi,
+            }))
+            .unwrap_or(theme::ThemeSetting::Auto);
+        theme::init_theme(theme_setting);
+    }
 
     // Inject env vars from settings.json before auth resolution (single-threaded init)
     let _env_backup = settings.apply_env();
