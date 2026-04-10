@@ -170,7 +170,7 @@ fn try_lsp_client(
     let lsp_char = character.saturating_sub(1) as u32;
 
     let lang_id = config::language_id_for_path(abs_path);
-    lsp.open_file(abs_path, &lang_id)?;
+    lsp.open_file(abs_path, lang_id)?;
 
     let result = match operation {
         "goToDefinition" => {

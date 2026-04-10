@@ -31,7 +31,7 @@ impl AgentEngine for QueryEngine {
     }
 
     fn abort(&self) {
-        QueryEngine::abort(self)
+        QueryEngine::abort(self);
     }
 
     fn abort_signal(&self) -> AbortSignal {
@@ -89,15 +89,15 @@ impl AgentEngine for QueryEngine {
     }
 
     async fn record_compact_success(&self) {
-        QueryEngine::record_compact_success(self).await
+        QueryEngine::record_compact_success(self).await;
     }
 
     async fn record_compact_failure(&self) {
-        QueryEngine::record_compact_failure(self).await
+        QueryEngine::record_compact_failure(self).await;
     }
 
     async fn clear_history(&self) {
-        QueryEngine::clear_history(self).await
+        QueryEngine::clear_history(self).await;
     }
 
     async fn rewind_turns(&self, n: usize) -> (usize, usize) {
@@ -129,11 +129,11 @@ impl AgentEngine for QueryEngine {
     }
 
     fn set_thinking(&self, config: Option<ThinkingConfig>) {
-        QueryEngine::set_thinking(self, config)
+        QueryEngine::set_thinking(self, config);
     }
 
     fn set_break_cache(&self) {
-        QueryEngine::set_break_cache(self)
+        QueryEngine::set_break_cache(self);
     }
 
     async fn drain_notifications(&self) -> Vec<Message> {
@@ -149,7 +149,7 @@ impl AgentEngine for QueryEngine {
     }
 
     async fn update_system_prompt_context(&self, claude_md: &str) {
-        QueryEngine::update_system_prompt_context(self, claude_md).await
+        QueryEngine::update_system_prompt_context(self, claude_md).await;
     }
 
     async fn run_session_start(&self) -> Option<String> {

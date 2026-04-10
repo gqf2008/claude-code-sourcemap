@@ -145,11 +145,13 @@ impl SwarmSession {
             while let Some(ev) = stream.next().await {
                 let event = ev.context("Swarm stream error")?;
                 match event {
-                    StreamEvent::ContentBlockStart { content_block, .. } => {
-                        if let ResponseContentBlock::ToolUse { id, name, .. } = content_block {
-                            pending_tools.push((id, name, String::new()));
-                        }
+                    StreamEvent::ContentBlockStart {
+                        content_block: ResponseContentBlock::ToolUse { id, name, .. },
+                        ..
+                    } => {
+                        pending_tools.push((id, name, String::new()));
                     }
+                    StreamEvent::ContentBlockStart { .. } => {}
                     StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                         DeltaBlock::TextDelta { text } => text_buf.push_str(&text),
                         DeltaBlock::InputJsonDelta { partial_json } => {

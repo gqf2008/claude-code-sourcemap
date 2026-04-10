@@ -31,13 +31,13 @@ use std::path::Path;
 /// Configuration for a single LSP server.
 #[derive(Debug, Clone)]
 pub struct LspServerConfig {
-    /// The executable to run (e.g., "rust-analyzer").
+    /// The executable to run (e.g., `rust-analyzer`).
     pub command: String,
-    /// Arguments to pass (e.g., ["--stdio"]).
+    /// Arguments to pass (e.g., `["--stdio"]`).
     pub args: Vec<String>,
-    /// File extensions handled by this server (e.g., [".rs"]).
+    /// File extensions handled by this server (e.g., `[".rs"]`).
     pub extensions: Vec<String>,
-    /// Language ID for LSP textDocument/didOpen (e.g., "rust").
+    /// Language ID for LSP textDocument/didOpen (e.g., `rust`).
     pub language_id: String,
 }
 
