@@ -190,7 +190,14 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let filter = if cli.verbose { EnvFilter::new("debug") } else { EnvFilter::new("warn") };
+    // RUST_LOG takes priority (e.g. RUST_LOG=claude_api=trace for raw packets)
+    let filter = if std::env::var("RUST_LOG").is_ok() {
+        EnvFilter::from_default_env()
+    } else if cli.verbose {
+        EnvFilter::new("debug")
+    } else {
+        EnvFilter::new("warn")
+    };
     tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(filter).init();
 
     let settings = config::load_settings()?;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use tracing::info;
+use tracing::{info, debug, trace};
 use crate::provider::ApiBackend;
 use crate::retry::{ApiHttpError, RetryConfig, with_retry};
 use crate::types::{MessagesRequest, ApiMessage, ApiContentBlock, MessagesResponse, StreamEvent, SystemBlock, ToolDefinition, ResponseContentBlock, DeltaBlock, MessageDeltaData};
@@ -144,6 +144,17 @@ impl ApiClient {
         let request = request.clone();
         let headers = self.headers()?;
 
+        debug!(
+            model = %request.model,
+            max_tokens = request.max_tokens,
+            messages_count = request.messages.len(),
+            has_thinking = request.thinking.is_some(),
+            "API request (non-stream)"
+        );
+        if let Ok(body) = serde_json::to_string_pretty(&request) {
+            trace!(body = %body, "Request body");
+        }
+
         with_retry(
             &self.retry_config,
             || {
@@ -207,6 +218,18 @@ impl ApiClient {
         req.stream = true;
         let headers = self.headers()?;
 
+        debug!(
+            model = %req.model,
+            max_tokens = req.max_tokens,
+            messages_count = req.messages.len(),
+            has_thinking = req.thinking.is_some(),
+            tools_count = req.tools.as_ref().map_or(0, |t| t.len()),
+            "API request (stream)"
+        );
+        if let Ok(body) = serde_json::to_string_pretty(&req) {
+            trace!(body = %body, "Request body");
+        }
+
         // Retry only the initial connection — once streaming starts, errors
         // propagate via the stream (mid-stream retries would lose partial state).
         let response = with_retry(
@@ -266,6 +289,7 @@ impl ApiClient {
                             let line = buffer[..pos].to_string();
                             buffer = buffer[pos + 1..].to_string();
                             if let Some(event_result) = crate::stream::parse_sse_line(&line) {
+                                trace!(sse_line = %line, "SSE event");
                                 yield event_result;
                             }
                         }
