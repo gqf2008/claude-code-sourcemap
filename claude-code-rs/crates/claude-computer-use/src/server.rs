@@ -1,8 +1,9 @@
 //! In-process MCP server for Computer Use tools.
 //!
 //! Implements `tools/list` and `tools/call` directly without spawning
-//! a subprocess. Registered as a built-in MCP server by the agent engine.
+//! a subprocess. Registered as a built-in MCP server via [`BuiltinMcpServer`] trait.
 
+use claude_mcp::registry::BuiltinMcpServer;
 use claude_mcp::types::{McpContent, McpToolDef, McpToolResult};
 use serde_json::{json, Value};
 
@@ -702,6 +703,22 @@ fn restore_terminal_window() {
         let _ = std::process::Command::new("xdotool")
             .args(["getactivewindow", "windowactivate"])
             .output();
+    }
+}
+
+// ── BuiltinMcpServer trait impl ──────────────────────────────────────────────
+
+impl BuiltinMcpServer for ComputerUseMcpServer {
+    fn server_name(&self) -> &str {
+        SERVER_NAME
+    }
+
+    fn list_tools(&self) -> Vec<McpToolDef> {
+        self.list_tools()
+    }
+
+    fn call_tool(&self, tool_name: &str, input: Value) -> McpToolResult {
+        self.call_tool(tool_name, input)
     }
 }
 

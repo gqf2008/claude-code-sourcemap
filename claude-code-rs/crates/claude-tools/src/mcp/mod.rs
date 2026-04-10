@@ -14,14 +14,51 @@ use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
+use claude_core::message::{ImageSource, ToolResultContent};
+
 // Re-export from claude-mcp for convenience
 pub use claude_mcp::{
     McpClient, McpContent, McpManager, McpResource, McpServerConfig, McpToolDef, McpToolResult,
     format_mcp_tool_name, parse_mcp_tool_name, is_mcp_tool,
     load_mcp_configs, discover_mcp_configs,
+    BuiltinMcpServer,
 };
 
 pub use claude_mcp::registry::MCP_TOOL_PREFIX;
+
+/// Convert MCP result content into core `ToolResultContent`, handling both text and images.
+fn mcp_result_to_tool_content(result: &McpToolResult) -> Vec<ToolResultContent> {
+    let mut content = Vec::new();
+
+    for c in &result.content {
+        match c.content_type.as_str() {
+            "text" => {
+                if let Some(text) = &c.text {
+                    content.push(ToolResultContent::Text { text: text.clone() });
+                }
+            }
+            "image" => {
+                if let Some(data) = &c.data {
+                    let media_type = c.mime_type.as_deref()
+                        .unwrap_or("image/png")
+                        .to_string();
+                    content.push(ToolResultContent::Image {
+                        source: ImageSource {
+                            media_type,
+                            data: data.clone(),
+                        },
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if content.is_empty() {
+        content.push(ToolResultContent::Text { text: String::new() });
+    }
+    content
+}
 
 // ── ListMcpResourcesTool ─────────────────────────────────────────────────────
 
@@ -259,13 +296,15 @@ pub struct McpToolProxy {
     pub tool_description: String,
     pub tool_schema: Value,
     pub read_only: bool,
+    /// Category override (defaults to `Mcp`). Builtin servers may use `ComputerUse` etc.
+    pub category: ToolCategory,
     pub manager: Arc<RwLock<McpManager>>,
 }
 
 #[async_trait]
 impl Tool for McpToolProxy {
     fn name(&self) -> &str { &self.qualified_name }
-    fn category(&self) -> ToolCategory { ToolCategory::Mcp }
+    fn category(&self) -> ToolCategory { self.category }
     fn description(&self) -> &str { &self.tool_description }
     fn input_schema(&self) -> Value { self.tool_schema.clone() }
     fn is_read_only(&self) -> bool { self.read_only }
@@ -282,20 +321,13 @@ impl Tool for McpToolProxy {
             .call_tool_direct(&self.server_name, &self.tool_name, input)
             .await?;
 
-        if result.is_error {
-            Ok(ToolResult::error(format!(
-                "MCP tool error ({}): {}",
-                self.tool_name,
-                result.text()
-            )))
-        } else {
-            let text = result.text();
-            if text.is_empty() {
-                Ok(ToolResult::text("Tool completed with no output."))
-            } else {
-                Ok(ToolResult::text(text))
-            }
-        }
+        let content = mcp_result_to_tool_content(&result);
+
+        Ok(ToolResult {
+            content,
+            is_error: result.is_error,
+            structured_output: None,
+        })
     }
 }
 
@@ -326,11 +358,50 @@ pub async fn create_mcp_tool_proxies(
             tool_description: tool_def.description.unwrap_or_default(),
             tool_schema: tool_def.input_schema.unwrap_or(json!({"type": "object"})),
             read_only,
+            category: ToolCategory::Mcp,
             manager: manager.clone(),
         });
     }
 
     Ok(proxies)
+}
+
+/// Create `McpToolProxy` instances for a specific built-in server with short tool names
+/// and a custom category (e.g. `ToolCategory::ComputerUse`).
+///
+/// Unlike `create_mcp_tool_proxies` which uses `mcp__server__tool` naming,
+/// builtin tools use their bare tool name for backward compatibility.
+pub fn create_builtin_tool_proxies(
+    server: &dyn BuiltinMcpServer,
+    category: ToolCategory,
+    read_only_tools: &[&str],
+    manager: Arc<RwLock<McpManager>>,
+) -> Vec<McpToolProxy> {
+    let server_name = server.server_name().to_string();
+    let tool_defs = server.list_tools();
+
+    tool_defs
+        .into_iter()
+        .map(|tool_def| {
+            let tool_name = tool_def.name.clone();
+            let read_only = tool_def
+                .annotations
+                .as_ref()
+                .and_then(|a| a.read_only_hint)
+                .unwrap_or_else(|| read_only_tools.contains(&tool_name.as_str()));
+
+            McpToolProxy {
+                qualified_name: tool_name.clone(),
+                server_name: server_name.clone(),
+                tool_name,
+                tool_description: tool_def.description.unwrap_or_default(),
+                tool_schema: tool_def.input_schema.unwrap_or(json!({"type": "object"})),
+                read_only,
+                category,
+                manager: manager.clone(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -347,6 +418,7 @@ mod tests {
             tool_description: "Create a GitHub issue".to_string(),
             tool_schema: json!({"type": "object"}),
             read_only: false,
+            category: ToolCategory::Mcp,
             manager,
         };
         assert_eq!(proxy.name(), "mcp__github__create_issue");

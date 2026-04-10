@@ -52,6 +52,8 @@ pub struct QueryEngineBuilder {
     pub(crate) provider: Option<String>,
     /// Override API base URL
     pub(crate) base_url: Option<String>,
+    /// Shared MCP manager for tool routing (used by builtin + external MCP servers).
+    pub(crate) mcp_manager: Option<Arc<RwLock<claude_mcp::McpManager>>>,
 }
 
 impl QueryEngineBuilder {
@@ -78,6 +80,7 @@ impl QueryEngineBuilder {
             scratchpad_dir: None,
             provider: None,
             base_url: None,
+            mcp_manager: None,
         }
     }
 
@@ -179,6 +182,12 @@ impl QueryEngineBuilder {
         self
     }
 
+    /// Set a shared MCP manager for routing tool calls to builtin/external MCP servers.
+    pub fn mcp_manager(mut self, manager: Arc<RwLock<claude_mcp::McpManager>>) -> Self {
+        self.mcp_manager = Some(manager);
+        self
+    }
+
     pub fn build(self) -> QueryEngine {
         let mut client = ApiClient::new(&self.api_key);
         if let Some(ref model) = self.model {
@@ -205,10 +214,36 @@ impl QueryEngineBuilder {
         let client = Arc::new(client);
         let mut registry = ToolRegistry::with_defaults();
 
-        // Register Computer Use tools if enabled via environment variable
+        // Get or create shared MCP manager for tool routing
+        let mcp_manager = self.mcp_manager.clone()
+            .unwrap_or_else(|| Arc::new(RwLock::new(claude_mcp::McpManager::new())));
+
+        // Register Computer Use tools via builtin MCP server path
         if std::env::var("CLAUDE_CODE_COMPUTER_USE").unwrap_or_default() == "1" {
-            match crate::computer_use::register_cu_tools(&mut registry) {
-                Ok(()) => tracing::info!("Computer Use tools registered"),
+            match claude_computer_use::ComputerUseMcpServer::new() {
+                Ok(cu_server) => {
+                    let cu_server = Arc::new(cu_server);
+                    let read_only_tools = &["screenshot", "cursor_position"];
+                    let proxies = claude_tools::mcp::create_builtin_tool_proxies(
+                        cu_server.as_ref(),
+                        claude_core::tool::ToolCategory::ComputerUse,
+                        read_only_tools,
+                        mcp_manager.clone(),
+                    );
+                    let tool_count = proxies.len();
+                    registry.register_mcp_proxies(proxies);
+
+                    // Register as builtin in McpManager for call routing
+                    let mgr = mcp_manager.clone();
+                    let srv = cu_server.clone();
+                    // Use block_in_place since build() is called from async context
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            mgr.write().await.register_builtin(srv).await;
+                        });
+                    });
+                    tracing::info!("Computer Use: {tool_count} tools registered via MCP path");
+                }
                 Err(e) => tracing::warn!("Computer Use unavailable: {e}"),
             }
         }

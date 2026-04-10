@@ -19,10 +19,27 @@ use crate::types::{McpServerConfig, McpToolDef, McpToolResult, McpResource, McpC
 /// Prefix for MCP tool proxy names: `mcp__<server>__<tool>`.
 pub const MCP_TOOL_PREFIX: &str = "mcp__";
 
-/// Manages multiple MCP server connections.
+/// Trait for in-process MCP servers (no subprocess transport needed).
+///
+/// Allows registering servers that run in the same process (e.g. Computer Use)
+/// alongside normal MCP servers managed via stdio/SSE transport.
+pub trait BuiltinMcpServer: Send + Sync {
+    /// The server name used for tool routing (e.g. "computer-use").
+    fn server_name(&self) -> &str;
+
+    /// List available tools (same semantics as MCP `tools/list`).
+    fn list_tools(&self) -> Vec<McpToolDef>;
+
+    /// Call a tool by name (same semantics as MCP `tools/call`).
+    fn call_tool(&self, tool_name: &str, input: serde_json::Value) -> McpToolResult;
+}
+
+/// Manages multiple MCP server connections and built-in in-process servers.
 pub struct McpManager {
     servers: Arc<RwLock<HashMap<String, McpClient>>>,
     configs: Arc<RwLock<Vec<McpServerConfig>>>,
+    /// In-process servers that don't need subprocess transport.
+    builtin_servers: Arc<RwLock<HashMap<String, Arc<dyn BuiltinMcpServer>>>>,
 }
 
 impl Default for McpManager {
@@ -37,7 +54,17 @@ impl McpManager {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             configs: Arc::new(RwLock::new(Vec::new())),
+            builtin_servers: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Register an in-process MCP server.
+    pub async fn register_builtin(&self, server: Arc<dyn BuiltinMcpServer>) {
+        let name = server.server_name().to_string();
+        let tool_count = server.list_tools().len();
+        let mut builtins = self.builtin_servers.write().await;
+        builtins.insert(name.clone(), server);
+        info!("Registered built-in MCP server '{name}' with {tool_count} tools");
     }
 
     /// Load MCP server configs (from settings or CLAUDE.md parsed configs).
@@ -99,7 +126,7 @@ impl McpManager {
         Ok(())
     }
 
-    /// List all available tools from all running servers, with prefixed names.
+    /// List all available tools from all running servers (including builtins), with prefixed names.
     pub async fn list_all_tools(&self) -> Result<Vec<(String, McpToolDef)>> {
         let mut servers = self.servers.write().await;
         let mut all_tools = Vec::new();
@@ -117,12 +144,38 @@ impl McpManager {
                 }
             }
         }
+        drop(servers);
+
+        // Include builtin servers
+        let builtins = self.builtin_servers.read().await;
+        for (server_name, server) in builtins.iter() {
+            for tool in server.list_tools() {
+                let prefixed = format_mcp_tool_name(server_name, &tool.name);
+                all_tools.push((prefixed, tool));
+            }
+        }
 
         Ok(all_tools)
     }
 
     /// List tools from a specific server only (avoids cross-server pollution).
+    /// Checks builtin servers first, then external MCP servers.
     pub async fn list_tools_for(&self, server_name: &str) -> Result<Vec<(String, McpToolDef)>> {
+        // Check builtin first
+        {
+            let builtins = self.builtin_servers.read().await;
+            if let Some(server) = builtins.get(server_name) {
+                let tools = server.list_tools();
+                return Ok(tools
+                    .into_iter()
+                    .map(|t| {
+                        let prefixed = format_mcp_tool_name(server_name, &t.name);
+                        (prefixed, t)
+                    })
+                    .collect());
+            }
+        }
+
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
@@ -186,10 +239,13 @@ impl McpManager {
         client.read_resource(uri).await
     }
 
-    /// Get the names of all running servers.
+    /// Get the names of all running servers (including builtins).
     pub async fn running_servers(&self) -> Vec<String> {
         let servers = self.servers.read().await;
-        servers.keys().cloned().collect()
+        let builtins = self.builtin_servers.read().await;
+        let mut names: Vec<String> = servers.keys().cloned().collect();
+        names.extend(builtins.keys().cloned());
+        names
     }
 
     /// Alias for `running_servers()` — backwards compatible.
@@ -198,12 +254,29 @@ impl McpManager {
     }
 
     /// Call a tool directly by server name and tool name.
+    ///
+    /// Checks built-in servers first, then external MCP servers.
     pub async fn call_tool_direct(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<McpToolResult> {
+        // Check builtin servers first
+        {
+            let builtins = self.builtin_servers.read().await;
+            if let Some(server) = builtins.get(server_name) {
+                let server = server.clone();
+                drop(builtins);
+                // Run sync call_tool on blocking thread to avoid blocking the runtime
+                let tool = tool_name.to_string();
+                let result = tokio::task::spawn_blocking(move || {
+                    server.call_tool(&tool, arguments)
+                }).await?;
+                return Ok(result);
+            }
+        }
+
         let mut servers = self.servers.write().await;
         let client = servers
             .get_mut(server_name)
@@ -274,16 +347,23 @@ impl McpManager {
         self.stop_all().await
     }
 
-    /// Number of running servers.
+    /// Number of running servers (including builtins).
     pub async fn server_count(&self) -> usize {
         let servers = self.servers.read().await;
-        servers.len()
+        let builtins = self.builtin_servers.read().await;
+        servers.len() + builtins.len()
     }
 
     /// Check if any servers are configured.
     pub async fn has_configs(&self) -> bool {
         let configs = self.configs.read().await;
         !configs.is_empty()
+    }
+
+    /// Check if a server name corresponds to a built-in in-process server.
+    pub async fn is_builtin_server(&self, server_name: &str) -> bool {
+        let builtins = self.builtin_servers.read().await;
+        builtins.contains_key(server_name)
     }
 
     /// Health check — remove dead servers.
