@@ -94,6 +94,9 @@ pub async fn run(
     const CHECKPOINT_INTERVAL: u32 = 5;
     let mut turns_since_save: u32 = 0;
 
+    // Images queued via /image command (merged with @-references on next submit)
+    let mut pending_images: Vec<claude_core::message::ContentBlock> = Vec::new();
+
     loop {
         // Context usage warning before prompt
         if let Some(pct) = engine.context_usage_percent().await {
@@ -685,6 +688,36 @@ pub async fn run(
                                     println!("{}Vim mode disabled\x1b[0m — normal editing mode active", theme::c_ok());
                                 }
                             }
+                            CommandResult::Image { path } => {
+                                if path.is_empty() {
+                                    println!("Usage: /image <path>  — attach an image to the next message");
+                                    println!("       Tip: you can also type @path/to/image.png inline");
+                                    println!("       Tip: press Alt+V to paste from clipboard");
+                                    continue;
+                                }
+                                let img_path = std::path::Path::new(&path);
+                                let img_path = if img_path.is_relative() {
+                                    cwd.join(img_path)
+                                } else {
+                                    img_path.to_path_buf()
+                                };
+                                match claude_core::image::read_image_file(&img_path) {
+                                    Ok(block) => {
+                                        // Queue as a pending image for the next user message
+                                        pending_images.push(block);
+                                        println!(
+                                            "{}✓ Image queued: {} ({} image{} pending)\x1b[0m",
+                                            theme::c_ok(),
+                                            img_path.file_name().unwrap_or_default().to_string_lossy(),
+                                            pending_images.len(),
+                                            if pending_images.len() == 1 { "" } else { "s" },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{}Image error: {e}\x1b[0m", theme::c_err());
+                                    }
+                                }
+                            }
                             CommandResult::Stickers => {
                                 let url = "https://www.stickermule.com/claudecode";
                                 println!("Opening sticker page: {url}");
@@ -788,12 +821,19 @@ pub async fn run(
                 let model = { engine.state().read().await.model.clone() };
 
                 // Extract @image.png references from input
-                let (text, images) = claude_core::image::extract_image_refs(input);
+                let (text, inline_images) = claude_core::image::extract_image_refs(input);
+
+                // Merge pending images (from /image command) with inline @references
+                let all_images: Vec<claude_core::message::ContentBlock> = {
+                    let mut combined = std::mem::take(&mut pending_images);
+                    combined.extend(inline_images);
+                    combined
+                };
 
                 // Submit via bus (preferred) or direct engine (fallback)
                 if let Some(ref mut client) = client {
                     // Bus-based path: send request → render notifications
-                    let bus_images: Vec<claude_bus::ImageAttachment> = images.iter().filter_map(|block| {
+                    let bus_images: Vec<claude_bus::ImageAttachment> = all_images.iter().filter_map(|block| {
                         if let claude_core::message::ContentBlock::Image { source } = block {
                             Some(claude_bus::ImageAttachment {
                                 data: source.data.clone(),
@@ -841,10 +881,10 @@ pub async fn run(
                     }
                 } else {
                     // Direct engine path (legacy fallback)
-                    let stream = if images.is_empty() {
+                    let stream = if all_images.is_empty() {
                         engine.submit(&text).await
                     } else {
-                        let img_count = images.len();
+                        let img_count = all_images.len();
                         println!(
                             "\x1b[2m📎 {} image{} attached\x1b[0m",
                             img_count,
@@ -854,7 +894,7 @@ pub async fn run(
                         if !text.is_empty() {
                             content.push(claude_core::message::ContentBlock::Text { text });
                         }
-                        content.extend(images);
+                        content.extend(all_images);
                         engine.submit_with_content(content).await
                     };
 

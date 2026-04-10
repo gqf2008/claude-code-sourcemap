@@ -67,6 +67,8 @@ pub enum SlashCommand {
     Env,
     /// Toggle vim editing mode.
     Vim { toggle: String },
+    /// Attach an image file to the next message (/image <path>).
+    Image { path: String },
     /// Open stickers page in browser.
     Stickers,
     /// Set effort level (low|medium|high|max|auto).
@@ -142,6 +144,7 @@ impl SlashCommand {
             "files" | "ls" => Self::Files { pattern: args },
             "env" | "environment" => Self::Env,
             "vim" => Self::Vim { toggle: args },
+            "image" | "img" | "attach" => Self::Image { path: args },
             "stickers" => Self::Stickers,
             "effort" => Self::Effort { level: args },
             "tag" => Self::Tag { name: args },
@@ -265,6 +268,7 @@ impl SlashCommand {
             Self::Files { pattern } => CommandResult::Files { pattern: pattern.clone() },
             Self::Env => CommandResult::Env,
             Self::Vim { toggle } => CommandResult::Vim { toggle: toggle.clone() },
+            Self::Image { path } => CommandResult::Image { path: path.clone() },
             Self::Stickers => CommandResult::Stickers,
             Self::Effort { level } => CommandResult::Effort { level: level.clone() },
             Self::Tag { name } => CommandResult::Tag { name: name.clone() },
@@ -350,6 +354,8 @@ pub enum CommandResult {
     Env,
     /// Toggle vim editing mode (/vim [on|off]).
     Vim { toggle: String },
+    /// Attach an image file to the next message (/image <path>).
+    Image { path: String },
     /// Open stickers page (/stickers).
     Stickers,
     /// Set effort level (/effort [low|medium|high|max|auto]).
@@ -456,6 +462,7 @@ const HELP_TEXT_BASE: &str = "\
   /agents            Manage agent definitions
   /add-dir <path>    Add context directory at runtime
   /files [pattern]   List files in current directory
+  /image <path>      Attach an image to the next message (PNG/JPEG/GIF/WebP)
   /env               Show environment information
   /version           Show version info
   /release-notes     Show version and release notes
@@ -471,6 +478,7 @@ const HELP_TEXT_BASE: &str = "\
   • Alt+Left/Right to jump by word, Alt+Backspace to delete word
   • Ctrl+A/Home to go to start, Ctrl+E/End to go to end
   • Attach images: type @path/to/image.png on its own line
+  • Press Alt+V to paste an image from the clipboard
   • Use --resume to restore the most recent session on startup
   • Use --init to create CLAUDE.md and project scaffolding";
 

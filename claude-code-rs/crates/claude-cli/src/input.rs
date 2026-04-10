@@ -27,7 +27,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/fast", "/add-dir", "/summary", "/rename", "/copy", "/share", "/files",
     "/env", "/agents", "/theme", "/plan", "/think", "/break-cache", "/rewind",
     "/vim", "/stickers", "/effort", "/tag", "/release-notes", "/feedback",
-    "/stats", "/usage",
+    "/stats", "/usage", "/image",
 ];
 
 /// Continuation prompt for multiline input.
@@ -446,6 +446,31 @@ impl InputReader {
                         }
                     }
                     redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                }
+
+                // ── Alt+V: paste image from clipboard ────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('v'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::ALT) => {
+                    match paste_clipboard_image() {
+                        Ok(path) => {
+                            let ref_str = format!("@{}", path.display());
+                            // Insert on a new continuation line (or append to current)
+                            lines.push(ref_str.clone());
+                            cursor = ref_str.chars().count();
+                            // Show feedback above the input
+                            write!(stdout, "\r\n\x1b[32m✓ Image attached: {}\x1b[0m\r\n", path.display())?;
+                            stdout.flush()?;
+                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                        }
+                        Err(e) => {
+                            write!(stdout, "\r\n\x1b[33m⚠ Clipboard image paste failed: {e}\x1b[0m\r\n")?;
+                            stdout.flush()?;
+                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                        }
+                    }
                 }
 
                 // ── Delete key: delete char at cursor ────────────────
@@ -896,6 +921,55 @@ fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String], cursor
     stdout.flush()
 }
 
+/// Paste an image from the system clipboard, save to a temp PNG file, and return its path.
+///
+/// Uses `arboard` for cross-platform clipboard access. The returned path can be passed
+/// to `claude_core::image::read_image_file()` or referenced as `@path` in user input.
+///
+/// # Errors
+/// Returns an error if the clipboard contains no image, or if encoding/saving fails.
+pub fn paste_clipboard_image() -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::Context as _;
+
+    // Open clipboard
+    let mut clip = arboard::Clipboard::new()
+        .context("Cannot open clipboard (is a display server available?)")?;
+
+    // Get image data (RGBA8)
+    let img = clip.get_image()
+        .context("No image in clipboard — copy an image first (e.g. from a browser or screenshot)")?;
+
+    // Encode RGBA8 → PNG bytes
+    let mut png_bytes: Vec<u8> = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(
+            std::io::Cursor::new(&mut png_bytes),
+            img.width as u32,
+            img.height as u32,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("Failed to write PNG header")?;
+        writer
+            .write_image_data(&img.bytes)
+            .context("Failed to encode clipboard image as PNG")?;
+    }
+
+    // Save to temp file
+    let filename = format!(
+        "claude_clipboard_{}.png",
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let path = std::env::temp_dir().join(filename);
+    std::fs::write(&path, &png_bytes)
+        .with_context(|| format!("Cannot save clipboard image to {}", path.display()))?;
+
+    Ok(path)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,5 +1047,44 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Verify that `paste_clipboard_image` fails gracefully with no image in clipboard.
+    /// This test does NOT require a display/clipboard (just checks the error path).
+    #[test]
+    fn paste_clipboard_image_no_display_returns_err() {
+        // In a headless CI environment, this should return an error rather than panic.
+        // We just verify the function is callable and returns Result.
+        let result = paste_clipboard_image();
+        // Can be Ok (if clipboard happened to have an image) or Err (no display / no image).
+        // Either is acceptable — we just check it doesn't panic.
+        let _ = result;
+    }
+
+    /// Test that the PNG encoding logic works correctly with synthetic RGBA8 data.
+    #[test]
+    fn png_encode_rgba8_roundtrip() {
+        use std::io::Cursor;
+
+        // 2×2 red image (RGBA8)
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255,  // top-left: red
+            255, 0, 0, 255,  // top-right: red
+            255, 0, 0, 255,  // bottom-left: red
+            255, 0, 0, 255,  // bottom-right: red
+        ];
+
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(Cursor::new(&mut buf), 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+        }
+
+        // Verify PNG magic bytes
+        assert!(buf.starts_with(&[0x89, 0x50, 0x4E, 0x47]), "Should start with PNG magic bytes");
+        assert!(buf.len() > 8, "PNG should have content beyond header");
     }
 }

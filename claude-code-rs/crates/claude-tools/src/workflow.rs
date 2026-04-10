@@ -299,7 +299,7 @@ async fn execute_bash(cmd: &str, cwd: &Path) -> anyhow::Result<String> {
     use std::time::Duration;
 
     #[cfg(windows)]
-    let mut child = {
+    let child = {
         Command::new("cmd")
             .args(["/C", cmd])
             .current_dir(cwd)
@@ -308,7 +308,7 @@ async fn execute_bash(cmd: &str, cwd: &Path) -> anyhow::Result<String> {
             .spawn()?
     };
     #[cfg(not(windows))]
-    let mut child = {
+    let child = {
         Command::new("sh")
             .args(["-c", cmd])
             .current_dir(cwd)
