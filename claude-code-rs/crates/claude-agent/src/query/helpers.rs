@@ -13,10 +13,14 @@ use super::AgentEvent;
 // ── System prompt ────────────────────────────────────────────────────────────
 
 /// Build system prompt blocks with cache control and dynamic boundary splitting.
-pub(super) fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock>> {
+///
+/// When `skip_cache` is true, all `cache_control` fields are set to `None`
+/// to force a prompt cache miss (used by `/break-cache`).
+pub(super) fn build_system_blocks(system_prompt: &str, skip_cache: bool) -> Option<Vec<SystemBlock>> {
     if system_prompt.is_empty() {
         return None;
     }
+    let cc = if skip_cache { None } else { Some(CacheControl::ephemeral()) };
     let boundary = system_prompt.find(
         crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY
     );
@@ -31,7 +35,7 @@ pub(super) fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock
             let mut blocks = vec![SystemBlock {
                 block_type: "text".into(),
                 text: static_prefix.to_string(),
-                cache_control: Some(CacheControl::ephemeral()),
+                cache_control: cc.clone(),
             }];
             if !dynamic_suffix.is_empty() {
                 blocks.push(SystemBlock {
@@ -45,7 +49,7 @@ pub(super) fn build_system_blocks(system_prompt: &str) -> Option<Vec<SystemBlock
         None => Some(vec![SystemBlock {
             block_type: "text".into(),
             text: system_prompt.to_string(),
-            cache_control: Some(CacheControl::ephemeral()),
+            cache_control: cc,
         }]),
     }
 }
@@ -172,7 +176,9 @@ pub(super) fn make_continuation_message(attempt: u32, limit: u32) -> UserMessage
 // ── Message format conversion ────────────────────────────────────────────────
 
 /// Convert internal messages to API format, adding cache breakpoints.
-pub(super) fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
+///
+/// When `skip_cache` is true, no cache_control markers are added (for `/break-cache`).
+pub(super) fn messages_to_api(messages: &[Message], skip_cache: bool) -> Vec<ApiMessage> {
     let mut api_msgs: Vec<ApiMessage> = messages.iter().filter_map(|msg| match msg {
         Message::User(u) => Some(ApiMessage {
             role: "user".into(),
@@ -185,17 +191,19 @@ pub(super) fn messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
         Message::System(_) => None,
     }).collect();
 
-    // Cache breakpoint at conversation tail
-    if let Some(last_msg) = api_msgs.last_mut() {
-        if let Some(last_block) = last_msg.content.last_mut() {
-            match last_block {
-                ApiContentBlock::Text { cache_control, .. } => {
-                    *cache_control = Some(CacheControl::ephemeral());
+    // Cache breakpoint at conversation tail (skipped when break-cache is active)
+    if !skip_cache {
+        if let Some(last_msg) = api_msgs.last_mut() {
+            if let Some(last_block) = last_msg.content.last_mut() {
+                match last_block {
+                    ApiContentBlock::Text { cache_control, .. } => {
+                        *cache_control = Some(CacheControl::ephemeral());
+                    }
+                    ApiContentBlock::ToolResult { cache_control, .. } => {
+                        *cache_control = Some(CacheControl::ephemeral());
+                    }
+                    _ => {}
                 }
-                ApiContentBlock::ToolResult { cache_control, .. } => {
-                    *cache_control = Some(CacheControl::ephemeral());
-                }
-                _ => {}
             }
         }
     }

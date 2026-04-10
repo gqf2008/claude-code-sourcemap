@@ -58,6 +58,8 @@ pub struct QueryConfig {
     /// When `Some`, the query loop will trigger compaction when token usage
     /// approaches the context window limit (between tool-use turns).
     pub auto_compact_state: Option<Arc<tokio::sync::Mutex<AutoCompactState>>>,
+    /// If true, skip cache_control markers on this query (one-shot /break-cache).
+    pub break_cache: bool,
 }
 
 impl Default for QueryConfig {
@@ -71,6 +73,7 @@ impl Default for QueryConfig {
             token_budget: 0,
             context_window: 200_000, // fallback; prefer runtime value from model capabilities
             auto_compact_state: None,
+            break_cache: false,
         }
     }
 }
@@ -157,7 +160,7 @@ pub fn query_stream_with_injection(
                 break;
             }
 
-            let api_messages = messages_to_api(&messages);
+            let api_messages = messages_to_api(&messages, config.break_cache);
             // Inject plan mode context into system prompt when active
             let effective_system = if tool_context.permission_mode == claude_core::permissions::PermissionMode::Plan {
                 format!(
@@ -169,7 +172,7 @@ pub fn query_stream_with_injection(
             } else {
                 config.system_prompt.clone()
             };
-            let system = build_system_blocks(&effective_system);
+            let system = build_system_blocks(&effective_system, config.break_cache);
 
             let request = MessagesRequest {
                 model: { state.read().await.model.clone() },

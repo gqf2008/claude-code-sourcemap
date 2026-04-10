@@ -163,12 +163,12 @@ fn test_continuation_subsequent_attempt() {
 
 #[test]
 fn test_build_system_blocks_empty() {
-    assert!(build_system_blocks("").is_none());
+    assert!(build_system_blocks("", false).is_none());
 }
 
 #[test]
 fn test_build_system_blocks_no_boundary() {
-    let blocks = build_system_blocks("Hello world").unwrap();
+    let blocks = build_system_blocks("Hello world", false).unwrap();
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].text, "Hello world");
     assert!(blocks[0].cache_control.is_some());
@@ -178,7 +178,7 @@ fn test_build_system_blocks_no_boundary() {
 fn test_build_system_blocks_with_boundary() {
     let boundary = crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
     let prompt = format!("Static part\n{}\nDynamic part", boundary);
-    let blocks = build_system_blocks(&prompt).unwrap();
+    let blocks = build_system_blocks(&prompt, false).unwrap();
     assert_eq!(blocks.len(), 2);
     assert!(blocks[0].text.contains("Static part"));
     assert!(blocks[1].text.contains("Dynamic part"));
@@ -191,9 +191,16 @@ fn test_build_system_blocks_with_boundary() {
 fn test_build_system_blocks_boundary_strips_marker() {
     let boundary = crate::system_prompt::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
     let prompt = format!("Static\n{}\nDynamic data", boundary);
-    let blocks = build_system_blocks(&prompt).unwrap();
+    let blocks = build_system_blocks(&prompt, false).unwrap();
     assert!(!blocks[1].text.contains(boundary));
     assert!(blocks[1].text.contains("Dynamic data"));
+}
+
+#[test]
+fn test_build_system_blocks_skip_cache() {
+    let blocks = build_system_blocks("Hello world", true).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert!(blocks[0].cache_control.is_none());
 }
 
 // ── messages_to_api ──────────────────────────────────────────────────
@@ -212,7 +219,7 @@ fn test_messages_to_api_converts_user_and_assistant() {
             usage: None,
         }),
     ];
-    let api = messages_to_api(&messages);
+    let api = messages_to_api(&messages, false);
     assert_eq!(api.len(), 2);
     assert_eq!(api[0].role, "user");
     assert_eq!(api[1].role, "assistant");
@@ -230,7 +237,7 @@ fn test_messages_to_api_skips_system() {
             content: vec![ContentBlock::Text { text: "hello".into() }],
         }),
     ];
-    let api = messages_to_api(&messages);
+    let api = messages_to_api(&messages, false);
     assert_eq!(api.len(), 1);
     assert_eq!(api[0].role, "user");
 }
@@ -243,10 +250,27 @@ fn test_messages_to_api_cache_control_on_last_block() {
             content: vec![ContentBlock::Text { text: "hello".into() }],
         }),
     ];
-    let api = messages_to_api(&messages);
+    let api = messages_to_api(&messages, false);
     match &api[0].content[0] {
         ApiContentBlock::Text { cache_control, .. } => {
             assert!(cache_control.is_some());
+        }
+        _ => panic!("expected Text block"),
+    }
+}
+
+#[test]
+fn test_messages_to_api_skip_cache() {
+    let messages = vec![
+        Message::User(UserMessage {
+            uuid: "u1".into(),
+            content: vec![ContentBlock::Text { text: "hello".into() }],
+        }),
+    ];
+    let api = messages_to_api(&messages, true);
+    match &api[0].content[0] {
+        ApiContentBlock::Text { cache_control, .. } => {
+            assert!(cache_control.is_none(), "cache_control should be None when skip_cache=true");
         }
         _ => panic!("expected Text block"),
     }
