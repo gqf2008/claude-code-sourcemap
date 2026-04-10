@@ -24,7 +24,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
     "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
     "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
-    "/fast", "/add-dir", "/summary", "/rename", "/agents", "/theme", "/plan",
+    "/fast", "/add-dir", "/summary", "/rename", "/copy", "/agents", "/theme", "/plan",
     "/think", "/break-cache", "/rewind",
 ];
 
@@ -160,6 +160,17 @@ impl InputReader {
                 }) if !modifiers.contains(KeyModifiers::SHIFT)
                     && !modifiers.contains(KeyModifiers::ALT) =>
                 {
+                    // Backslash continuation: if line ends with `\`, remove it
+                    // and continue on the next line instead of submitting.
+                    if let Some(last) = lines.last_mut() {
+                        if last.ends_with('\\') {
+                            last.pop(); // remove trailing backslash
+                            lines.push(String::new());
+                            write!(stdout, "\r\n{CONT_PROMPT}")?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                    }
                     write!(stdout, "\r\n")?;
                     stdout.flush()?;
                     let text = lines.join("\n");
@@ -276,6 +287,18 @@ impl InputReader {
                     redraw_buffer(&mut stdout, prompt, &lines)?;
                 }
 
+                // ── Ctrl+E / End: move to end of line ────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::End, ..
+                })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('e'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                }
+
                 // ── Backspace ────────────────────────────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Backspace,
@@ -379,9 +402,14 @@ impl InputReader {
                     }
                 }
 
-                // ── Up: history previous ─────────────────────────────
+                // ── Up / Ctrl+P: history previous ─────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Up, ..
+                })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
                 }) => {
                     if hist_idx > 0 {
                         if hist_idx == self.history.len() {
@@ -396,9 +424,14 @@ impl InputReader {
                     }
                 }
 
-                // ── Down: history next ───────────────────────────────
+                // ── Down / Ctrl+N: history next ───────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Down, ..
+                })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
                 }) => {
                     if hist_idx < self.history.len() {
                         hist_idx += 1;

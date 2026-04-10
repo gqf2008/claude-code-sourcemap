@@ -553,6 +553,32 @@ pub async fn run(
                                     }
                                 }
                             }
+                            CommandResult::Copy => {
+                                let state = engine.state().read().await;
+                                // Find the last assistant text content
+                                let text = state.messages.iter().rev().find_map(|m| {
+                                    if let claude_core::message::Message::Assistant(a) = m {
+                                        a.content.iter().find_map(|b| {
+                                            if let claude_core::message::ContentBlock::Text { text } = b {
+                                                Some(text.clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                });
+                                drop(state);
+                                if let Some(text) = text {
+                                    match copy_to_clipboard(&text) {
+                                        Ok(_) => println!("{}✓ Copied to clipboard ({} chars)\x1b[0m", theme::c_ok(), text.len()),
+                                        Err(e) => eprintln!("{}Copy failed: {}\x1b[0m", theme::c_err(), e),
+                                    }
+                                } else {
+                                    println!("{}No assistant response to copy.\x1b[0m", theme::c_warn());
+                                }
+                            }
                         }
                     }
                     continue;
@@ -791,6 +817,49 @@ fn truncate_path(path: &std::path::Path, max_len: usize) -> String {
     let skip = s.chars().count() - max_len + 1;
     let tail: String = s.chars().skip(skip).collect();
     format!("…{}", tail)
+}
+
+/// Copy text to the system clipboard (cross-platform).
+fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "windows")]
+    let mut child = Command::new("clip")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(target_os = "macos")]
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(target_os = "linux")]
+    let mut child = {
+        // Try xclip first, fall back to xsel
+        Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn())?
+    };
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    child.wait()?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -57,6 +57,8 @@ pub enum SlashCommand {
     Summary,
     /// Rename current session.
     Rename { name: String },
+    /// Copy last assistant response to clipboard.
+    Copy,
     Exit,
     Unknown(String),
 }
@@ -115,6 +117,7 @@ impl SlashCommand {
             "add-dir" | "adddir" => Self::AddDir { path: args },
             "summary" => Self::Summary,
             "rename" => Self::Rename { name: args },
+            "copy" | "yank" => Self::Copy,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -227,6 +230,7 @@ impl SlashCommand {
             Self::AddDir { path } => CommandResult::AddDir { path: path.clone() },
             Self::Summary => CommandResult::Summary,
             Self::Rename { name } => CommandResult::Rename { name: name.clone() },
+            Self::Copy => CommandResult::Copy,
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -290,6 +294,8 @@ pub enum CommandResult {
     Summary,
     /// Rename the current session (/rename <name>).
     Rename { name: String },
+    /// Copy last assistant response to clipboard (/copy).
+    Copy,
     Exit,
 }
 
@@ -365,6 +371,7 @@ const HELP_TEXT_BASE: &str = "\
   /session delete <id> Delete a saved session
   /summary           Generate a conversation summary
   /rename <name>     Rename current session
+  /copy              Copy last assistant response to clipboard
   /export [format]   Export session (markdown or json)
   /memory list       List memory files
   /memory open <f>   Open a memory file
