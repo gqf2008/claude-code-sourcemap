@@ -4,6 +4,7 @@
 //! streaming API responses, executing tools, and managing conversation state.
 
 mod builder;
+mod impl_traits;
 pub use builder::QueryEngineBuilder;
 
 use std::sync::Arc;
