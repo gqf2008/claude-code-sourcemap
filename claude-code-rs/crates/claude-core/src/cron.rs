@@ -201,8 +201,8 @@ pub fn compute_next_cron_run(fields: &CronFields, from: NaiveDateTime) -> Option
 /// Compute next cron run from the current local time, returning epoch millis.
 pub fn next_cron_run_ms(cron: &str, from_ms: i64) -> Option<i64> {
     let fields = parse_cron_expression(cron)?;
-    let from_secs = from_ms / 1000;
-    let from_nanos = ((from_ms % 1000) * 1_000_000) as u32;
+    let from_secs = from_ms.div_euclid(1000);
+    let from_nanos = (from_ms.rem_euclid(1000) * 1_000_000) as u32;
     let from_dt = chrono::DateTime::from_timestamp(from_secs, from_nanos)?;
     let local_dt = from_dt.with_timezone(&Local).naive_local();
     let next = compute_next_cron_run(&fields, local_dt)?;

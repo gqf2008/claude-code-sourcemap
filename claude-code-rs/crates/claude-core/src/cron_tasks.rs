@@ -220,7 +220,7 @@ pub fn jittered_next_cron_run_ms(
     } else {
         0
     };
-    Some(t1 + jitter)
+    Some(t1.saturating_add(jitter))
 }
 
 /// Next fire time with backward jitter for one-shot tasks.
@@ -239,7 +239,7 @@ pub fn one_shot_jittered_next_cron_run_ms(
     let lead = jitter_frac(task_id)
         .mul_add((cfg.one_shot_max_ms - cfg.one_shot_floor_ms) as f64, cfg.one_shot_floor_ms as f64)
         .clamp(0.0, cfg.one_shot_max_ms as f64);
-    Some((t1 - lead as i64).max(from_ms))
+    Some(t1.saturating_sub(lead as i64).max(from_ms))
 }
 
 /// Find missed tasks — tasks whose next run is in the past.
