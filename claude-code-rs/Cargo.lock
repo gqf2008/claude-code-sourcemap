@@ -643,6 +643,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "claude-api",
+ "claude-bus",
  "claude-core",
  "claude-mcp",
  "claude-tools",

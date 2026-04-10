@@ -247,6 +247,27 @@ impl OutputRenderer {
             AgentNotification::ThinkingChanged { .. } | AgentNotification::CacheBreakSet => {
                 // Handled in REPL command dispatch, not here
             }
+
+            // ── Swarm lifecycle events ──
+            AgentNotification::SwarmTeamCreated { team_name, agent_count } => {
+                eprintln!("\x1b[2m🐝 Swarm team '{}' created ({} agents)\x1b[0m", team_name, agent_count);
+            }
+            AgentNotification::SwarmTeamDeleted { team_name } => {
+                eprintln!("\x1b[2m🐝 Swarm team '{}' deleted\x1b[0m", team_name);
+            }
+            AgentNotification::SwarmAgentSpawned { team_name, agent_id, model } => {
+                eprintln!("\x1b[2m🐝 Agent '{}' spawned in '{}' ({})\x1b[0m", agent_id, team_name, model);
+            }
+            AgentNotification::SwarmAgentTerminated { team_name, agent_id } => {
+                eprintln!("\x1b[2m🐝 Agent '{}' terminated in '{}'\x1b[0m", agent_id, team_name);
+            }
+            AgentNotification::SwarmAgentQuery { agent_id, prompt_preview, .. } => {
+                eprintln!("\x1b[2m🐝 {} ← {}\x1b[0m", agent_id, prompt_preview);
+            }
+            AgentNotification::SwarmAgentReply { agent_id, text_preview, is_error, .. } => {
+                let icon = if is_error { "❌" } else { "→" };
+                eprintln!("\x1b[2m🐝 {} {} {}\x1b[0m", agent_id, icon, text_preview);
+            }
         }
         false
     }

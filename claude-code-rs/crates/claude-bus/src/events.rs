@@ -168,6 +168,45 @@ pub enum AgentNotification {
     /// Response to `BreakCache` — confirms cache will be skipped.
     CacheBreakSet,
 
+    // ── Swarm lifecycle ──
+
+    /// A swarm team was created.
+    SwarmTeamCreated {
+        team_name: String,
+        agent_count: usize,
+    },
+
+    /// A swarm team was deleted.
+    SwarmTeamDeleted { team_name: String },
+
+    /// A swarm agent was spawned within a team.
+    SwarmAgentSpawned {
+        team_name: String,
+        agent_id: String,
+        model: String,
+    },
+
+    /// A swarm agent was terminated.
+    SwarmAgentTerminated {
+        team_name: String,
+        agent_id: String,
+    },
+
+    /// A swarm agent started processing a query.
+    SwarmAgentQuery {
+        team_name: String,
+        agent_id: String,
+        prompt_preview: String,
+    },
+
+    /// A swarm agent completed a query.
+    SwarmAgentReply {
+        team_name: String,
+        agent_id: String,
+        text_preview: String,
+        is_error: bool,
+    },
+
     // ── Errors ──
 
     /// A non-fatal error occurred.
@@ -435,6 +474,33 @@ mod tests {
             AgentNotification::Error {
                 code: ErrorCode::ApiError,
                 message: "Rate limited".into(),
+            },
+            AgentNotification::SwarmTeamCreated {
+                team_name: "alpha".into(),
+                agent_count: 3,
+            },
+            AgentNotification::SwarmTeamDeleted {
+                team_name: "alpha".into(),
+            },
+            AgentNotification::SwarmAgentSpawned {
+                team_name: "alpha".into(),
+                agent_id: "coder@alpha".into(),
+                model: "haiku".into(),
+            },
+            AgentNotification::SwarmAgentTerminated {
+                team_name: "alpha".into(),
+                agent_id: "coder@alpha".into(),
+            },
+            AgentNotification::SwarmAgentQuery {
+                team_name: "alpha".into(),
+                agent_id: "coder@alpha".into(),
+                prompt_preview: "Write tests".into(),
+            },
+            AgentNotification::SwarmAgentReply {
+                team_name: "alpha".into(),
+                agent_id: "coder@alpha".into(),
+                text_preview: "Done".into(),
+                is_error: false,
             },
             AgentNotification::McpServerConnected {
                 name: "github".into(),

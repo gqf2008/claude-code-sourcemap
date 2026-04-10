@@ -403,6 +403,47 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
         AgentNotification::CacheBreakSet => {
             Notification::new("agent.cache_break_set", Some(Value::Object(serde_json::Map::new())))
         }
+
+        // ── Swarm lifecycle ──
+        AgentNotification::SwarmTeamCreated { team_name, agent_count } => {
+            Notification::new("swarm.team_created", json_obj(2, &[
+                ("team_name", Value::String(team_name.clone())),
+                ("agent_count", Value::Number((*agent_count).into())),
+            ]))
+        }
+        AgentNotification::SwarmTeamDeleted { team_name } => {
+            Notification::new("swarm.team_deleted", json_obj(1, &[
+                ("team_name", Value::String(team_name.clone())),
+            ]))
+        }
+        AgentNotification::SwarmAgentSpawned { team_name, agent_id, model } => {
+            Notification::new("swarm.agent_spawned", json_obj(3, &[
+                ("team_name", Value::String(team_name.clone())),
+                ("agent_id", Value::String(agent_id.clone())),
+                ("model", Value::String(model.clone())),
+            ]))
+        }
+        AgentNotification::SwarmAgentTerminated { team_name, agent_id } => {
+            Notification::new("swarm.agent_terminated", json_obj(2, &[
+                ("team_name", Value::String(team_name.clone())),
+                ("agent_id", Value::String(agent_id.clone())),
+            ]))
+        }
+        AgentNotification::SwarmAgentQuery { team_name, agent_id, prompt_preview } => {
+            Notification::new("swarm.agent_query", json_obj(3, &[
+                ("team_name", Value::String(team_name.clone())),
+                ("agent_id", Value::String(agent_id.clone())),
+                ("prompt_preview", Value::String(prompt_preview.clone())),
+            ]))
+        }
+        AgentNotification::SwarmAgentReply { team_name, agent_id, text_preview, is_error } => {
+            Notification::new("swarm.agent_reply", json_obj(4, &[
+                ("team_name", Value::String(team_name.clone())),
+                ("agent_id", Value::String(agent_id.clone())),
+                ("text_preview", Value::String(text_preview.clone())),
+                ("is_error", Value::Bool(*is_error)),
+            ]))
+        }
     }
 }
 

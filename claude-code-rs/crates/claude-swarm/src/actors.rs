@@ -3,6 +3,7 @@
 //! Uses kameo 0.20 derive macros for actor definitions.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kameo::Actor;
 use kameo::actor::{ActorRef, Spawn};
@@ -10,6 +11,7 @@ use kameo::message::{Context, Message};
 use kameo::Reply;
 use tracing::{debug, info, warn};
 
+use crate::bus_adapter::SwarmNotifier;
 use crate::messages::*;
 use crate::types::format_agent_id;
 
@@ -62,6 +64,7 @@ pub struct AgentActor {
     pub turn_count: u32,
     pub total_tokens: u64,
     session: Option<crate::session::SwarmSession>,
+    notifier: Arc<SwarmNotifier>,
 }
 
 impl AgentActor {
@@ -71,6 +74,7 @@ impl AgentActor {
         model: String,
         system_prompt: Option<String>,
         cwd: String,
+        notifier: Arc<SwarmNotifier>,
     ) -> Self {
         let agent_id = format_agent_id(name, team_name);
         let prompt = system_prompt.unwrap_or_else(|| {
@@ -91,6 +95,7 @@ impl AgentActor {
             turn_count: 0,
             total_tokens: 0,
             session,
+            notifier,
         }
     }
 }
@@ -107,6 +112,7 @@ impl Message<AgentQuery> for AgentActor {
         self.state = AgentState::Processing;
         self.turn_count += 1;
         debug!(agent = %self.agent_id, turn = self.turn_count, "Processing query");
+        self.notifier.agent_query(&self.team_name, &self.agent_id, &msg.prompt);
 
         let result = match &mut self.session {
             Some(session) => session.submit(&msg.prompt).await,
@@ -120,13 +126,18 @@ impl Message<AgentQuery> for AgentActor {
         match result {
             Ok(text) => {
                 self.total_tokens += text.len() as u64 / 4;
+                self.notifier.agent_reply(&self.team_name, &self.agent_id, &text, false);
                 AgentResponse { text, is_error: false, tool_uses: vec![] }
             }
-            Err(e) => AgentResponse {
-                text: format!("Agent error: {e}"),
-                is_error: true,
-                tool_uses: vec![],
-            },
+            Err(e) => {
+                let text = format!("Agent error: {e}");
+                self.notifier.agent_reply(&self.team_name, &self.agent_id, &text, true);
+                AgentResponse {
+                    text,
+                    is_error: true,
+                    tool_uses: vec![],
+                }
+            }
         }
     }
 }
@@ -160,15 +171,17 @@ pub struct SwarmCoordinator {
     pub default_model: String,
     pub default_cwd: String,
     agents: HashMap<String, ActorRef<AgentActor>>,
+    notifier: Arc<SwarmNotifier>,
 }
 
 impl SwarmCoordinator {
-    pub fn new(team_name: String, default_model: String, default_cwd: String) -> Self {
+    pub fn new(team_name: String, default_model: String, default_cwd: String, notifier: Arc<SwarmNotifier>) -> Self {
         Self {
             team_name,
             default_model,
             default_cwd,
             agents: HashMap::new(),
+            notifier,
         }
     }
 }
@@ -197,14 +210,16 @@ impl Message<SpawnAgent> for SwarmCoordinator {
         let actor = AgentActor::new(
             &msg.name,
             &self.team_name,
-            model,
+            model.clone(),
             msg.prompt,
             cwd,
+            self.notifier.clone(),
         );
         let actor_ref = AgentActor::spawn(actor);
         self.agents.insert(agent_id.clone(), actor_ref);
 
         info!(team = %self.team_name, agent = %agent_id, "Agent spawned");
+        self.notifier.agent_spawned(&self.team_name, &agent_id, &model);
         SpawnResult {
             success: true,
             agent_id,
@@ -225,6 +240,7 @@ impl Message<TerminateAgent> for SwarmCoordinator {
         if let Some(agent_ref) = self.agents.remove(&msg.agent_id) {
             agent_ref.kill();
             info!(team = %self.team_name, agent = %msg.agent_id, "Agent terminated");
+            self.notifier.agent_terminated(&self.team_name, &msg.agent_id);
             TerminateResult {
                 success: true,
                 message: format!("Agent '{}' terminated", msg.agent_id),
@@ -353,6 +369,10 @@ impl Message<GetTeamStatus> for SwarmCoordinator {
 mod tests {
     use super::*;
 
+    fn test_notifier() -> Arc<SwarmNotifier> {
+        Arc::new(SwarmNotifier::default())
+    }
+
     #[test]
     fn format_agent_id_basic() {
         assert_eq!(format_agent_id("coder", "alpha"), "coder@alpha");
@@ -361,18 +381,15 @@ mod tests {
 
     #[tokio::test]
     async fn agent_actor_query_and_status() {
-        let actor = AgentActor::new("test", "team", "claude-haiku".into(), None, "/tmp".into());
+        let actor = AgentActor::new("test", "team", "claude-haiku".into(), None, "/tmp".into(), test_notifier());
         let actor_ref = AgentActor::spawn(actor);
 
-        // Query — real API call or graceful error when API key is absent in CI
         let resp = actor_ref.ask(AgentQuery {
             prompt: "Hello".into(),
             from: None,
         }).await.unwrap();
-        // Response must always have some text (either real or error)
         assert!(!resp.text.is_empty());
 
-        // Status — turn counter must increment regardless of API outcome
         let status = actor_ref.ask(GetStatus).await.unwrap();
         assert_eq!(status.agent_id, "test@team");
         assert_eq!(status.turn_count, 1);
@@ -381,10 +398,9 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_spawn_and_terminate() {
-        let coord = SwarmCoordinator::new("test-team".into(), "haiku".into(), "/tmp".into());
+        let coord = SwarmCoordinator::new("test-team".into(), "haiku".into(), "/tmp".into(), test_notifier());
         let coord_ref = SwarmCoordinator::spawn(coord);
 
-        // Spawn
         let result = coord_ref.ask(SpawnAgent {
             name: "worker".into(),
             model: None,
@@ -394,7 +410,6 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.agent_id, "worker@test-team");
 
-        // Duplicate should fail
         let dup = coord_ref.ask(SpawnAgent {
             name: "worker".into(),
             model: None,
@@ -403,7 +418,6 @@ mod tests {
         }).await.unwrap();
         assert!(!dup.success);
 
-        // Route message — success means the actor handled the message (text may be error in CI)
         let route = coord_ref.ask(RouteMessage {
             target_agent_id: "worker@test-team".into(),
             query: AgentQuery { prompt: "Build it".into(), from: None },
@@ -411,25 +425,22 @@ mod tests {
         assert!(route.success);
         assert!(route.response.is_some());
 
-        // Team status
         let status = coord_ref.ask(GetTeamStatus).await.unwrap();
         assert_eq!(status.agent_count, 1);
         assert_eq!(status.agents[0].turn_count, 1);
 
-        // Terminate
         let term = coord_ref.ask(TerminateAgent {
             agent_id: "worker@test-team".into(),
         }).await.unwrap();
         assert!(term.success);
 
-        // Status after terminate
         let status2 = coord_ref.ask(GetTeamStatus).await.unwrap();
         assert_eq!(status2.agent_count, 0);
     }
 
     #[tokio::test]
     async fn route_to_nonexistent_agent_fails() {
-        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into());
+        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into(), test_notifier());
         let coord_ref = SwarmCoordinator::spawn(coord);
 
         let route = coord_ref.ask(RouteMessage {
@@ -443,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminate_nonexistent_agent_fails() {
-        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into());
+        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into(), test_notifier());
         let coord_ref = SwarmCoordinator::spawn(coord);
 
         let term = coord_ref.ask(TerminateAgent {
@@ -455,10 +466,9 @@ mod tests {
 
     #[tokio::test]
     async fn broadcast_excludes_sender() {
-        let coord = SwarmCoordinator::new("bteam".into(), "haiku".into(), "/tmp".into());
+        let coord = SwarmCoordinator::new("bteam".into(), "haiku".into(), "/tmp".into(), test_notifier());
         let coord_ref = SwarmCoordinator::spawn(coord);
 
-        // Spawn three agents: alice, bob, carol
         for name in ["alice", "bob", "carol"] {
             coord_ref.ask(SpawnAgent {
                 name: name.into(),
@@ -468,7 +478,6 @@ mod tests {
             }).await.unwrap();
         }
 
-        // Broadcast from alice — should reach bob + carol (2 recipients)
         let results = coord_ref.ask(BroadcastMessage {
             text: "All hands!".into(),
             from: "alice@bteam".into(),
@@ -479,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn token_accumulation_across_turns() {
-        let actor = AgentActor::new("worker", "team", "haiku".into(), None, "/tmp".into());
+        let actor = AgentActor::new("worker", "team", "haiku".into(), None, "/tmp".into(), test_notifier());
         let actor_ref = AgentActor::spawn(actor);
 
         for prompt in ["short", "a slightly longer prompt", "the longest prompt of them all"] {
@@ -488,16 +497,13 @@ mod tests {
 
         let status = actor_ref.ask(GetStatus).await.unwrap();
         assert_eq!(status.turn_count, 3);
-        // total_tokens is accumulated per response (real API or error message)
-        // Just assert it is non-negative (u64 is always ≥ 0); turn count is the key invariant
     }
 
     #[tokio::test]
     async fn agent_model_override_on_spawn() {
-        let coord = SwarmCoordinator::new("team".into(), "default-model".into(), "/tmp".into());
+        let coord = SwarmCoordinator::new("team".into(), "default-model".into(), "/tmp".into(), test_notifier());
         let coord_ref = SwarmCoordinator::spawn(coord);
 
-        // Spawn with explicit model override
         let r = coord_ref.ask(SpawnAgent {
             name: "specialized".into(),
             model: Some("claude-opus".into()),
@@ -506,11 +512,50 @@ mod tests {
         }).await.unwrap();
         assert!(r.success);
 
-        // Agent exists and responds
         let route = coord_ref.ask(RouteMessage {
             target_agent_id: "specialized@team".into(),
             query: AgentQuery { prompt: "hello".into(), from: None },
         }).await.unwrap();
         assert!(route.success);
+    }
+
+    #[tokio::test]
+    async fn bus_events_emitted_on_spawn_and_terminate() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+        let notifier = Arc::new(SwarmNotifier::new(tx));
+        let coord = SwarmCoordinator::new("bus-team".into(), "haiku".into(), "/tmp".into(), notifier);
+        let coord_ref = SwarmCoordinator::spawn(coord);
+
+        // Spawn emits SwarmAgentSpawned
+        let result = coord_ref.ask(SpawnAgent {
+            name: "worker".into(),
+            model: None,
+            prompt: None,
+            cwd: None,
+        }).await.unwrap();
+        assert!(result.success);
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            claude_bus::AgentNotification::SwarmAgentSpawned { team_name, agent_id, .. } => {
+                assert_eq!(team_name, "bus-team");
+                assert_eq!(agent_id, "worker@bus-team");
+            }
+            other => panic!("Expected SwarmAgentSpawned, got {:?}", other),
+        }
+
+        // Terminate emits SwarmAgentTerminated
+        coord_ref.ask(TerminateAgent {
+            agent_id: "worker@bus-team".into(),
+        }).await.unwrap();
+
+        let event2 = rx.try_recv().unwrap();
+        match event2 {
+            claude_bus::AgentNotification::SwarmAgentTerminated { team_name, agent_id } => {
+                assert_eq!(team_name, "bus-team");
+                assert_eq!(agent_id, "worker@bus-team");
+            }
+            other => panic!("Expected SwarmAgentTerminated, got {:?}", other),
+        }
     }
 }

@@ -21,6 +21,7 @@
 
 pub mod actors;
 pub mod bridge;
+pub mod bus_adapter;
 pub mod session;
 pub mod conflict;
 pub mod helpers;
@@ -33,6 +34,7 @@ pub mod team_status;
 pub mod types;
 
 pub use bridge::register_swarm_tools;
+pub use bus_adapter::{SwarmNotifier, SharedNotifier, shared_notifier};
 pub use conflict::FileConflictTracker;
 pub use network::SwarmNetwork;
 pub use server::SwarmMcpServer;

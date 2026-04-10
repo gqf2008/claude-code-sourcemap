@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::actors::{SwarmCoordinator, SpawnResult, TerminateResult, RouteResult};
+use crate::bus_adapter::SwarmNotifier;
 use crate::messages::*;
 
 /// Top-level manager for the agent swarm.
@@ -21,6 +22,7 @@ pub struct SwarmNetwork {
     teams: Arc<RwLock<HashMap<String, ActorRef<SwarmCoordinator>>>>,
     default_model: String,
     default_cwd: String,
+    notifier: Arc<SwarmNotifier>,
 }
 
 impl SwarmNetwork {
@@ -30,6 +32,17 @@ impl SwarmNetwork {
             teams: Arc::new(RwLock::new(HashMap::new())),
             default_model,
             default_cwd,
+            notifier: Arc::new(SwarmNotifier::default()),
+        }
+    }
+
+    /// Create a new swarm network with bus integration.
+    pub fn with_notifier(default_model: String, default_cwd: String, notifier: SwarmNotifier) -> Self {
+        Self {
+            teams: Arc::new(RwLock::new(HashMap::new())),
+            default_model,
+            default_cwd,
+            notifier: Arc::new(notifier),
         }
     }
 
@@ -44,10 +57,12 @@ impl SwarmNetwork {
             name.to_string(),
             self.default_model.clone(),
             self.default_cwd.clone(),
+            self.notifier.clone(),
         );
         let coord_ref = SwarmCoordinator::spawn(coordinator);
         teams.insert(name.to_string(), coord_ref);
         info!(team = %name, "Team created");
+        self.notifier.team_created(name, 0);
         Ok(name.to_string())
     }
 
@@ -57,6 +72,7 @@ impl SwarmNetwork {
         if let Some(coord_ref) = teams.remove(name) {
             info!(team = %name, "Deleting team");
             coord_ref.kill();
+            self.notifier.team_deleted(name);
             Ok(())
         } else {
             anyhow::bail!("Team '{}' not found", name);

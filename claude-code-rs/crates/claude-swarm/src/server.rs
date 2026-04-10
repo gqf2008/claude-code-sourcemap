@@ -9,6 +9,7 @@ use claude_mcp::types::{McpContent, McpToolDef, McpToolResult};
 use serde_json::{json, Value};
 use tracing::debug;
 
+use crate::bus_adapter::SwarmNotifier;
 use crate::network::SwarmNetwork;
 
 /// Server name used when registering with `McpManager`.
@@ -50,6 +51,13 @@ impl SwarmMcpServer {
     pub fn new(default_model: String, default_cwd: String) -> Self {
         Self {
             network: Arc::new(SwarmNetwork::new(default_model, default_cwd)),
+        }
+    }
+
+    /// Create a new swarm MCP server with bus integration.
+    pub fn with_notifier(default_model: String, default_cwd: String, notifier: SwarmNotifier) -> Self {
+        Self {
+            network: Arc::new(SwarmNetwork::with_notifier(default_model, default_cwd, notifier)),
         }
     }
 
