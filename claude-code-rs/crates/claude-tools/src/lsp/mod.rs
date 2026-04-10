@@ -3,9 +3,13 @@
 //! Aligned with TS `LSPTool`. Provides go-to-definition, find-references,
 //! hover, and symbol lookup via language server processes.
 //!
-//! This is a simplified implementation that shells out to ripgrep and
-//! uses regex-based symbol extraction as a fallback when no LSP server
-//! is available.
+//! When an LSP server is configured (via `CLAUDE_LSP_<LANG>` env vars or
+//! `~/.claude/settings.json`), true JSON-RPC protocol is used.
+//! Falls back to ripgrep/regex-based symbol extraction otherwise.
+
+pub mod client;
+pub mod config;
+pub mod transport;
 
 use async_trait::async_trait;
 use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
@@ -98,6 +102,30 @@ impl Tool for LspTool {
         let line = input["line"].as_u64().unwrap_or(1) as usize;
         let character = input["character"].as_u64().unwrap_or(1) as usize;
 
+        // Try real LSP client first if a server is configured for this file type.
+        let lsp_configs = config::load_lsp_configs(cwd);
+        if let Some((_name, server_cfg)) = config::find_server_for_file(&lsp_configs, &abs_path) {
+            let op = operation.to_string();
+            let path_clone = abs_path.clone();
+            let cwd_clone = cwd.clone();
+            let query = input["query"].as_str().unwrap_or("").to_string();
+            let server_cfg = server_cfg.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                try_lsp_client(server_cfg, &op, &path_clone, &cwd_clone, line, character, &query)
+            }).await;
+
+            match result {
+                Ok(Ok(tr)) => return Ok(tr),
+                Ok(Err(e)) => {
+                    tracing::warn!("LSP client failed for {operation}, falling back to ripgrep: {e:#}");
+                }
+                Err(e) => {
+                    tracing::warn!("LSP task panicked, falling back to ripgrep: {e}");
+                }
+            }
+        }
+
+        // Fallback: ripgrep / regex-based implementation.
         match operation {
             "documentSymbol" => {
                 extract_document_symbols(&abs_path).await
@@ -121,6 +149,88 @@ impl Tool for LspTool {
             ))),
         }
     }
+}
+
+/// Attempt to use a real LSP server for the given operation.
+/// Runs synchronously (intended for `spawn_blocking`).
+fn try_lsp_client(
+    server_cfg: config::LspServerConfig,
+    operation: &str,
+    abs_path: &Path,
+    cwd: &Path,
+    line: usize,
+    character: usize,
+    query: &str,
+) -> anyhow::Result<ToolResult> {
+    use client::LspClient;
+    let mut lsp = LspClient::start(&server_cfg, cwd)?;
+
+    // line/character are 1-based from user input; LSP uses 0-based.
+    let lsp_line = line.saturating_sub(1) as u32;
+    let lsp_char = character.saturating_sub(1) as u32;
+
+    let lang_id = config::language_id_for_path(abs_path);
+    lsp.open_file(abs_path, &lang_id)?;
+
+    let result = match operation {
+        "goToDefinition" => {
+            let locs = lsp.go_to_definition(abs_path, lsp_line, lsp_char)?;
+            if locs.is_empty() {
+                ToolResult::text("No definition found.")
+            } else {
+                let lines: Vec<String> = locs.iter()
+                    .map(|l| format!("{}:{}", l.file_path, l.line + 1))
+                    .collect();
+                ToolResult::text(format!("Definition(s):\n{}", lines.join("\n")))
+            }
+        }
+        "findReferences" => {
+            let locs = lsp.find_references(abs_path, lsp_line, lsp_char)?;
+            if locs.is_empty() {
+                ToolResult::text("No references found.")
+            } else {
+                let lines: Vec<String> = locs.iter()
+                    .map(|l| format!("{}:{}", l.file_path, l.line + 1))
+                    .collect();
+                ToolResult::text(format!("References ({}):\n{}", locs.len(), lines.join("\n")))
+            }
+        }
+        "hover" => {
+            match lsp.hover(abs_path, lsp_line, lsp_char)? {
+                Some(text) => ToolResult::text(format!("Hover info:\n{text}")),
+                None => ToolResult::text("No hover information available."),
+            }
+        }
+        "documentSymbol" => {
+            let syms = lsp.document_symbols(abs_path)?;
+            if syms.is_empty() {
+                ToolResult::text("No symbols found.")
+            } else {
+                let lines: Vec<String> = syms.iter()
+                    .map(|s| format!("  L{}: {} {}", s.line + 1, s.kind, s.name))
+                    .collect();
+                ToolResult::text(format!("Symbols in {}:\n{}", abs_path.display(), lines.join("\n")))
+            }
+        }
+        "workspaceSymbol" => {
+            let syms = lsp.workspace_symbols(query)?;
+            if syms.is_empty() {
+                ToolResult::text(format!("No symbols matching '{query}'."))
+            } else {
+                let lines: Vec<String> = syms.iter()
+                    .map(|s| {
+                        let loc = s.file_path.as_deref().unwrap_or("?");
+                        format!("  {} {} ({}:{})", s.kind, s.name, loc, s.line + 1)
+                    })
+                    .collect();
+                ToolResult::text(format!("Workspace symbols matching '{query}':\n{}", lines.join("\n")))
+            }
+        }
+        other => return Err(anyhow::anyhow!("Unsupported operation for LSP: {other}")),
+    };
+
+    lsp.shutdown(); // takes ownership
+    Ok(result)
 }
 
 fn resolve_path(cwd: &Path, file_path: &str) -> PathBuf {
