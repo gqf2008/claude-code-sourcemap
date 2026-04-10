@@ -523,6 +523,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ pub struct OutputRenderer {
     pub(super) first_content: bool,
     pub(super) total_input_tokens: u64,
     pub(super) total_output_tokens: u64,
+    stream_start: std::time::Instant,
 }
 
 impl OutputRenderer {
@@ -39,6 +40,7 @@ impl OutputRenderer {
             first_content: true,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            stream_start: std::time::Instant::now(),
         }
     }
 
@@ -79,6 +81,8 @@ impl OutputRenderer {
                     self.thinking_started = false;
                     eprintln!("\x1b[0m");
                 }
+                // Tick stall detection
+                if let Some(ref s) = self.spinner { s.tick_activity(); }
                 self.md.push(&text);
             }
             AgentNotification::ThinkingDelta { text } => {
@@ -142,27 +146,18 @@ impl OutputRenderer {
                     };
                     tracker.add(&self.model, &core_usage);
                 }
-                let mut parts = Vec::new();
-                if let Some(tracker) = cost_tracker {
-                    let cost = tracker.total_usd();
-                    if cost > 0.0 {
-                        parts.push(if cost >= 0.5 {
-                            format!("${:.2}", cost)
-                        } else if cost >= 0.0001 {
-                            format!("${:.4}", cost)
-                        } else {
-                            "$0.00".to_string()
-                        });
-                    }
-                }
-                if self.total_input_tokens > 0 || self.total_output_tokens > 0 {
-                    parts.push(format!("{}↓ {}↑",
-                        crate::repl_commands::format_tokens(self.total_input_tokens),
-                        crate::repl_commands::format_tokens(self.total_output_tokens)));
-                }
-                if !parts.is_empty() {
-                    eprintln!("\x1b[2m  [{}]\x1b[0m", parts.join(" · "));
-                }
+                let cost = cost_tracker.map_or(0.0, CostTracker::total_usd);
+                let elapsed = self.stream_start.elapsed().as_secs_f64();
+                let context_window = super::stream::estimate_context_window(&self.model);
+                let status = format_status_line(
+                    &self.model,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                    cost,
+                    elapsed,
+                    context_window,
+                );
+                eprintln!("{}", status);
                 println!();
                 return true;
             }
@@ -263,6 +258,7 @@ impl OutputRenderer {
         self.tool_spinner = None;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
+        self.stream_start = std::time::Instant::now();
     }
 
     fn ensure_started(&mut self) {

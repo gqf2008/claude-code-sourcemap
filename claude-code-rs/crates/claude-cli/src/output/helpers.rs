@@ -1,10 +1,20 @@
 use claude_core::tool::AbortSignal;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-/// An animated spinner shown while waiting for the first streaming token.
-/// Uses indicatif for richer animation with elapsed time.
+/// Stall detection thresholds.
+const STALL_WARN_SECS: u64 = 30;
+const STALL_CRIT_SECS: u64 = 60;
+
+/// An animated spinner with stall detection.
+/// Changes color when no progress updates occur.
 pub(super) struct Spinner {
     bar: ProgressBar,
+    last_activity: Arc<std::sync::Mutex<Instant>>,
+    stall_stop: Arc<AtomicBool>,
+    _stall_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Spinner {
@@ -16,15 +26,65 @@ impl Spinner {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
         );
         bar.set_message(message.to_string());
-        bar.enable_steady_tick(std::time::Duration::from_millis(80));
-        Self { bar }
+        bar.enable_steady_tick(Duration::from_millis(80));
+
+        let last_activity = Arc::new(std::sync::Mutex::new(Instant::now()));
+        let stall_stop = Arc::new(AtomicBool::new(false));
+
+        // Spawn stall detector thread
+        let bar_clone = bar.clone();
+        let activity_clone = last_activity.clone();
+        let stop_clone = stall_stop.clone();
+        let orig_msg = message.to_string();
+        let handle = std::thread::spawn(move || {
+            let mut warned = false;
+            let mut critical = false;
+            loop {
+                std::thread::sleep(Duration::from_secs(5));
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+                let elapsed = activity_clone.lock().unwrap().elapsed();
+                if elapsed.as_secs() >= STALL_CRIT_SECS && !critical {
+                    critical = true;
+                    bar_clone.set_style(
+                        ProgressStyle::with_template("{spinner:.red} {msg} {elapsed:.dim}")
+                            .unwrap()
+                            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+                    );
+                    bar_clone.set_message(format!("{} \x1b[31m(stalled {}s)\x1b[0m", orig_msg, elapsed.as_secs()));
+                } else if elapsed.as_secs() >= STALL_WARN_SECS && !warned {
+                    warned = true;
+                    bar_clone.set_style(
+                        ProgressStyle::with_template("{spinner:.yellow} {msg} {elapsed:.dim}")
+                            .unwrap()
+                            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+                    );
+                    bar_clone.set_message(format!("{} \x1b[33m(waiting...)\x1b[0m", orig_msg));
+                }
+            }
+        });
+
+        Self {
+            bar,
+            last_activity,
+            stall_stop,
+            _stall_handle: Some(handle),
+        }
+    }
+
+    /// Record activity to reset stall detection timer.
+    pub(super) fn tick_activity(&self) {
+        *self.last_activity.lock().unwrap() = Instant::now();
     }
 
     pub(super) fn set_message(&self, msg: &str) {
+        self.tick_activity();
         self.bar.set_message(msg.to_string());
     }
 
     pub(super) fn stop(&self) {
+        self.stall_stop.store(true, Ordering::Relaxed);
         self.bar.finish_and_clear();
     }
 }
@@ -50,7 +110,6 @@ pub(super) fn format_tool_result_inline(name: &str, text: &str) -> Option<String
             Some(format!("\x1b[2m  │ {}\x1b[0m", truncated))
         }
         "Edit" | "FileEdit" | "MultiEdit" | "MultiEditTool" => {
-            // Parse "+N -N lines" from result text and colorize
             if let Some(stats) = parse_edit_stats(text) {
                 Some(format!("  │ {}", stats))
             } else {
@@ -61,6 +120,44 @@ pub(super) fn format_tool_result_inline(name: &str, text: &str) -> Option<String
         "Write" | "FileWrite" => {
             let first_line = text.lines().next().unwrap_or(text);
             Some(format!("\x1b[2m  │ {}\x1b[0m", first_line))
+        }
+        "Read" | "FileRead" => {
+            let line_count = text.lines().count();
+            Some(format!("\x1b[2m  │ {} lines\x1b[0m", line_count))
+        }
+        "Glob" | "GlobTool" => {
+            let count = text.lines().filter(|l| !l.is_empty()).count();
+            Some(format!("\x1b[2m  │ {} files matched\x1b[0m", count))
+        }
+        "Grep" | "GrepTool" => {
+            let count = text.lines().filter(|l| !l.is_empty()).count();
+            Some(format!("\x1b[2m  │ {} matches\x1b[0m", count))
+        }
+        "Bash" | "PowerShell" => {
+            let line_count = text.lines().count();
+            // Check for exit code in the last line
+            let exit_info = text.lines().last()
+                .and_then(|l| l.strip_prefix("Exit code: "))
+                .map(|c| format!(" (exit {})", c.trim()))
+                .unwrap_or_default();
+            if line_count <= 1 && exit_info.is_empty() {
+                None
+            } else {
+                Some(format!("\x1b[2m  │ {} lines{}\x1b[0m", line_count, exit_info))
+            }
+        }
+        "Ls" | "LsTool" => {
+            let count = text.lines().filter(|l| !l.is_empty()).count();
+            Some(format!("\x1b[2m  │ {} entries\x1b[0m", count))
+        }
+        "WebFetch" => {
+            let char_count = text.len();
+            let display = if char_count > 1000 {
+                format!("{:.1}K chars", char_count as f64 / 1000.0)
+            } else {
+                format!("{} chars", char_count)
+            };
+            Some(format!("\x1b[2m  │ {}\x1b[0m", display))
         }
         _ => None,
     }
@@ -192,6 +289,68 @@ pub(super) fn short_path(path: &str) -> &str {
         }
     }
     path
+}
+
+/// Format a status line shown after each turn completes.
+///
+/// Example: `[claude-sonnet-4 | auto | 23% context | $0.0142 | 3.2s]`
+pub(super) fn format_status_line(
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
+    elapsed_secs: f64,
+    context_window: u64,
+) -> String {
+    // Context usage percentage
+    let context_pct = if context_window > 0 {
+        let used = input_tokens + output_tokens;
+        (used as f64 / context_window as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+
+    // Color context % based on usage level
+    let context_color = if context_pct >= 80.0 {
+        "\x1b[31m" // red
+    } else if context_pct >= 60.0 {
+        "\x1b[33m" // yellow
+    } else {
+        "\x1b[2m" // dim (normal)
+    };
+
+    // Format cost
+    let cost_str = if cost_usd >= 0.01 {
+        format!("${:.2}", cost_usd)
+    } else if cost_usd >= 0.0001 {
+        format!("${:.4}", cost_usd)
+    } else {
+        "$0".to_string()
+    };
+
+    // Shorten model name for display
+    let model_short = shorten_model_name(model);
+
+    format!(
+        "\x1b[2m[{} | {}{}%\x1b[2m ctx | {} | {:.1}s]\x1b[0m",
+        model_short,
+        context_color,
+        context_pct as u32,
+        cost_str,
+        elapsed_secs,
+    )
+}
+
+/// Shorten common model names for status line display.
+fn shorten_model_name(model: &str) -> &str {
+    // Strip common prefixes
+    let m = model.strip_prefix("anthropic.").unwrap_or(model);
+    if m.len() > 30 {
+        // Truncate very long model IDs
+        &m[..30]
+    } else {
+        m
+    }
 }
 
 /// Categorize an error message and return (icon, optional hint).
@@ -362,7 +521,13 @@ mod tests {
 
     #[test]
     fn test_format_result_inline_non_task_tool() {
-        let result = format_tool_result_inline("Read", "file contents...");
+        // "Read" now has inline formatting (shows line count)
+        let result = format_tool_result_inline("Read", "line1\nline2\nline3");
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("3 lines"));
+
+        // Unknown tools still return None
+        let result = format_tool_result_inline("SomeUnknownTool", "stuff");
         assert!(result.is_none());
     }
 

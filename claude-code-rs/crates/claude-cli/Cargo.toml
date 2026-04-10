@@ -32,6 +32,7 @@ similar = { workspace = true }
 regex = { workspace = true }
 indicatif = { workspace = true }
 crossterm = { workspace = true }
+unicode-width = { workspace = true }
 cliclack = { workspace = true }
 
 [lints]
