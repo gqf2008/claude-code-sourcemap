@@ -1,5 +1,6 @@
 //! /session, /undo, /export command handlers.
 
+use crate::theme;
 use claude_agent::engine::QueryEngine;
 
 /// Handle /session subcommands.
@@ -24,9 +25,9 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
         "save" => {
             match engine.save_session().await {
                 Ok(()) => {
-                    println!("\x1b[32m✓ Session saved ({})\x1b[0m", &engine.session_id()[..8]);
+                    println!("{}✓ Session saved ({})\x1b[0m", theme::c_ok(), &engine.session_id()[..8]);
                 }
-                Err(e) => eprintln!("\x1b[31mFailed to save session: {}\x1b[0m", e),
+                Err(e) => eprintln!("{}Failed to save session: {}\x1b[0m", theme::c_err(), e),
             }
         }
         "load" | "resume" => {
@@ -41,10 +42,10 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
                 let latest = &sessions[0];
                 match engine.restore_session(&latest.id).await {
                     Ok(title) => {
-                        println!("\x1b[32m✓ Resumed session: {}\x1b[0m", title);
+                        println!("{}✓ Resumed session: {}\x1b[0m", theme::c_ok(), title);
                         println!("  ({} messages restored)", latest.message_count);
                     }
-                    Err(e) => eprintln!("\x1b[31mFailed to resume: {}\x1b[0m", e),
+                    Err(e) => eprintln!("{}Failed to resume: {}\x1b[0m", theme::c_err(), e),
                 }
             } else {
                 // Find session by prefix match
@@ -54,10 +55,10 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
                     Some(meta) => {
                         match engine.restore_session(&meta.id).await {
                             Ok(title) => {
-                                println!("\x1b[32m✓ Resumed session: {}\x1b[0m", title);
+                                println!("{}✓ Resumed session: {}\x1b[0m", theme::c_ok(), title);
                                 println!("  ({} messages restored)", meta.message_count);
                             }
-                            Err(e) => eprintln!("\x1b[31mFailed to resume: {}\x1b[0m", e),
+                            Err(e) => eprintln!("{}Failed to resume: {}\x1b[0m", theme::c_err(), e),
                         }
                     }
                     None => println!("No session found matching '{}'. Use /session list.", id),
@@ -75,8 +76,8 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
             match found {
                 Some(meta) => {
                     match claude_core::session::delete_session(&meta.id) {
-                        Ok(()) => println!("\x1b[32m✓ Deleted session {:.8} ({})\x1b[0m", meta.id, meta.title),
-                        Err(e) => eprintln!("\x1b[31mFailed to delete: {}\x1b[0m", e),
+                        Ok(()) => println!("{}✓ Deleted session {:.8} ({})\x1b[0m", theme::c_ok(), meta.id, meta.title),
+                        Err(e) => eprintln!("{}Failed to delete: {}\x1b[0m", theme::c_err(), e),
                     }
                 }
                 None => println!("No session found matching '{}'. Use /session list.", id),
@@ -117,7 +118,7 @@ pub(crate) async fn handle_undo(engine: &QueryEngine) {
 
     if removed_assistant {
         let new_len = s.messages.len();
-        println!("\x1b[32m✓ Undone (removed {} message(s), {} remaining)\x1b[0m", len - new_len, new_len);
+        println!("{}✓ Undone (removed {} message(s), {} remaining)\x1b[0m", theme::c_ok(), len - new_len, new_len);
     } else {
         println!("Nothing to undo.");
     }
@@ -188,8 +189,8 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
             });
             let json = serde_json::to_string_pretty(&export).unwrap_or_else(|_| "{}".into());
             match std::fs::write(&path, json) {
-                Ok(_) => println!("\x1b[32m✓ Exported to {}\x1b[0m", path.display()),
-                Err(e) => eprintln!("\x1b[31mExport failed: {}\x1b[0m", e),
+                Ok(_) => println!("{}✓ Exported to {}\x1b[0m", theme::c_ok(), path.display()),
+                Err(e) => eprintln!("{}Export failed: {}\x1b[0m", theme::c_err(), e),
             }
         }
         _ => {
@@ -232,8 +233,8 @@ pub(crate) async fn handle_export(engine: &QueryEngine, cwd: &std::path::Path, f
             }
 
             match std::fs::write(&path, &md) {
-                Ok(_) => println!("\x1b[32m✓ Exported to {}\x1b[0m", path.display()),
-                Err(e) => eprintln!("\x1b[31mExport failed: {}\x1b[0m", e),
+                Ok(_) => println!("{}✓ Exported to {}\x1b[0m", theme::c_ok(), path.display()),
+                Err(e) => eprintln!("{}Export failed: {}\x1b[0m", theme::c_err(), e),
             }
         }
     }
@@ -258,7 +259,7 @@ pub(crate) async fn handle_search(engine: &QueryEngine, query: &str) {
         match regex::RegexBuilder::new(pattern).case_insensitive(true).build() {
             Ok(r) => Some(r),
             Err(e) => {
-                println!("\x1b[31mInvalid regex: {}\x1b[0m", e);
+                println!("{}Invalid regex: {}\x1b[0m", theme::c_err(), e);
                 return;
             }
         }

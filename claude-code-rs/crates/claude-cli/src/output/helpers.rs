@@ -1,3 +1,4 @@
+use crate::theme::{self, RESET};
 use claude_core::tool::AbortSignal;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::Arc;
@@ -52,7 +53,7 @@ impl Spinner {
                             .unwrap()
                             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
                     );
-                    bar_clone.set_message(format!("{} \x1b[31m(stalled {}s)\x1b[0m", orig_msg, elapsed.as_secs()));
+                    bar_clone.set_message(format!("{} {}(stalled {}s){}", orig_msg, theme::c_err(), elapsed.as_secs(), RESET));
                 } else if elapsed.as_secs() >= STALL_WARN_SECS && !warned {
                     warned = true;
                     bar_clone.set_style(
@@ -60,7 +61,7 @@ impl Spinner {
                             .unwrap()
                             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
                     );
-                    bar_clone.set_message(format!("{} \x1b[33m(waiting...)\x1b[0m", orig_msg));
+                    bar_clone.set_message(format!("{} {}(waiting...){}", orig_msg, theme::c_warn(), RESET));
                 }
             }
         });
@@ -175,7 +176,7 @@ pub(super) fn parse_edit_stats(text: &str) -> Option<String> {
         let removed = parts[1]; // "-N"
         let path = text.split(" (+").next().unwrap_or("");
         let path_short = short_path(path.trim_start_matches("Edited ").trim_start_matches("Wrote "));
-        Some(format!("\x1b[2m{}\x1b[0m \x1b[32m{}\x1b[0m \x1b[31m{}\x1b[0m", path_short, added, removed))
+        Some(format!("\x1b[2m{}\x1b[0m {}{}\x1b[0m {}{}\x1b[0m", path_short, theme::c_ok(), added, theme::c_err(), removed))
     } else {
         None
     }
@@ -271,7 +272,7 @@ pub(super) fn format_tool_start(name: &str, input: &serde_json::Value) -> String
             .unwrap_or_default(),
         _ => String::new(),
     };
-    format!("\x1b[36m⚙ {}{}\x1b[0m", name, detail)
+    format!("{}⚙ {}{}\x1b[0m", theme::c_tool(), name, detail)
 }
 
 pub(super) fn short_path(path: &str) -> &str {
@@ -312,9 +313,9 @@ pub(super) fn format_status_line(
 
     // Color context % based on usage level
     let context_color = if context_pct >= 80.0 {
-        "\x1b[31m" // red
+        theme::c_err()
     } else if context_pct >= 60.0 {
-        "\x1b[33m" // yellow
+        theme::c_warn()
     } else {
         "\x1b[2m" // dim (normal)
     };

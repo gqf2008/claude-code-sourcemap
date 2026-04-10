@@ -31,6 +31,16 @@ impl AnsiColor {
     }
 }
 
+/// Common ANSI constants available everywhere regardless of theme.
+pub const RESET: &str = "\x1b[0m";
+pub const DIM: &str = "\x1b[2m";
+pub const BOLD: &str = "\x1b[1m";
+pub const ITALIC: &str = "\x1b[3m";
+pub const UNDERLINE: &str = "\x1b[4m";
+pub const STRIKETHROUGH: &str = "\x1b[9m";
+pub const BOLD_UNDERLINE: &str = "\x1b[1;4m";
+pub const DIM_ITALIC: &str = "\x1b[2;3m";
+
 // ── Theme definition ────────────────────────────────────────────────────
 
 /// Semantic color slots for terminal rendering.
@@ -223,8 +233,6 @@ fn detect_dark_mode() -> ThemeName {
 }
 
 // ── Theme definitions ───────────────────────────────────────────────────
-
-const RESET: &str = "\x1b[0m";
 
 fn dark_theme() -> Theme {
     Theme {
@@ -486,6 +494,53 @@ pub fn themed(slot: fn(&Theme) -> &AnsiColor, text: &str) -> String {
     let guard = lock.read().unwrap();
     let color = slot(&guard);
     format!("{}{}{}", color.fg, text, RESET)
+}
+
+// ── Shorthand color accessors ───────────────────────────────────────────
+
+/// Error foreground (red-family).
+pub fn c_err() -> &'static str {
+    theme_fg(|t| t.error.fg)
+}
+
+/// Success foreground (green-family).
+pub fn c_ok() -> &'static str {
+    theme_fg(|t| t.success.fg)
+}
+
+/// Warning foreground (yellow-family).
+pub fn c_warn() -> &'static str {
+    theme_fg(|t| t.warning.fg)
+}
+
+/// Tool header / agent label foreground (cyan-family).
+pub fn c_tool() -> &'static str {
+    theme_fg(|t| t.agent_blue.fg)
+}
+
+/// Prompt border foreground.
+pub fn c_prompt() -> &'static str {
+    theme_fg(|t| t.prompt_border.fg)
+}
+
+/// Claude brand color.
+pub fn c_claude() -> &'static str {
+    theme_fg(|t| t.claude.fg)
+}
+
+/// Permission prompt foreground.
+pub fn c_perm() -> &'static str {
+    theme_fg(|t| t.permission.fg)
+}
+
+/// Diff added foreground.
+pub fn c_diff_add() -> &'static str {
+    theme_fg(|t| t.diff_added.fg)
+}
+
+/// Diff removed foreground.
+pub fn c_diff_rm() -> &'static str {
+    theme_fg(|t| t.diff_removed.fg)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────

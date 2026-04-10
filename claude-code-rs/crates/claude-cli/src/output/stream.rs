@@ -1,3 +1,4 @@
+use crate::theme;
 use claude_agent::cost::CostTracker;
 use claude_agent::query::AgentEvent;
 use claude_core::tool::AbortSignal;
@@ -83,9 +84,9 @@ pub async fn print_stream(
                 tool_start_time = None;
 
                 if is_error {
-                    eprintln!("\x1b[31m  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
+                    eprintln!("{}  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
                 } else {
-                    eprintln!("\x1b[32m  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
+                    eprintln!("{}  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
                 }
                 if let Some(ref result_text) = text {
                     if let Some(inline) = format_tool_result_inline(&last_tool_name, result_text) {
@@ -129,25 +130,25 @@ pub async fn print_stream(
                     ts.stop();
                 }
                 let (icon, hint) = categorize_error(&msg);
-                eprintln!("\x1b[31m{} {}\x1b[0m", icon, msg);
+                eprintln!("{}{}  {}\x1b[0m", theme::c_err(), icon, msg);
                 if let Some(h) = hint {
                     eprintln!("\x1b[2m  💡 {}\x1b[0m", h);
                 }
             }
             AgentEvent::MaxTurns { limit } => {
-                eprintln!("\x1b[33mMax turns ({}) reached\x1b[0m", limit);
+                eprintln!("{}Max turns ({}) reached\x1b[0m", theme::c_warn(), limit);
             }
             AgentEvent::TurnTokens { input_tokens, output_tokens } => {
                 tracing::debug!("Turn tokens: in={}, out={}", input_tokens, output_tokens);
             }
             AgentEvent::ContextWarning { usage_pct, message } => {
-                eprintln!("\x1b[33m⚠ Context {:.0}%: {}\x1b[0m", usage_pct * 100.0, message);
+                eprintln!("{}⚠ Context {:.0}%: {}\x1b[0m", theme::c_warn(), usage_pct * 100.0, message);
             }
             AgentEvent::CompactStart => {
-                eprintln!("\x1b[36m🗜 Compacting conversation...\x1b[0m");
+                eprintln!("{}🗜 Compacting conversation...\x1b[0m", theme::c_tool());
             }
             AgentEvent::CompactComplete { summary_len } => {
-                eprintln!("\x1b[36m✓ Compacted ({} chars)\x1b[0m", summary_len);
+                eprintln!("{}✓ Compacted ({} chars)\x1b[0m", theme::c_tool(), summary_len);
             }
         }
     }

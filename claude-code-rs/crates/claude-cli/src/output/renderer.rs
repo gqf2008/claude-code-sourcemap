@@ -1,3 +1,4 @@
+use crate::theme;
 use claude_agent::cost::CostTracker;
 use claude_bus::bus::ClientHandle;
 use claude_bus::events::AgentNotification;
@@ -115,9 +116,9 @@ impl OutputRenderer {
                     .map(|t| t.elapsed())
                     .unwrap_or_default();
                 if is_error {
-                    eprintln!("\x1b[31m  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
+                    eprintln!("{}  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
                 } else {
-                    eprintln!("\x1b[32m  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", elapsed.as_secs_f64());
+                    eprintln!("{}  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
                 }
                 if let Some(ref text) = result_preview {
                     if let Some(inline) = format_tool_result_inline(&self.last_tool_name, text) {
@@ -169,26 +170,26 @@ impl OutputRenderer {
                 return true;
             }
             AgentNotification::ContextWarning { usage_pct, message } => {
-                eprintln!("\x1b[33m⚠ Context {:.0}%: {}\x1b[0m", usage_pct * 100.0, message);
+                eprintln!("{}⚠ Context {:.0}%: {}\x1b[0m", theme::c_warn(), usage_pct * 100.0, message);
             }
             AgentNotification::CompactStart => {
-                eprintln!("\x1b[36m🗜 Compacting conversation...\x1b[0m");
+                eprintln!("{}🗜 Compacting conversation...\x1b[0m", theme::c_tool());
             }
             AgentNotification::CompactComplete { summary_len } => {
-                eprintln!("\x1b[36m✓ Compacted ({} chars)\x1b[0m", summary_len);
+                eprintln!("{}✓ Compacted ({} chars)\x1b[0m", theme::c_tool(), summary_len);
             }
             AgentNotification::AgentSpawned { name, agent_type, .. } => {
                 let label = name.as_deref().unwrap_or(&agent_type);
-                eprintln!("\x1b[36m🤖 Agent spawned: {}\x1b[0m", label);
+                eprintln!("{}🤖 Agent spawned: {}\x1b[0m", theme::c_tool(), label);
             }
             AgentNotification::AgentProgress { text, .. } => {
                 eprintln!("\x1b[2m  │ {}\x1b[0m", text);
             }
             AgentNotification::AgentComplete { is_error, .. } => {
                 if is_error {
-                    eprintln!("\x1b[31m  ✗ Agent failed\x1b[0m");
+                    eprintln!("{}  ✗ Agent failed\x1b[0m", theme::c_err());
                 } else {
-                    eprintln!("\x1b[32m  ✓ Agent done\x1b[0m");
+                    eprintln!("{}  ✓ Agent done\x1b[0m", theme::c_ok());
                 }
             }
             AgentNotification::McpServerConnected { name, tool_count } => {
@@ -198,7 +199,7 @@ impl OutputRenderer {
                 eprintln!("\x1b[2m[MCP: {} disconnected]\x1b[0m", name);
             }
             AgentNotification::McpServerError { name, error } => {
-                eprintln!("\x1b[31m[MCP: {} error: {}]\x1b[0m", name, error);
+                eprintln!("{}[MCP: {} error: {}]\x1b[0m", theme::c_err(), name, error);
             }
             AgentNotification::McpServerList { servers } => {
                 for s in &servers {
@@ -209,7 +210,7 @@ impl OutputRenderer {
             AgentNotification::Error { message, .. } => {
                 self.stop_spinners();
                 let (icon, hint) = categorize_error(&message);
-                eprintln!("\x1b[31m{} {}\x1b[0m", icon, message);
+                eprintln!("{}{} {}\x1b[0m", theme::c_err(), icon, message);
                 if let Some(h) = hint {
                     eprintln!("\x1b[2m  💡 {}\x1b[0m", h);
                 }

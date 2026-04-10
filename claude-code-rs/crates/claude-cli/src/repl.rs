@@ -11,6 +11,7 @@ use crate::config;
 use crate::input::{InputReader, InputResult, history_file_path};
 use crate::output::{print_stream, spawn_esc_listener, OutputRenderer};
 use crate::repl_commands::*;
+use crate::theme;
 
 /// Timeout for command-response notification loops (e.g. ClearHistory, SetModel).
 const CMD_NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -59,19 +60,20 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let current_model = engine.state().read().await.model.clone();
     let display = claude_core::model::display_name_any(&current_model);
-    println!("\x1b[1;34m╭─────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;34m│      Claude Code (Rust)         │\x1b[0m");
-    println!("\x1b[1;34m│  Model: {:<23} │\x1b[0m", display);
-    println!("\x1b[1;34m│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
-    println!("\x1b[1;34m│  Type /help for commands        │\x1b[0m");
-    println!("\x1b[1;34m│  Shift/Alt+Enter for newline    │\x1b[0m");
-    println!("\x1b[1;34m╰─────────────────────────────────╯\x1b[0m\n");
+    let border = theme::c_prompt();
+    println!("{border}╭─────────────────────────────────╮\x1b[0m");
+    println!("{border}│      Claude Code (Rust)         │\x1b[0m");
+    println!("{border}│  Model: {:<23} │\x1b[0m", display);
+    println!("{border}│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
+    println!("{border}│  Type /help for commands        │\x1b[0m");
+    println!("{border}│  Shift/Alt+Enter for newline    │\x1b[0m");
+    println!("{border}╰─────────────────────────────────╯\x1b[0m\n");
 
     // Lazy-loaded and cached — first call scans disk, subsequent calls O(1)
     let startup_skills = claude_core::skills::get_skills(&cwd);
     if !startup_skills.is_empty() {
         let names: Vec<&str> = startup_skills.iter().map(|s| s.name.as_str()).collect();
-        println!("\x1b[33mSkills loaded: {}\x1b[0m\n", names.join(", "));
+        println!("{}Skills loaded: {}\x1b[0m\n", theme::c_warn(), names.join(", "));
     }
 
     let mut rl = InputReader::new();
@@ -114,7 +116,7 @@ pub async fn run(
                                         prompt,
                                     }
                                 } else {
-                                    eprintln!("\x1b[33mPlugin command /{} has no prompt file\x1b[0m", name);
+                                    eprintln!("{}Plugin command /{} has no prompt file\x1b[0m", theme::c_warn(), name);
                                     cmd
                                 }
                             } else {
@@ -162,7 +164,7 @@ pub async fn run(
                                                 &cwd,
                                                 |s| { s.model = Some(model.clone()); },
                                             ) {
-                                                eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                                eprintln!("{}Note: Could not persist model choice: {}\x1b[0m", theme::c_warn(), e);
                                             }
                                             break;
                                         }
@@ -181,7 +183,7 @@ pub async fn run(
                                         &cwd,
                                         |s| { s.model = Some(resolved.clone()); },
                                     ) {
-                                        eprintln!("\x1b[33mNote: Could not persist model choice: {}\x1b[0m", e);
+                                        eprintln!("{}Note: Could not persist model choice: {}\x1b[0m", theme::c_warn(), e);
                                     }
                                 }
                             }
@@ -197,31 +199,31 @@ pub async fn run(
                             }
                             CommandResult::Compact { instructions } => {
                                 if let Some(ref mut c) = client {
-                                    println!("\x1b[33mCompacting conversation…\x1b[0m");
+                                    println!("{}Compacting conversation…\x1b[0m", theme::c_warn());
                                     let _ = c.send_request(AgentRequest::Compact { instructions });
                                     // Wait for CompactComplete or Error notification
                                     while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
                                         match n {
                                             claude_bus::events::AgentNotification::CompactComplete { summary_len } => {
-                                                println!("\x1b[32m✓ Compacted ({} chars).\x1b[0m", summary_len);
+                                                println!("{}✓ Compacted ({} chars).\x1b[0m", theme::c_ok(), summary_len);
                                                 break;
                                             }
                                             claude_bus::events::AgentNotification::Error { message, .. } => {
-                                                eprintln!("\x1b[31mCompact failed: {}\x1b[0m", message);
+                                                eprintln!("{}Compact failed: {}\x1b[0m", theme::c_err(), message);
                                                 break;
                                             }
                                             _ => {}
                                         }
                                     }
                                 } else {
-                                    println!("\x1b[33mCompacting conversation…\x1b[0m");
+                                    println!("{}Compacting conversation…\x1b[0m", theme::c_warn());
                                     match engine.compact("manual", instructions.as_deref()).await {
                                         Ok(summary) => {
-                                            println!("\x1b[32m✓ Compacted.\x1b[0m");
+                                            println!("{}✓ Compacted.\x1b[0m", theme::c_ok());
                                             let preview: String = summary.lines().take(5).collect::<Vec<_>>().join("\n");
                                             println!("\x1b[2m{}\x1b[0m", preview);
                                         }
-                                        Err(e) => eprintln!("\x1b[31mCompact failed: {}\x1b[0m", e),
+                                        Err(e) => eprintln!("{}Compact failed: {}\x1b[0m", theme::c_err(), e),
                                     }
                                 }
                             }
@@ -305,12 +307,12 @@ pub async fn run(
                             }
                             CommandResult::Retry => {
                                 if let Some(prompt) = engine.pop_last_turn().await {
-                                    eprintln!("\x1b[33m[Retrying: {}…]\x1b[0m",
+                                    eprintln!("{}[Retrying: {}…]\x1b[0m", theme::c_warn(),
                                         if prompt.len() > 50 { &prompt[..50] } else { &prompt });
                                     let model = { engine.state().read().await.model.clone() };
                                     let stream = engine.submit(&prompt).await;
                                     if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
-                                        eprintln!("\x1b[31mRetry error: {}\x1b[0m", e);
+                                        eprintln!("{}Retry error: {}\x1b[0m", theme::c_err(), e);
                                     }
                                     print_turn_stats(&engine).await;
                                 } else {
@@ -366,11 +368,11 @@ pub async fn run(
 
                 // Check auto-compact before submitting
                 if engine.should_auto_compact().await {
-                    println!("\x1b[33m[Context limit approaching — auto-compacting…]\x1b[0m");
+                    println!("{}[Context limit approaching — auto-compacting…]\x1b[0m", theme::c_warn());
                     if let Err(e) = engine.compact("auto", None).await {
-                        eprintln!("\x1b[31mAuto-compact failed: {}\x1b[0m", e);
+                        eprintln!("{}Auto-compact failed: {}\x1b[0m", theme::c_err(), e);
                     } else {
-                        println!("\x1b[32m[Auto-compact complete]\x1b[0m");
+                        println!("{}[Auto-compact complete]\x1b[0m", theme::c_ok());
                     }
                 }
 
@@ -411,7 +413,7 @@ pub async fn run(
                     let request = AgentRequest::Submit { text, images: bus_images };
 
                     if let Err(e) = client.send_request(request) {
-                        eprintln!("\x1b[31mFailed to send request: {}\x1b[0m", e);
+                        eprintln!("{}Failed to send request: {}\x1b[0m", theme::c_err(), e);
                     } else {
                         // ESC listener for abort during bus-based rendering
                         let _esc_guard = spawn_esc_listener(engine.abort_signal());
@@ -429,7 +431,7 @@ pub async fn run(
                         }
                         // Handle abort in bus path (same as direct path)
                         if engine.abort_signal().is_aborted() {
-                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                            eprintln!("{}⏹ Interrupted\x1b[0m", theme::c_warn());
                             engine.abort_signal().reset();
                             let _ = engine.save_session().await;
                             turns_since_save = 0;
@@ -456,12 +458,12 @@ pub async fn run(
 
                     if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
                         if engine.abort_signal().is_aborted() {
-                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                            eprintln!("{}⏹ Interrupted\x1b[0m", theme::c_warn());
                             engine.abort_signal().reset();
                             let _ = engine.save_session().await;
                             turns_since_save = 0;
                         } else {
-                            eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                            eprintln!("{}Error: {}\x1b[0m", theme::c_err(), e);
                         }
                     }
                 }
@@ -476,9 +478,9 @@ pub async fn run(
                 // Context usage warning (80% threshold)
                 if let Some(pct) = engine.context_usage_percent().await {
                     if pct >= 90 {
-                        eprintln!("\x1b[31m⚠ Context {pct}% full — consider /compact or /clear\x1b[0m");
+                        eprintln!("{}⚠ Context {pct}% full — consider /compact or /clear\x1b[0m", theme::c_err());
                     } else if pct >= 80 {
-                        eprintln!("\x1b[33m⚠ Context {pct}% full\x1b[0m");
+                        eprintln!("{}⚠ Context {pct}% full\x1b[0m", theme::c_warn());
                     }
                 }
 
@@ -515,10 +517,10 @@ pub async fn run(
                                     }
                                 }).collect::<Vec<_>>().join("\n");
                                 if text.is_empty() { continue; }
-                                eprintln!("\x1b[33m[Task notification received]\x1b[0m");
+                                eprintln!("{}[Task notification received]\x1b[0m", theme::c_warn());
                                 let stream = engine.submit(&text).await;
                                 if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
-                                    eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                                    eprintln!("{}Error: {}\x1b[0m", theme::c_err(), e);
                                 }
                             }
                         }
@@ -528,7 +530,7 @@ pub async fn run(
             Ok(InputResult::Interrupted) => { continue; }
             Ok(InputResult::Eof) => { println!("Goodbye!"); break; }
             Err(err) => {
-                eprintln!("\x1b[31mInput error: {}\x1b[0m", err);
+                eprintln!("{}Input error: {}\x1b[0m", theme::c_err(), err);
                 break;
             }
         }
