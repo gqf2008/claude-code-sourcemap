@@ -77,6 +77,8 @@ pub enum SlashCommand {
     ReleaseNotes,
     /// Submit feedback.
     Feedback { text: String },
+    /// Show detailed session statistics.
+    Stats,
     Exit,
     Unknown(String),
 }
@@ -145,6 +147,7 @@ impl SlashCommand {
             "tag" => Self::Tag { name: args },
             "release-notes" | "changelog" => Self::ReleaseNotes,
             "feedback" => Self::Feedback { text: args },
+            "stats" | "usage" => Self::Stats,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -273,6 +276,7 @@ impl SlashCommand {
                     CommandResult::Feedback { text: text.clone() }
                 }
             }
+            Self::Stats => CommandResult::Stats,
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -356,6 +360,8 @@ pub enum CommandResult {
     ReleaseNotes,
     /// Submit feedback (/feedback <text>).
     Feedback { text: String },
+    /// Show detailed session statistics (/stats).
+    Stats,
     Exit,
 }
 
@@ -455,6 +461,7 @@ const HELP_TEXT_BASE: &str = "\
   /release-notes     Show version and release notes
   /stickers          Order Claude Code stickers!
   /feedback <text>   Submit feedback about Claude Code
+  /stats             Show detailed session statistics
 
 \x1b[1mTips\x1b[0m
   • End a line with \\ to continue on the next line (multiline)
@@ -1464,5 +1471,23 @@ mod tests {
     fn test_execute_feedback_with_text() {
         let cmd = SlashCommand::parse("/feedback hello", &no_skills()).unwrap();
         assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Feedback { text } if text == "hello"));
+    }
+
+    #[test]
+    fn test_parse_stats() {
+        assert!(matches!(
+            SlashCommand::parse("/stats", &no_skills()).unwrap(),
+            SlashCommand::Stats
+        ));
+        assert!(matches!(
+            SlashCommand::parse("/usage", &no_skills()).unwrap(),
+            SlashCommand::Stats
+        ));
+    }
+
+    #[test]
+    fn test_execute_stats() {
+        let cmd = SlashCommand::parse("/stats", &no_skills()).unwrap();
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Stats));
     }
 }

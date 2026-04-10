@@ -87,6 +87,9 @@ pub async fn run(
     // Track config file modification times for auto-reload
     let mut config_mtimes = ConfigMtimes::capture(&cwd);
 
+    // Session start time for /stats display
+    let session_start = std::time::Instant::now();
+
     // Periodic session checkpoint counter (save every N turns to prevent data loss)
     const CHECKPOINT_INTERVAL: u32 = 5;
     let mut turns_since_save: u32 = 0;
@@ -751,6 +754,9 @@ pub async fn run(
                                     }
                                 }
                             }
+                            CommandResult::Stats => {
+                                handle_stats_command(&engine, session_start).await;
+                            }
                         }
                     }
                     continue;
@@ -1032,6 +1038,102 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     }
     child.wait()?;
     Ok(())
+}
+
+/// Display detailed session statistics for /stats command.
+async fn handle_stats_command(engine: &QueryEngine, session_start: std::time::Instant) {
+    let state = engine.state().read().await;
+    let cost = engine.cost_tracker();
+    let total_cost = cost.total_usd();
+    let elapsed = session_start.elapsed();
+
+    let ok = theme::c_ok();
+    let bold = "\x1b[1m";
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+
+    println!("{bold}Session Statistics{reset}");
+    println!("{dim}─────────────────────────────────────{reset}");
+
+    // Session timing
+    let secs = elapsed.as_secs();
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        println!("{ok}Session duration:{reset} {:02}h {:02}m {:02}s", h, m, s);
+    } else {
+        println!("{ok}Session duration:{reset} {:02}m {:02}s", m, s);
+    }
+    println!("{ok}Turns:{reset}           {}", state.turn_count);
+
+    // Token usage
+    println!("\n{bold}Token Usage{reset}");
+    println!("{dim}─────────────────────────────────────{reset}");
+    println!("{ok}Input tokens:{reset}    {}", state.total_input_tokens);
+    println!("{ok}Output tokens:{reset}   {}", state.total_output_tokens);
+    let total_tokens = state.total_input_tokens + state.total_output_tokens;
+    println!("{ok}Total tokens:{reset}    {}", total_tokens);
+    if total_cost > 0.0 {
+        println!("{ok}Total cost:{reset}      ${:.4}", total_cost);
+    }
+
+    // Per-model breakdown
+    if !state.model_usage.is_empty() {
+        println!("\n{bold}Model Breakdown{reset}");
+        println!("{dim}─────────────────────────────────────{reset}");
+        let mut models: Vec<_> = state.model_usage.iter().collect();
+        models.sort_by_key(|(name, _)| name.as_str());
+        for (model, usage) in &models {
+            let display = claude_core::model::display_name_any(model);
+            println!("{ok}{display}{reset}");
+            println!("  API calls:    {}", usage.api_calls);
+            println!("  Input:        {}", usage.input_tokens);
+            println!("  Output:       {}", usage.output_tokens);
+            if usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0 {
+                println!("  Cache read:   {}", usage.cache_read_tokens);
+                println!("  Cache write:  {}", usage.cache_creation_tokens);
+            }
+            if usage.cost_usd > 0.0 {
+                println!("  Cost:         ${:.4}", usage.cost_usd);
+            }
+        }
+    }
+
+    // Code changes
+    if state.total_lines_added > 0 || state.total_lines_removed > 0 {
+        println!("\n{bold}Code Changes{reset}");
+        println!("{dim}─────────────────────────────────────{reset}");
+        println!("{ok}Lines added:{reset}     +{}", state.total_lines_added);
+        println!("{ok}Lines removed:{reset}   -{}", state.total_lines_removed);
+    }
+
+    // Timing breakdown
+    if state.total_api_duration_ms > 0 || state.total_tool_duration_ms > 0 {
+        println!("\n{bold}Timing{reset}");
+        println!("{dim}─────────────────────────────────────{reset}");
+        if state.total_api_duration_ms > 0 {
+            let api_s = state.total_api_duration_ms as f64 / 1000.0;
+            println!("{ok}API time:{reset}        {:.2}s", api_s);
+        }
+        if state.total_tool_duration_ms > 0 {
+            let tool_s = state.total_tool_duration_ms as f64 / 1000.0;
+            println!("{ok}Tool time:{reset}       {:.2}s", tool_s);
+        }
+    }
+
+    // Errors
+    if state.total_errors > 0 {
+        let err = theme::c_err();
+        println!("\n{bold}Errors{reset}");
+        println!("{dim}─────────────────────────────────────{reset}");
+        println!("{err}Total errors:{reset}    {}", state.total_errors);
+        if !state.error_counts.is_empty() {
+            let mut errs: Vec<_> = state.error_counts.iter().collect();
+            errs.sort_by_key(|(_, &c)| std::cmp::Reverse(c));
+            for (kind, count) in errs.iter().take(5) {
+                println!("  {kind}: {count}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

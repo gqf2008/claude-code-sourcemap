@@ -27,6 +27,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/fast", "/add-dir", "/summary", "/rename", "/copy", "/share", "/files",
     "/env", "/agents", "/theme", "/plan", "/think", "/break-cache", "/rewind",
     "/vim", "/stickers", "/effort", "/tag", "/release-notes", "/feedback",
+    "/stats", "/usage",
 ];
 
 /// Continuation prompt for multiline input.
