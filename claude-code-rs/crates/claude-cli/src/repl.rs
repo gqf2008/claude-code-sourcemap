@@ -92,6 +92,15 @@ pub async fn run(
     let mut turns_since_save: u32 = 0;
 
     loop {
+        // Context usage warning before prompt
+        if let Some(pct) = engine.context_usage_percent().await {
+            if pct >= 95 {
+                eprintln!("{}⚠ Context {pct}% full — compaction imminent\x1b[0m", theme::c_err());
+            } else if pct >= 80 {
+                eprintln!("{}⚠ Context {pct}% full\x1b[0m", theme::c_warn());
+            }
+        }
+
         let readline = rl.readline("> ");
         match readline {
             Ok(InputResult::Line(line)) => {
@@ -187,13 +196,15 @@ pub async fn run(
                                     }
                                 }
                             }
-                            CommandResult::ShowCost => {
+                            CommandResult::ShowCost { window } => {
                                 let state = engine.state();
                                 let s = state.read().await;
-                                let summary = engine.cost_tracker().format_summary(
+                                let cost_window = claude_agent::cost::CostWindow::parse(&window);
+                                let summary = engine.cost_tracker().format_summary_window(
                                     s.total_input_tokens,
                                     s.total_output_tokens,
                                     s.turn_count,
+                                    cost_window,
                                 );
                                 println!("{}", summary);
                             }
@@ -354,6 +365,73 @@ pub async fn run(
                             }
                             CommandResult::Plan { args } => {
                                 handle_plan_command(&args, &engine, &cwd).await;
+                            }
+                            CommandResult::Think { args } => {
+                                if let Some(ref mut c) = client {
+                                    let mode = if args.is_empty() {
+                                        // Toggle: if currently enabled → off, else on
+                                        if engine.thinking_config().is_some() { "off".to_string() } else { "on".to_string() }
+                                    } else {
+                                        args.clone()
+                                    };
+                                    let _ = c.send_request(AgentRequest::SetThinking { mode });
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
+                                        if let claude_bus::events::AgentNotification::ThinkingChanged { enabled, budget } = n {
+                                            if enabled {
+                                                let budget_str = budget.map(|b| format!(" (budget: {})", b)).unwrap_or_default();
+                                                println!("{}✓ Extended thinking enabled{}\x1b[0m", theme::c_ok(), budget_str);
+                                            } else {
+                                                println!("{}✓ Extended thinking disabled\x1b[0m", theme::c_ok());
+                                            }
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    // Direct mode (no bus)
+                                    let mode = if args.is_empty() {
+                                        if engine.thinking_config().is_some() { "off" } else { "on" }
+                                    } else {
+                                        args.as_str()
+                                    };
+                                    match mode.to_lowercase().as_str() {
+                                        "off" | "false" | "0" | "disable" => {
+                                            engine.set_thinking(None);
+                                            println!("{}✓ Extended thinking disabled\x1b[0m", theme::c_ok());
+                                        }
+                                        "on" | "true" | "enable" => {
+                                            engine.set_thinking(Some(claude_api::types::ThinkingConfig {
+                                                thinking_type: "enabled".into(),
+                                                budget_tokens: Some(10_000),
+                                            }));
+                                            println!("{}✓ Extended thinking enabled (budget: 10000)\x1b[0m", theme::c_ok());
+                                        }
+                                        other => {
+                                            if let Ok(budget) = other.parse::<u32>() {
+                                                engine.set_thinking(Some(claude_api::types::ThinkingConfig {
+                                                    thinking_type: "enabled".into(),
+                                                    budget_tokens: Some(budget),
+                                                }));
+                                                println!("{}✓ Extended thinking enabled (budget: {})\x1b[0m", theme::c_ok(), budget);
+                                            } else {
+                                                println!("Usage: /think [on|off|<budget>]");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            CommandResult::BreakCache => {
+                                if let Some(ref mut c) = client {
+                                    let _ = c.send_request(AgentRequest::BreakCache);
+                                    while let Some(n) = recv_with_timeout(c, CMD_NOTIFICATION_TIMEOUT).await {
+                                        if matches!(n, claude_bus::events::AgentNotification::CacheBreakSet) {
+                                            println!("{}✓ Next request will skip prompt cache\x1b[0m", theme::c_ok());
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    engine.set_break_cache();
+                                    println!("{}✓ Next request will skip prompt cache\x1b[0m", theme::c_ok());
+                                }
                             }
                         }
                     }

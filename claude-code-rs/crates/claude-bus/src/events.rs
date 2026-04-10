@@ -159,6 +159,15 @@ pub enum AgentNotification {
     /// Response to `ListTools` request.
     ToolList { tools: Vec<ToolInfo> },
 
+    /// Response to `SetThinking` — confirms thinking mode change.
+    ThinkingChanged {
+        enabled: bool,
+        budget: Option<u32>,
+    },
+
+    /// Response to `BreakCache` — confirms cache will be skipped.
+    CacheBreakSet,
+
     // ── Errors ──
 
     /// A non-fatal error occurred.
@@ -250,6 +259,15 @@ pub enum AgentRequest {
 
     /// List available tools (response via `ToolList` notification).
     ListTools,
+
+    /// Toggle extended thinking on/off or set budget.
+    SetThinking {
+        /// "on", "off", or a budget number (e.g. "10000").
+        mode: String,
+    },
+
+    /// Force next API request to skip prompt caching.
+    BreakCache,
 }
 
 // ── Permission request/response (bidirectional) ──────────────────────────────

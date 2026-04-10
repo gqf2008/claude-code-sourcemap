@@ -394,6 +394,15 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
                 ("message", Value::String(message.clone())),
             ]))
         }
+        AgentNotification::ThinkingChanged { enabled, budget } => {
+            Notification::new("agent.thinking_changed", json_obj(2, &[
+                ("enabled", Value::Bool(*enabled)),
+                ("budget", budget.map(|b| Value::Number(b.into())).unwrap_or(Value::Null)),
+            ]))
+        }
+        AgentNotification::CacheBreakSet => {
+            Notification::new("agent.cache_break_set", Some(Value::Object(serde_json::Map::new())))
+        }
     }
 }
 

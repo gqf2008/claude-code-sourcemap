@@ -5,7 +5,7 @@ pub enum SlashCommand {
     Clear,
     Model(String),
     Compact { instructions: String },
-    Cost,
+    Cost { window: String },
     Skills,
     Memory { sub: String },
     Session { sub: String },
@@ -43,6 +43,10 @@ pub enum SlashCommand {
     Theme { name: String },
     /// Plan mode management.
     Plan { args: String },
+    /// Toggle extended thinking.
+    Think { args: String },
+    /// Force next request to skip prompt cache.
+    BreakCache,
     Exit,
     Unknown(String),
 }
@@ -59,7 +63,7 @@ impl SlashCommand {
             "clear" => Self::Clear,
             "model" => Self::Model(args),
             "compact" => Self::Compact { instructions: args },
-            "cost" => Self::Cost,
+            "cost" => Self::Cost { window: args },
             "skills" => Self::Skills,
             "memory" => Self::Memory { sub: args },
             "session" | "resume" => Self::Session { sub: args },
@@ -94,6 +98,8 @@ impl SlashCommand {
             "agents" | "agent" => Self::Agents { sub: args },
             "theme" => Self::Theme { name: args },
             "plan" => Self::Plan { args },
+            "think" | "thinking" => Self::Think { args },
+            "break-cache" | "breakcache" => Self::BreakCache,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -129,7 +135,7 @@ impl SlashCommand {
             Self::Compact { instructions } => CommandResult::Compact {
                 instructions: if instructions.is_empty() { None } else { Some(instructions.clone()) },
             },
-            Self::Cost => CommandResult::ShowCost,
+            Self::Cost { window } => CommandResult::ShowCost { window: window.clone() },
             Self::Skills => {
                 let invocable: Vec<_> = known_skills
                     .iter()
@@ -199,6 +205,8 @@ impl SlashCommand {
             Self::Agents { sub } => CommandResult::Agents { sub: sub.clone() },
             Self::Theme { name } => CommandResult::Theme { name: name.clone() },
             Self::Plan { args } => CommandResult::Plan { args: args.clone() },
+            Self::Think { args } => CommandResult::Think { args: args.clone() },
+            Self::BreakCache => CommandResult::BreakCache,
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -211,7 +219,7 @@ pub enum CommandResult {
     Print(String),
     ClearHistory,
     SetModel(String),
-    ShowCost,
+    ShowCost { window: String },
     Compact { instructions: Option<String> },
     Memory { sub: String },
     Session { sub: String },
@@ -248,6 +256,10 @@ pub enum CommandResult {
     Theme { name: String },
     /// Plan mode (/plan [open|description]).
     Plan { args: String },
+    /// Toggle extended thinking (/think [on|off|<budget>]).
+    Think { args: String },
+    /// Force next request to skip prompt cache (/break-cache).
+    BreakCache,
     Exit,
 }
 
@@ -285,7 +297,7 @@ const HELP_TEXT_BASE: &str = "\
   /search <query>    Search conversation history
   /history [page]    Browse conversation turns
   /retry             Retry the last failed prompt (alias: /redo)
-  /cost              Show token usage and costs
+  /cost [today|week|month]  Show token usage and costs
   /exit              Exit the CLI
 
 \x1b[1mGit & Code\x1b[0m
@@ -302,7 +314,9 @@ const HELP_TEXT_BASE: &str = "\
 
 \x1b[1mConfiguration\x1b[0m
   /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
+  /think [on|off|N]  Toggle extended thinking (N = token budget)
   /theme [name]      Switch terminal theme (dark, light, dark-ansi, etc.)
+  /break-cache       Force next request to skip prompt cache
   /login             Set API key interactively
   /logout            Clear saved API key
   /config            Show current configuration
@@ -391,7 +405,7 @@ mod tests {
         assert!(matches!(SlashCommand::parse("/init", &s), Some(SlashCommand::Init)));
         assert!(matches!(SlashCommand::parse("/login", &s), Some(SlashCommand::Login)));
         assert!(matches!(SlashCommand::parse("/logout", &s), Some(SlashCommand::Logout)));
-        assert!(matches!(SlashCommand::parse("/cost", &s), Some(SlashCommand::Cost)));
+        assert!(matches!(SlashCommand::parse("/cost", &s), Some(SlashCommand::Cost { .. })));
         assert!(matches!(SlashCommand::parse("/skills", &s), Some(SlashCommand::Skills)));
     }
 
@@ -1003,8 +1017,8 @@ mod tests {
 
     #[test]
     fn test_execute_cost() {
-        let cmd = SlashCommand::Cost;
-        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::ShowCost));
+        let cmd = SlashCommand::Cost { window: String::new() };
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::ShowCost { .. }));
     }
 
     #[test]

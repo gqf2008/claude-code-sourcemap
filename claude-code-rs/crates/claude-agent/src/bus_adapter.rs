@@ -276,6 +276,12 @@ impl AgentCoreAdapter {
                 AgentRequest::ListTools => {
                     self.handle_list_tools().await;
                 }
+                AgentRequest::SetThinking { mode } => {
+                    self.handle_set_thinking(&mode).await;
+                }
+                AgentRequest::BreakCache => {
+                    self.handle_break_cache().await;
+                }
             }
         }
 
@@ -601,6 +607,43 @@ impl AgentCoreAdapter {
 
         let bus = self.bus.lock().await;
         bus.notify(AgentNotification::ToolList { tools });
+    }
+
+    async fn handle_set_thinking(&self, mode: &str) {
+        let (config, enabled, budget) = match mode.to_lowercase().as_str() {
+            "off" | "false" | "0" | "disable" => (None, false, None),
+            "on" | "true" | "enable" => {
+                let cfg = claude_api::types::ThinkingConfig {
+                    thinking_type: "enabled".into(),
+                    budget_tokens: Some(10_000),
+                };
+                (Some(cfg), true, Some(10_000))
+            }
+            other => {
+                if let Ok(budget) = other.parse::<u32>() {
+                    let cfg = claude_api::types::ThinkingConfig {
+                        thinking_type: "enabled".into(),
+                        budget_tokens: Some(budget),
+                    };
+                    (Some(cfg), true, Some(budget))
+                } else {
+                    let cfg = claude_api::types::ThinkingConfig {
+                        thinking_type: "enabled".into(),
+                        budget_tokens: Some(10_000),
+                    };
+                    (Some(cfg), true, Some(10_000))
+                }
+            }
+        };
+        self.engine.set_thinking(config);
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::ThinkingChanged { enabled, budget });
+    }
+
+    async fn handle_break_cache(&self) {
+        self.engine.set_break_cache();
+        let bus = self.bus.lock().await;
+        bus.notify(AgentNotification::CacheBreakSet);
     }
 }
 

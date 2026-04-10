@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use claude_api::client::ApiClient;
 use claude_core::claude_md::load_claude_md;
@@ -12,6 +13,7 @@ use claude_core::tool::AbortSignal;
 use claude_tools::ToolRegistry;
 use tokio::sync::RwLock;
 
+use super::ThinkingOverride;
 use crate::compact::AutoCompactState;
 use crate::compact::AUTO_COMPACT_THRESHOLD;
 use crate::coordinator::{AgentTracker, SendMessageTool, TaskStopTool};
@@ -407,6 +409,8 @@ impl QueryEngineBuilder {
             agent_channels: coord_agent_channels,
             auto_compact: Arc::new(tokio::sync::Mutex::new(AutoCompactState::new())),
             context_window: effective_context_window,
+            break_cache_next: AtomicBool::new(false),
+            thinking_override: std::sync::Mutex::new(ThinkingOverride::UseDefault),
         }
     }
 }

@@ -11,7 +11,7 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
     let mut warnings = 0u32;
     let mut errors = 0u32;
 
-    // 1. API key
+    // 1. API key (instant)
     let api_ok = std::env::var("ANTHROPIC_API_KEY").is_ok();
     if api_ok {
         println!("  \x1b[32m✓\x1b[0m API key configured");
@@ -20,12 +20,31 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
         errors += 1;
     }
 
-    // 2. Git
-    let git_version = std::process::Command::new("git")
-        .arg("--version")
-        .output();
-    match git_version {
-        Ok(out) if out.status.success() => {
+    // Parallel external tool checks (git, rg, node)
+    let cwd_owned = cwd.to_path_buf();
+    let (git_ver, git_repo, rg_ver, node_ver) = tokio::join!(
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("git").arg("--version").output()
+        }),
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .current_dir(&cwd_owned)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }),
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("rg").arg("--version").output()
+        }),
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("node").arg("--version").output()
+        }),
+    );
+
+    // 2. Git version
+    match git_ver.ok().and_then(|r| r.ok()) {
+        Some(out) if out.status.success() => {
             let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
             println!("  \x1b[32m✓\x1b[0m {}", ver);
         }
@@ -36,12 +55,7 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
     }
 
     // 3. Git repo
-    let in_repo = std::process::Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(cwd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let in_repo = git_repo.unwrap_or(false);
     if in_repo {
         println!("  \x1b[32m✓\x1b[0m Inside git repository");
     } else {
@@ -113,10 +127,9 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
         println!("  \x1b[32m✓\x1b[0m Settings loaded from: {}", sources.join(", "));
     }
 
-    // 10. Ripgrep
-    let rg_version = std::process::Command::new("rg").arg("--version").output();
-    match rg_version {
-        Ok(out) if out.status.success() => {
+    // 10. Ripgrep (result from parallel check)
+    match rg_ver.ok().and_then(|r| r.ok()) {
+        Some(out) if out.status.success() => {
             let ver = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").to_string();
             println!("  \x1b[32m✓\x1b[0m {}", ver);
         }
@@ -126,10 +139,9 @@ pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
         }
     }
 
-    // 11. Node.js (optional)
-    let node_version = std::process::Command::new("node").arg("--version").output();
-    match node_version {
-        Ok(out) if out.status.success() => {
+    // 11. Node.js (result from parallel check)
+    match node_ver.ok().and_then(|r| r.ok()) {
+        Some(out) if out.status.success() => {
             let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
             println!("  \x1b[32m✓\x1b[0m Node.js {}", ver);
         }

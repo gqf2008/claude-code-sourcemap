@@ -7,9 +7,10 @@ mod builder;
 pub use builder::QueryEngineBuilder;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use claude_api::client::ApiClient;
-use claude_api::types::{CacheControl, ToolDefinition};
+use claude_api::types::{CacheControl, ThinkingConfig, ToolDefinition};
 use claude_core::message::{ContentBlock, Message, UserMessage};
 use claude_core::tool::{AbortSignal, ToolContext};
 use claude_tools::ToolRegistry;
@@ -22,6 +23,18 @@ use crate::cost::CostTracker;
 use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::query::{query_stream, AgentEvent, QueryConfig};
+
+/// Runtime thinking override state.
+/// Uses a dedicated enum to avoid clippy::option_option.
+#[derive(Debug, Clone)]
+enum ThinkingOverride {
+    /// No override — use default config.
+    UseDefault,
+    /// Override: disable thinking.
+    Disabled,
+    /// Override: enable with this config.
+    Enabled(ThinkingConfig),
+}
 use crate::state::SharedState;
 use claude_core::permissions::PermissionMode;
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
@@ -57,6 +70,10 @@ pub struct QueryEngine {
     auto_compact: Arc<tokio::sync::Mutex<AutoCompactState>>,
     /// Model context window size (for auto-compact threshold calculation).
     context_window: u64,
+    /// If true, the next API request should skip prompt caching.
+    break_cache_next: AtomicBool,
+    /// Runtime-mutable thinking config (toggled via /think command).
+    thinking_override: std::sync::Mutex<ThinkingOverride>,
 }
 
 impl QueryEngine {
@@ -245,7 +262,7 @@ impl QueryEngine {
             max_turns: self.config.max_turns,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            thinking: self.config.thinking.clone(),
+            thinking: self.thinking_config(),
             token_budget: self.config.token_budget,
             context_window: self.context_window,
             auto_compact_state: Some(Arc::clone(&self.auto_compact)),
@@ -649,6 +666,38 @@ impl QueryEngine {
         // note that context was reloaded.
         s.context_reloaded = true;
         s.claude_md_content = claude_md.to_string();
+    }
+
+    /// Get the current thinking configuration.
+    pub fn thinking_config(&self) -> Option<ThinkingConfig> {
+        if let Ok(guard) = self.thinking_override.lock() {
+            match &*guard {
+                ThinkingOverride::UseDefault => {}
+                ThinkingOverride::Disabled => return None,
+                ThinkingOverride::Enabled(cfg) => return Some(cfg.clone()),
+            }
+        }
+        self.config.thinking.clone()
+    }
+
+    /// Set the thinking configuration at runtime (/think command).
+    pub fn set_thinking(&self, config: Option<ThinkingConfig>) {
+        if let Ok(mut guard) = self.thinking_override.lock() {
+            *guard = match config {
+                None => ThinkingOverride::Disabled,
+                Some(cfg) => ThinkingOverride::Enabled(cfg),
+            };
+        }
+    }
+
+    /// Check if prompt cache breaking is requested for the next turn, and clear the flag.
+    pub fn take_break_cache(&self) -> bool {
+        self.break_cache_next.swap(false, Ordering::SeqCst)
+    }
+
+    /// Request that the next API call skips prompt caching.
+    pub fn set_break_cache(&self) {
+        self.break_cache_next.store(true, Ordering::SeqCst);
     }
 }
 

@@ -244,6 +244,9 @@ impl OutputRenderer {
                 let enabled = tools.iter().filter(|t| t.enabled).count();
                 eprintln!("\x1b[2m[{} tools ({} enabled)]\x1b[0m", tools.len(), enabled);
             }
+            AgentNotification::ThinkingChanged { .. } | AgentNotification::CacheBreakSet => {
+                // Handled in REPL command dispatch, not here
+            }
         }
         false
     }
