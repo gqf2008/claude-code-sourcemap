@@ -31,8 +31,8 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
             }
         }
         "load" | "resume" => {
-            let id = parts.get(1).copied().unwrap_or("").trim();
-            if id.is_empty() {
+            let query = parts.get(1).copied().unwrap_or("").trim();
+            if query.is_empty() {
                 // Auto-resume latest session
                 let sessions = claude_core::session::list_sessions();
                 if sessions.is_empty() {
@@ -48,11 +48,27 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
                     Err(e) => eprintln!("{}Failed to resume: {}\x1b[0m", theme::c_err(), e),
                 }
             } else {
-                // Find session by prefix match
                 let sessions = claude_core::session::list_sessions();
-                let found = sessions.iter().find(|s| s.id.starts_with(id));
-                match found {
-                    Some(meta) => {
+                // 1. Try exact ID prefix match first
+                if let Some(meta) = sessions.iter().find(|s| s.id.starts_with(query)) {
+                    match engine.restore_session(&meta.id).await {
+                        Ok(title) => {
+                            println!("{}✓ Resumed session: {}\x1b[0m", theme::c_ok(), title);
+                            println!("  ({} messages restored)", meta.message_count);
+                        }
+                        Err(e) => eprintln!("{}Failed to resume: {}\x1b[0m", theme::c_err(), e),
+                    }
+                    return;
+                }
+                // 2. Fuzzy substring match on title, custom_title, summary, last_prompt
+                let matches: Vec<_> = sessions.iter().filter(|s| {
+                    session_matches_query(s, query)
+                }).collect();
+
+                match matches.len() {
+                    0 => println!("No session found matching '{}'. Use /session list.", query),
+                    1 => {
+                        let meta = matches[0];
                         match engine.restore_session(&meta.id).await {
                             Ok(title) => {
                                 println!("{}✓ Resumed session: {}\x1b[0m", theme::c_ok(), title);
@@ -61,7 +77,17 @@ pub(crate) async fn handle_session_command(sub: &str, engine: &QueryEngine) {
                             Err(e) => eprintln!("{}Failed to resume: {}\x1b[0m", theme::c_err(), e),
                         }
                     }
-                    None => println!("No session found matching '{}'. Use /session list.", id),
+                    n => {
+                        println!("Found {} sessions matching '{}':", n, query);
+                        for s in &matches {
+                            let age = claude_core::session::format_age(&s.updated_at);
+                            println!(
+                                "  \x1b[36m{:.8}\x1b[0m  {:<50} ({} msgs, {})",
+                                s.id, s.title, s.message_count, age,
+                            );
+                        }
+                        println!("\nUse /session load <id> with a more specific prefix.");
+                    }
                 }
             }
         }
@@ -415,6 +441,15 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Fuzzy match a query against session metadata (case-insensitive substring).
+fn session_matches_query(meta: &claude_core::session::SessionMeta, query: &str) -> bool {
+    let q = query.to_lowercase();
+    meta.title.to_lowercase().contains(&q)
+        || meta.custom_title.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        || meta.summary.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        || meta.last_prompt.as_deref().unwrap_or("").to_lowercase().contains(&q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,5 +478,57 @@ mod tests {
     #[test]
     fn test_truncate_preview_whitespace_trim() {
         assert_eq!(truncate_preview("  hello  ", 10), "hello");
+    }
+
+    fn make_meta(title: &str, custom_title: Option<&str>, summary: Option<&str>, last_prompt: Option<&str>) -> claude_core::session::SessionMeta {
+        claude_core::session::SessionMeta {
+            id: "test-id-123".into(),
+            title: title.into(),
+            model: "claude-sonnet".into(),
+            cwd: "/tmp".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            turn_count: 5,
+            message_count: 10,
+            total_cost_usd: 0.01,
+            git_branch: None,
+            custom_title: custom_title.map(|s| s.into()),
+            summary: summary.map(|s| s.into()),
+            last_prompt: last_prompt.map(|s| s.into()),
+        }
+    }
+
+    #[test]
+    fn test_session_fuzzy_match_title() {
+        let meta = make_meta("Fix authentication bug", None, None, None);
+        assert!(session_matches_query(&meta, "auth"));
+        assert!(session_matches_query(&meta, "AUTH")); // case-insensitive
+        assert!(!session_matches_query(&meta, "deploy"));
+    }
+
+    #[test]
+    fn test_session_fuzzy_match_custom_title() {
+        let meta = make_meta("Some title", Some("My deploy script"), None, None);
+        assert!(session_matches_query(&meta, "deploy"));
+        assert!(!session_matches_query(&meta, "migration"));
+    }
+
+    #[test]
+    fn test_session_fuzzy_match_summary() {
+        let meta = make_meta("Title", None, Some("Implemented database migration"), None);
+        assert!(session_matches_query(&meta, "migration"));
+    }
+
+    #[test]
+    fn test_session_fuzzy_match_last_prompt() {
+        let meta = make_meta("Title", None, None, Some("add unit tests for parser"));
+        assert!(session_matches_query(&meta, "parser"));
+        assert!(session_matches_query(&meta, "unit test"));
+    }
+
+    #[test]
+    fn test_session_fuzzy_no_match() {
+        let meta = make_meta("Title", None, None, None);
+        assert!(!session_matches_query(&meta, "nonexistent"));
     }
 }

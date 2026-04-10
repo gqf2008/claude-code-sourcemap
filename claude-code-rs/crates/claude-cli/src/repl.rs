@@ -433,6 +433,31 @@ pub async fn run(
                                     println!("{}✓ Next request will skip prompt cache\x1b[0m", theme::c_ok());
                                 }
                             }
+                            CommandResult::Rewind { turns } => {
+                                let n: usize = if turns.is_empty() {
+                                    1
+                                } else {
+                                    match turns.parse() {
+                                        Ok(v) if v > 0 => v,
+                                        _ => {
+                                            println!("Usage: /rewind [N]  (N = number of turns to rewind, default 1)");
+                                            continue;
+                                        }
+                                    }
+                                };
+                                let (removed, remaining) = engine.rewind_turns(n).await;
+                                if removed == 0 {
+                                    println!("Nothing to rewind.");
+                                } else {
+                                    println!(
+                                        "{}✓ Rewound {} turn{} ({} messages remaining)\x1b[0m",
+                                        theme::c_ok(),
+                                        removed,
+                                        if removed == 1 { "" } else { "s" },
+                                        remaining,
+                                    );
+                                }
+                            }
                         }
                     }
                     continue;

@@ -701,6 +701,47 @@ impl QueryEngine {
     pub fn set_break_cache(&self) {
         self.break_cache_next.store(true, Ordering::SeqCst);
     }
+
+    /// Rewind the conversation by removing the last `n` turns (user+assistant pairs).
+    ///
+    /// Returns the number of turns actually removed and remaining message count.
+    pub async fn rewind_turns(&self, n: usize) -> (usize, usize) {
+        let mut s = self.state.write().await;
+        let mut removed = 0;
+
+        while removed < n && !s.messages.is_empty() {
+            // Remove trailing assistant messages (and tool_result messages between them)
+            let mut found_assistant = false;
+            while let Some(last) = s.messages.last() {
+                if matches!(last, Message::Assistant(_)) {
+                    s.messages.pop();
+                    found_assistant = true;
+                    break;
+                }
+                // Remove tool_result / system messages trailing after the pair
+                if found_assistant {
+                    break;
+                }
+                s.messages.pop();
+            }
+            // Remove the preceding user message
+            if found_assistant {
+                if let Some(last) = s.messages.last() {
+                    if matches!(last, Message::User(_)) {
+                        s.messages.pop();
+                    }
+                }
+                if s.turn_count > 0 {
+                    s.turn_count -= 1;
+                }
+                removed += 1;
+            } else {
+                break; // no more assistant messages to remove
+            }
+        }
+
+        (removed, s.messages.len())
+    }
 }
 
 #[cfg(test)]

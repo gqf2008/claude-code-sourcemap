@@ -47,6 +47,8 @@ pub enum SlashCommand {
     Think { args: String },
     /// Force next request to skip prompt cache.
     BreakCache,
+    /// Rewind conversation by N turns.
+    Rewind { turns: String },
     Exit,
     Unknown(String),
 }
@@ -100,6 +102,7 @@ impl SlashCommand {
             "plan" => Self::Plan { args },
             "think" | "thinking" => Self::Think { args },
             "break-cache" | "breakcache" => Self::BreakCache,
+            "rewind" => Self::Rewind { turns: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -207,6 +210,7 @@ impl SlashCommand {
             Self::Plan { args } => CommandResult::Plan { args: args.clone() },
             Self::Think { args } => CommandResult::Think { args: args.clone() },
             Self::BreakCache => CommandResult::BreakCache,
+            Self::Rewind { turns } => CommandResult::Rewind { turns: turns.clone() },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -260,6 +264,8 @@ pub enum CommandResult {
     Think { args: String },
     /// Force next request to skip prompt cache (/break-cache).
     BreakCache,
+    /// Rewind conversation by N turns (/rewind [N]).
+    Rewind { turns: String },
     Exit,
 }
 
@@ -294,6 +300,7 @@ const HELP_TEXT_BASE: &str = "\
   /clear             Clear conversation history
   /compact [instr]   Compact conversation to free tokens
   /undo              Undo last assistant turn
+  /rewind [N]        Rewind by N turns (default 1)
   /search <query>    Search conversation history
   /history [page]    Browse conversation turns
   /retry             Retry the last failed prompt (alias: /redo)
@@ -329,7 +336,7 @@ const HELP_TEXT_BASE: &str = "\
 \x1b[1mSession & Memory\x1b[0m
   /session save      Save current session
   /session list      List saved sessions
-  /session load <id> Resume a saved session
+  /session load <q>  Resume session (ID prefix or keyword search)
   /session delete <id> Delete a saved session
   /export [format]   Export session (markdown or json)
   /memory list       List memory files
@@ -1120,6 +1127,7 @@ mod tests {
         assert!(text.contains("/login"));
         assert!(text.contains("/logout"));
         assert!(text.contains("/undo"));
+        assert!(text.contains("/rewind"));
         assert!(text.contains("/init"));
         assert!(text.contains("/agents"));
         assert!(text.contains("/mcp"));
@@ -1149,6 +1157,28 @@ mod tests {
         match SlashCommand::parse("/history abc", &s) {
             Some(SlashCommand::History { page }) => assert_eq!(page, 1),
             _ => panic!("expected History with default page"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rewind() {
+        let s = no_skills();
+        match SlashCommand::parse("/rewind", &s) {
+            Some(SlashCommand::Rewind { turns }) => assert!(turns.is_empty()),
+            _ => panic!("expected Rewind"),
+        }
+        match SlashCommand::parse("/rewind 3", &s) {
+            Some(SlashCommand::Rewind { turns }) => assert_eq!(turns, "3"),
+            _ => panic!("expected Rewind with arg"),
+        }
+    }
+
+    #[test]
+    fn test_execute_rewind() {
+        let cmd = SlashCommand::parse("/rewind 5", &no_skills()).unwrap();
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Rewind { turns } => assert_eq!(turns, "5"),
+            _ => panic!("expected Rewind result"),
         }
     }
 }
