@@ -130,7 +130,7 @@ fn test_engine_abort_signal() {
 fn test_tool_definitions_non_empty() {
     let engine = build_test_engine();
 
-    let defs = engine.tool_definitions();
+    let defs = engine.tool_definitions(PermissionMode::Default);
     assert!(!defs.is_empty(), "should have tool definitions");
 }
 
@@ -138,7 +138,7 @@ fn test_tool_definitions_non_empty() {
 fn test_tool_definitions_last_has_cache_control() {
     let engine = build_test_engine();
 
-    let defs = engine.tool_definitions();
+    let defs = engine.tool_definitions(PermissionMode::Default);
     let last = defs.last().unwrap();
     assert!(last.cache_control.is_some(), "last tool def should have cache_control");
 }
@@ -151,7 +151,7 @@ fn test_tool_definitions_filtered_by_allowed_tools() {
         .allowed_tools(vec!["Read".into(), "Write".into()])
         .build();
 
-    let defs = engine.tool_definitions();
+    let defs = engine.tool_definitions(PermissionMode::Default);
     assert!(defs.len() <= 3, "should only have allowed tools + DispatchAgent");
     for def in &defs {
         // DispatchAgent is always registered; Read/Write are the only allowed user tools

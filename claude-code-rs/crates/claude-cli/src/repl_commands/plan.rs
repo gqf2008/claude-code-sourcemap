@@ -5,10 +5,13 @@ use std::path::{Path, PathBuf};
 use claude_agent::engine::QueryEngine;
 use claude_core::permissions::PermissionMode;
 
+use crate::theme;
+
 /// Handle `/plan [args]`.
 ///
 /// - No args: toggle plan mode (enter/exit).
 /// - `open`: open plan file in `$EDITOR`.
+/// - `show`/`view`: display current plan.
 /// - Other text: enable plan mode with that description as initial plan.
 pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &Path) {
     let args = args.trim();
@@ -24,18 +27,18 @@ pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &
         if in_plan_mode {
             {
                 let mut state = engine.state().write().await;
-                state.permission_mode = PermissionMode::Default;
+                state.exit_plan_mode();
             }
-            println!("\x1b[36m📋 Plan mode disabled\x1b[0m");
-            println!("\x1b[2m  Switched back to default permission mode.\x1b[0m");
+            println!("{}📋 Plan mode disabled{}", theme::c_tool(), theme::RESET);
+            println!("{}  Switched back to previous permission mode.{}", theme::DIM, theme::RESET);
         } else {
             {
                 let mut state = engine.state().write().await;
-                state.permission_mode = PermissionMode::Plan;
+                state.enter_plan_mode();
             }
-            println!("\x1b[36m📋 Plan mode enabled\x1b[0m");
-            println!("\x1b[2m  Tools restricted to read-only. Describe your goal and the AI will create a plan.\x1b[0m");
-            println!("\x1b[2m  Use /plan again to exit plan mode.\x1b[0m");
+            println!("{}📋 Plan mode enabled{}", theme::c_tool(), theme::RESET);
+            println!("{}  Tools restricted to read-only. Describe your goal and the AI will create a plan.{}", theme::DIM, theme::RESET);
+            println!("{}  Use /plan again to exit plan mode.{}", theme::DIM, theme::RESET);
         }
         return;
     }
@@ -56,17 +59,17 @@ pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &
                 if cfg!(windows) { "notepad".to_string() } else { "vi".to_string() }
             });
 
-        println!("\x1b[2mOpening {} in {}...\x1b[0m", plan_path.display(), editor);
+        println!("{}Opening {} in {}...{}", theme::DIM, plan_path.display(), editor, theme::RESET);
         match std::process::Command::new(&editor).arg(&plan_path).status() {
             Ok(status) if status.success() => {
-                println!("\x1b[32m✓ Plan file saved: {}\x1b[0m", plan_path.display());
+                println!("{}✓ Plan file saved: {}{}", theme::c_ok(), plan_path.display(), theme::RESET);
             }
             Ok(status) => {
-                eprintln!("\x1b[31mEditor exited with: {}\x1b[0m", status);
+                eprintln!("{}Editor exited with: {}{}", theme::c_err(), status, theme::RESET);
             }
             Err(e) => {
-                eprintln!("\x1b[31mFailed to open editor '{}': {}\x1b[0m", editor, e);
-                eprintln!("\x1b[2m  Set $EDITOR to your preferred editor.\x1b[0m");
+                eprintln!("{}Failed to open editor '{}': {}{}", theme::c_err(), editor, e, theme::RESET);
+                eprintln!("{}  Set $EDITOR to your preferred editor.{}", theme::DIM, theme::RESET);
             }
         }
         return;
@@ -77,17 +80,17 @@ pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &
         if plan_path.exists() {
             match std::fs::read_to_string(&plan_path) {
                 Ok(content) => {
-                    println!("\x1b[1mCurrent Plan\x1b[0m");
-                    println!("\x1b[2m{}\x1b[0m", plan_path.display());
+                    println!("{}Current Plan{}", theme::BOLD, theme::RESET);
+                    println!("{}{}{}", theme::DIM, plan_path.display(), theme::RESET);
                     println!();
                     println!("{}", content);
                 }
                 Err(e) => {
-                    eprintln!("\x1b[31mFailed to read plan: {}\x1b[0m", e);
+                    eprintln!("{}Failed to read plan: {}{}", theme::c_err(), e, theme::RESET);
                 }
             }
         } else {
-            println!("\x1b[2mNo plan file found. Use /plan open to create one.\x1b[0m");
+            println!("{}No plan file found. Use /plan open to create one.{}", theme::DIM, theme::RESET);
         }
         return;
     }
@@ -95,7 +98,7 @@ pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &
     // Any other text: enable plan mode with description
     if !in_plan_mode {
         let mut state = engine.state().write().await;
-        state.permission_mode = PermissionMode::Plan;
+        state.enter_plan_mode();
     }
 
     let plan_path = get_plan_path(cwd);
@@ -104,9 +107,9 @@ pub(crate) async fn handle_plan_command(args: &str, engine: &QueryEngine, cwd: &
     }
     let content = format!("# Plan\n\n{}\n", args);
     let _ = std::fs::write(&plan_path, &content);
-    println!("\x1b[36m📋 Plan mode enabled\x1b[0m");
-    println!("\x1b[2m  Plan: {}\x1b[0m", args);
-    println!("\x1b[2m  Saved to: {}\x1b[0m", plan_path.display());
+    println!("{}📋 Plan mode enabled{}", theme::c_tool(), theme::RESET);
+    println!("{}  Plan: {}{}", theme::DIM, args, theme::RESET);
+    println!("{}  Saved to: {}{}", theme::DIM, plan_path.display(), theme::RESET);
 }
 
 /// Get the plan file path for the current project.

@@ -19,6 +19,8 @@ pub struct ModelUsage {
 pub struct AppState {
     pub model: String,
     pub permission_mode: PermissionMode,
+    /// Stashed mode before entering plan mode, restored on exit.
+    pub pre_plan_mode: Option<PermissionMode>,
     pub verbose: bool,
     pub messages: Vec<Message>,
     pub total_input_tokens: u64,
@@ -104,6 +106,22 @@ impl AppState {
     pub fn record_line_changes(&mut self, added: u64, removed: u64) {
         self.total_lines_added += added;
         self.total_lines_removed += removed;
+    }
+
+    /// Enter plan mode, stashing the current mode for later restoration.
+    pub fn enter_plan_mode(&mut self) {
+        if self.permission_mode != PermissionMode::Plan {
+            self.pre_plan_mode = Some(self.permission_mode);
+            self.permission_mode = PermissionMode::Plan;
+        }
+    }
+
+    /// Exit plan mode, restoring the previously stashed mode.
+    /// Returns the restored mode.
+    pub fn exit_plan_mode(&mut self) -> PermissionMode {
+        let restore = self.pre_plan_mode.take().unwrap_or(PermissionMode::Default);
+        self.permission_mode = restore;
+        restore
     }
 
     /// Create a SessionSnapshot from the current state.
@@ -196,6 +214,7 @@ impl Default for AppState {
         Self {
             model: "claude-sonnet-4-20250514".to_string(),
             permission_mode: PermissionMode::Default,
+            pre_plan_mode: None,
             verbose: false,
             messages: Vec::new(),
             total_input_tokens: 0,
@@ -392,5 +411,63 @@ mod tests {
     fn test_last_user_prompt_empty() {
         let state = AppState::default();
         assert!(state.last_user_prompt().is_none());
+    }
+
+    // ── Plan mode transitions ───────────────────────────────────────────
+
+    #[test]
+    fn test_enter_plan_mode_from_default() {
+        let mut state = AppState::default();
+        assert_eq!(state.permission_mode, PermissionMode::Default);
+        state.enter_plan_mode();
+        assert_eq!(state.permission_mode, PermissionMode::Plan);
+        assert_eq!(state.pre_plan_mode, Some(PermissionMode::Default));
+    }
+
+    #[test]
+    fn test_enter_plan_mode_from_auto() {
+        let mut state = AppState::default();
+        state.permission_mode = PermissionMode::Auto;
+        state.enter_plan_mode();
+        assert_eq!(state.permission_mode, PermissionMode::Plan);
+        assert_eq!(state.pre_plan_mode, Some(PermissionMode::Auto));
+    }
+
+    #[test]
+    fn test_enter_plan_mode_idempotent() {
+        let mut state = AppState::default();
+        state.enter_plan_mode();
+        // Entering again while already in plan mode should not overwrite pre_plan_mode
+        state.enter_plan_mode();
+        assert_eq!(state.permission_mode, PermissionMode::Plan);
+        assert_eq!(state.pre_plan_mode, Some(PermissionMode::Default));
+    }
+
+    #[test]
+    fn test_exit_plan_mode_restores_default() {
+        let mut state = AppState::default();
+        state.enter_plan_mode();
+        let restored = state.exit_plan_mode();
+        assert_eq!(restored, PermissionMode::Default);
+        assert_eq!(state.permission_mode, PermissionMode::Default);
+        assert_eq!(state.pre_plan_mode, None);
+    }
+
+    #[test]
+    fn test_exit_plan_mode_restores_auto() {
+        let mut state = AppState::default();
+        state.permission_mode = PermissionMode::Auto;
+        state.enter_plan_mode();
+        let restored = state.exit_plan_mode();
+        assert_eq!(restored, PermissionMode::Auto);
+        assert_eq!(state.permission_mode, PermissionMode::Auto);
+    }
+
+    #[test]
+    fn test_exit_plan_mode_without_enter() {
+        let mut state = AppState::default();
+        // Exit without enter should fall back to Default
+        let restored = state.exit_plan_mode();
+        assert_eq!(restored, PermissionMode::Default);
     }
 }

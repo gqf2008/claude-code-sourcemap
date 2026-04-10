@@ -158,7 +158,18 @@ pub fn query_stream_with_injection(
             }
 
             let api_messages = messages_to_api(&messages);
-            let system = build_system_blocks(&config.system_prompt);
+            // Inject plan mode context into system prompt when active
+            let effective_system = if tool_context.permission_mode == claude_core::permissions::PermissionMode::Plan {
+                format!(
+                    "{}\n\n<plan_mode>\nYou are currently in PLAN MODE. Only read-only tools are available.\n\
+                     Focus on exploration and planning. When your plan is ready, call ExitPlanMode with the plan.\n\
+                     Do NOT attempt to use file write, edit, or shell tools — they will be rejected.\n</plan_mode>",
+                    config.system_prompt
+                )
+            } else {
+                config.system_prompt.clone()
+            };
+            let system = build_system_blocks(&effective_system);
 
             let request = MessagesRequest {
                 model: { state.read().await.model.clone() },
@@ -460,6 +471,9 @@ pub fn query_stream_with_injection(
             let actual_stop = stop_reason.unwrap_or(StopReason::EndTurn);
             match actual_stop {
                 StopReason::ToolUse if !tool_uses.is_empty() => {
+                    // Capture tool names for plan mode transitions before execution
+                    let called_tool_names: Vec<String> = tool_uses.iter().map(|(_, name, _)| name.clone()).collect();
+
                     // Snapshot messages into tool_context so tools like ContextTool can inspect them
                     tool_context.messages = messages.clone();
                     let results: Vec<ContentBlock> = executor.execute_many(tool_uses, &tool_context).await;
@@ -468,7 +482,9 @@ pub fn query_stream_with_injection(
                         content: results.clone(),
                     };
                     messages.push(Message::User(tool_result_msg));
-                    for result in &results {
+
+                    // Check for plan mode transitions from successful tool results
+                    for (idx, result) in results.iter().enumerate() {
                         if let ContentBlock::ToolResult { tool_use_id, is_error, content } = result {
                             let result_text = content.first().and_then(|c| {
                                 if let claude_core::message::ToolResultContent::Text { text } = c {
@@ -477,6 +493,24 @@ pub fn query_stream_with_injection(
                                     None
                                 }
                             });
+
+                            // Apply plan mode transitions on successful tool calls
+                            if !is_error {
+                                if let Some(name) = called_tool_names.get(idx) {
+                                    if name == "EnterPlanMode" {
+                                        let mut s = state.write().await;
+                                        s.enter_plan_mode();
+                                        tool_context.permission_mode = claude_core::permissions::PermissionMode::Plan;
+                                        info!("Plan mode activated via EnterPlanMode tool");
+                                    } else if name == "ExitPlanMode" {
+                                        let mut s = state.write().await;
+                                        let restored = s.exit_plan_mode();
+                                        tool_context.permission_mode = restored;
+                                        info!("Plan mode deactivated via ExitPlanMode tool, restored to {:?}", restored);
+                                    }
+                                }
+                            }
+
                             yield AgentEvent::ToolResult { id: tool_use_id.clone(), is_error: *is_error, text: result_text };
                         }
                     }

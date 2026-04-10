@@ -23,6 +23,7 @@ use crate::executor::ToolExecutor;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry};
 use crate::query::{query_stream, AgentEvent, QueryConfig};
 use crate::state::SharedState;
+use claude_core::permissions::PermissionMode;
 use crate::task_runner::{run_task, TaskProgress, TaskResult};
 
 pub struct QueryEngine {
@@ -66,7 +67,7 @@ impl QueryEngine {
         QueryEngineBuilder::new(api_key, cwd)
     }
 
-    fn tool_definitions(&self) -> Vec<ToolDefinition> {
+    fn tool_definitions(&self, permission_mode: PermissionMode) -> Vec<ToolDefinition> {
         let mut defs: Vec<ToolDefinition> = self.registry
             .all()
             .iter()
@@ -74,6 +75,14 @@ impl QueryEngine {
             .filter(|t| {
                 self.allowed_tools.is_empty()
                     || self.allowed_tools.iter().any(|a| a.eq_ignore_ascii_case(t.name()))
+            })
+            // In plan mode, only expose read-only tools to the model
+            .filter(|t| {
+                if permission_mode == PermissionMode::Plan {
+                    claude_tools::plan_mode::is_plan_mode_tool(t.name()) || t.is_read_only()
+                } else {
+                    true
+                }
             })
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
@@ -134,7 +143,7 @@ impl QueryEngine {
         };
         messages.push(Message::User(user_msg));
 
-        let tools = self.tool_definitions();
+        let tools = self.tool_definitions(permission_mode);
         let tool_context = ToolContext {
             cwd: self.cwd.clone(),
             abort_signal: self.abort_signal.clone(),
@@ -205,7 +214,7 @@ impl QueryEngine {
         };
         messages.push(Message::User(user_msg));
 
-        let tools = self.tool_definitions();
+        let tools = self.tool_definitions(permission_mode);
         let tool_context = ToolContext {
             cwd: self.cwd.clone(),
             abort_signal: self.abort_signal.clone(),
