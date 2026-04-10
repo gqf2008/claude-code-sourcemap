@@ -820,13 +820,28 @@ pub async fn run(
 
                 let model = { engine.state().read().await.model.clone() };
 
-                // Extract @image.png references from input
-                let (text, inline_images) = claude_core::image::extract_image_refs(input);
+                // Extract @image.png references and @https://url references from input
+                let (text, inline_images, url_refs) = claude_core::image::extract_image_refs(input);
 
-                // Merge pending images (from /image command) with inline @references
+                // Fetch URL-referenced images asynchronously
+                let mut url_images: Vec<claude_core::message::ContentBlock> = Vec::new();
+                for url in &url_refs {
+                    match fetch_image_url(url).await {
+                        Ok(block) => {
+                            println!("\x1b[2m📎 Fetched image: {url}\x1b[0m");
+                            url_images.push(block);
+                        }
+                        Err(e) => {
+                            eprintln!("{}Failed to fetch image {url}: {e}\x1b[0m", theme::c_warn());
+                        }
+                    }
+                }
+
+                // Merge pending images (from /image command) with inline @references and URL images
                 let all_images: Vec<claude_core::message::ContentBlock> = {
                     let mut combined = std::mem::take(&mut pending_images);
                     combined.extend(inline_images);
+                    combined.extend(url_images);
                     combined
                 };
 
@@ -1174,6 +1189,75 @@ async fn handle_stats_command(engine: &QueryEngine, session_start: std::time::In
             }
         }
     }
+}
+
+/// Fetch an image from a URL and return a `ContentBlock::Image`.
+///
+/// Validates: content-type is a supported image type, file size ≤ 20 MB.
+async fn fetch_image_url(url: &str) -> anyhow::Result<claude_core::message::ContentBlock> {
+    use anyhow::Context as _;
+    use base64::Engine as _;
+
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("claude-code-rs/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let response = client.get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch image from {url}"))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} fetching {url}", response.status());
+    }
+
+    // Check content-type header
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let media_type = if content_type.contains("png") {
+        "image/png"
+    } else if content_type.contains("jpeg") || content_type.contains("jpg") {
+        "image/jpeg"
+    } else if content_type.contains("gif") {
+        "image/gif"
+    } else if content_type.contains("webp") {
+        "image/webp"
+    } else {
+        // Fall back to extension in URL
+        let path = std::path::Path::new(url);
+        match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+            Some("png") => "image/png",
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            _ => anyhow::bail!(
+                "Cannot determine image type from URL or Content-Type: {url} ({content_type})"
+            ),
+        }
+    };
+
+    // Read body with size limit
+    let bytes = response.bytes().await
+        .with_context(|| format!("Failed to read image body from {url}"))?;
+
+    if bytes.len() > 20 * 1024 * 1024 {
+        anyhow::bail!("Image from {url} is too large ({} bytes, max 20 MB)", bytes.len());
+    }
+
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    Ok(claude_core::message::ContentBlock::Image {
+        source: claude_core::message::ImageSource {
+            media_type: media_type.to_string(),
+            data,
+        },
+    })
 }
 
 #[cfg(test)]

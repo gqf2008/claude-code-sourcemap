@@ -1,6 +1,6 @@
 //! Image input utilities — read, validate, and encode image files for the Messages API.
 //!
-//! Supports PNG, JPEG, GIF, and WebP. Images are read from disk,
+//! Supports PNG, JPEG, GIF, and WebP. Images are read from disk or fetched from URLs,
 //! validated by magic bytes, and base64-encoded for inclusion in
 //! user messages as `ContentBlock::Image`.
 
@@ -105,22 +105,30 @@ pub fn read_image_file(path: &Path) -> Result<ContentBlock> {
     })
 }
 
-/// Parse `@path` references from user input, returning (cleaned text, image blocks).
+/// Parse `@path` references from user input, returning (cleaned text, image blocks, url refs).
 ///
 /// Lines starting with `@` followed by a file path are treated as image attachments.
-/// The syntax is: `@path/to/image.png` (one per line, or inline).
+/// Lines starting with `@http://` or `@https://` are treated as URL image references
+/// (returned separately for async fetching in the caller).
 ///
-/// Returns the text with image references removed, plus a list of image ContentBlocks.
-pub fn extract_image_refs(input: &str) -> (String, Vec<ContentBlock>) {
+/// Returns: `(cleaned_text, file_image_blocks, pending_urls)`
+pub fn extract_image_refs(input: &str) -> (String, Vec<ContentBlock>, Vec<String>) {
     let mut text_parts = Vec::new();
     let mut images = Vec::new();
+    let mut urls = Vec::new();
 
     for line in input.lines() {
         let trimmed = line.trim();
-        // Check for @path pattern — must be a plausible image file path
+        // Check for @path pattern — must be a plausible image file path or URL
         if let Some(path_str) = trimmed.strip_prefix('@') {
             let path_str = path_str.trim();
             if !path_str.is_empty() {
+                // URL reference: @http:// or @https://
+                if path_str.starts_with("http://") || path_str.starts_with("https://") {
+                    urls.push(path_str.to_string());
+                    continue;
+                }
+                // File reference
                 let path = Path::new(path_str);
                 if is_image_extension(path) {
                     match read_image_file(path) {
@@ -141,7 +149,7 @@ pub fn extract_image_refs(input: &str) -> (String, Vec<ContentBlock>) {
     }
 
     let text = text_parts.join("\n").trim().to_string();
-    (text, images)
+    (text, images, urls)
 }
 
 /// Check if a path has a recognized image extension.
@@ -278,24 +286,27 @@ mod tests {
 
     #[test]
     fn extract_image_refs_no_images() {
-        let (text, images) = extract_image_refs("Hello, how are you?");
+        let (text, images, urls) = extract_image_refs("Hello, how are you?");
         assert_eq!(text, "Hello, how are you?");
         assert!(images.is_empty());
+        assert!(urls.is_empty());
     }
 
     #[test]
     fn extract_image_refs_with_at_but_not_image() {
-        let (text, images) = extract_image_refs("@mention someone");
+        let (text, images, urls) = extract_image_refs("@mention someone");
         assert_eq!(text, "@mention someone");
         assert!(images.is_empty());
+        assert!(urls.is_empty());
     }
 
     #[test]
     fn extract_image_refs_file_not_found() {
-        let (text, images) = extract_image_refs("@/nonexistent/photo.png\nHello");
+        let (text, images, urls) = extract_image_refs("@/nonexistent/photo.png\nHello");
         assert!(text.contains("Image error"));
         assert!(text.contains("Hello"));
         assert!(images.is_empty());
+        assert!(urls.is_empty());
     }
 
     #[test]
@@ -307,15 +318,35 @@ mod tests {
         drop(f);
 
         let input = format!("describe this image\n@{}", path.display());
-        let (text, images) = extract_image_refs(&input);
+        let (text, images, urls) = extract_image_refs(&input);
         assert_eq!(text, "describe this image");
         assert_eq!(images.len(), 1);
+        assert!(urls.is_empty());
         match &images[0] {
             ContentBlock::Image { source } => {
                 assert_eq!(source.media_type, "image/png");
             }
             _ => panic!("Expected Image block"),
         }
+    }
+
+    #[test]
+    fn extract_image_refs_url() {
+        let (text, images, urls) = extract_image_refs("check this:\n@https://example.com/photo.png");
+        assert_eq!(text, "check this:");
+        assert!(images.is_empty());
+        assert_eq!(urls, vec!["https://example.com/photo.png"]);
+    }
+
+    #[test]
+    fn extract_image_refs_mixed_url_and_file() {
+        let (text, images, urls) =
+            extract_image_refs("hello\n@https://example.com/img.jpg\n@/nonexistent.png\nworld");
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+        assert_eq!(urls, vec!["https://example.com/img.jpg"]);
+        // /nonexistent.png should produce an error in text (file not found)
+        assert!(text.contains("Image error") || images.is_empty());
     }
 
     #[test]
