@@ -190,7 +190,35 @@ impl Highlighter for CommandCompleter {
         true
     }
 }
-impl Validator for CommandCompleter {}
+impl Validator for CommandCompleter {
+    fn validate(
+        &self,
+        ctx: &mut rustyline::validate::ValidationContext,
+    ) -> rustyline::Result<rustyline::validate::ValidationResult> {
+        let input = ctx.input();
+        // Slash commands are always single-line — submit immediately
+        if input.starts_with('/') {
+            return Ok(rustyline::validate::ValidationResult::Valid(None));
+        }
+        // Triple-backtick code block: incomplete until closing ```
+        let trimmed = input.trim_start();
+        if let Some(after_open) = trimmed.strip_prefix("```") {
+            // Check if there's a closing ``` on a separate line
+            if !after_open.contains("\n```") {
+                return Ok(rustyline::validate::ValidationResult::Incomplete);
+            }
+        }
+        // Trailing backslash = explicit continuation
+        if input.ends_with('\\') {
+            return Ok(rustyline::validate::ValidationResult::Incomplete);
+        }
+        // Unmatched brackets = auto-continuation
+        if count_bracket_depth(input) > 0 {
+            return Ok(rustyline::validate::ValidationResult::Incomplete);
+        }
+        Ok(rustyline::validate::ValidationResult::Valid(None))
+    }
+}
 impl Helper for CommandCompleter {}
 
 /// Snapshot of config file modification times for auto-reload detection.
@@ -240,7 +268,10 @@ pub async fn run(
         println!("\x1b[33mSkills loaded: {}\x1b[0m\n", names.join(", "));
     }
 
-    let mut rl = Editor::new()?;
+    let config = rustyline::Config::builder()
+        .bracketed_paste(true)
+        .build();
+    let mut rl = Editor::with_config(config)?;
     rl.set_helper(Some(CommandCompleter));
 
     // Load persistent history
@@ -519,55 +550,12 @@ pub async fn run(
                     continue;
                 }
 
-                // Non-slash input: support multiline
-                // 1. Trailing `\` continues on next line
-                // 2. Triple-backtick ``` starts a code block (read until closing ```)
-                // 3. Unmatched brackets {/[/( auto-continue until balanced
-                // 4. Empty line in continuation mode submits
-                let mut input_buf = line;
-
-                // Check if input starts with ``` (code block mode)
-                if input_buf.trim_start().starts_with("```") {
-                    // Read until we find a line that is just ```
-                    input_buf.push('\n');
-                    while let Ok(cont) = rl.readline("` ") {
-                        if cont.trim() == "```" {
-                            break;
-                        }
-                        input_buf.push_str(&cont);
-                        input_buf.push('\n');
-                    }
-                } else {
-                    // Auto-continuation: trailing backslash OR unmatched brackets
-                    loop {
-                        let needs_backslash_cont = input_buf.ends_with('\\');
-                        let bracket_depth = count_bracket_depth(&input_buf);
-                        if needs_backslash_cont {
-                            input_buf.pop(); // remove trailing backslash
-                            input_buf.push('\n');
-                            match rl.readline(". ") {
-                                Ok(cont) => input_buf.push_str(&cont),
-                                _ => break,
-                            }
-                        } else if bracket_depth > 0 {
-                            // Unmatched open brackets — auto-continue
-                            input_buf.push('\n');
-                            match rl.readline("… ") {
-                                Ok(cont) => {
-                                    // Empty line in bracket mode = submit what we have
-                                    if cont.is_empty() {
-                                        break;
-                                    }
-                                    input_buf.push_str(&cont);
-                                }
-                                _ => break,
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                let input = input_buf.trim();
+                // Non-slash input: the Validator handles multiline continuation
+                // (trailing backslash, unmatched brackets, code blocks).
+                // rustyline returns the complete buffer once Validator says Valid.
+                // Post-process: strip continuation backslashes.
+                let input = line.replace("\\\n", "\n");
+                let input = input.trim();
                 if input.is_empty() { continue; }
                 let _ = rl.add_history_entry(input);
 
