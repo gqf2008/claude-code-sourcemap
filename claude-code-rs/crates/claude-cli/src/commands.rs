@@ -1296,4 +1296,56 @@ mod tests {
             _ => panic!("expected AddDir result"),
         }
     }
+
+    // ── new commands: /share, /files, /env ──────────────────────────
+
+    #[test]
+    fn test_parse_share() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/share", &s), Some(SlashCommand::Share)));
+    }
+
+    #[test]
+    fn test_parse_files() {
+        let s = no_skills();
+        match SlashCommand::parse("/files", &s) {
+            Some(SlashCommand::Files { pattern }) => assert!(pattern.is_empty()),
+            _ => panic!("expected Files"),
+        }
+        match SlashCommand::parse("/files *.rs", &s) {
+            Some(SlashCommand::Files { pattern }) => assert_eq!(pattern, "*.rs"),
+            _ => panic!("expected Files with pattern"),
+        }
+        // alias
+        assert!(matches!(SlashCommand::parse("/ls", &s), Some(SlashCommand::Files { .. })));
+    }
+
+    #[test]
+    fn test_parse_env() {
+        let s = no_skills();
+        assert!(matches!(SlashCommand::parse("/env", &s), Some(SlashCommand::Env)));
+        assert!(matches!(SlashCommand::parse("/environment", &s), Some(SlashCommand::Env)));
+    }
+
+    #[test]
+    fn test_execute_share() {
+        let cmd = SlashCommand::parse("/share", &no_skills()).unwrap();
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Share));
+    }
+
+    #[test]
+    fn test_execute_env() {
+        let cmd = SlashCommand::parse("/env", &no_skills()).unwrap();
+        assert!(matches!(cmd.execute(&no_skills(), &no_plugins()), CommandResult::Env));
+    }
+
+    #[test]
+    fn test_help_text_includes_new_features() {
+        let text = build_help_text(&no_skills(), &no_plugins());
+        assert!(text.contains("/share"));
+        assert!(text.contains("/files"));
+        assert!(text.contains("/env"));
+        assert!(text.contains("Alt+Left"));
+        assert!(text.contains("Alt+Backspace"));
+    }
 }
