@@ -444,6 +444,26 @@ pub fn notification_to_jsonrpc(notif: &AgentNotification) -> Notification {
                 ("is_error", Value::Bool(*is_error)),
             ]))
         }
+
+        // ── Extended lifecycle ──
+
+        AgentNotification::AgentTerminated { agent_id, reason } => {
+            Notification::new("agent.terminated", json_obj(2, &[
+                ("agent_id", Value::String(agent_id.clone())),
+                ("reason", Value::String(reason.clone())),
+            ]))
+        }
+        AgentNotification::ToolSelected { tool_name } => {
+            Notification::new("agent.tool_selected", json_obj(1, &[
+                ("tool_name", Value::String(tool_name.clone())),
+            ]))
+        }
+        AgentNotification::ConflictDetected { file_path, agents } => {
+            Notification::new("agent.conflict_detected", json_obj(2, &[
+                ("file_path", Value::String(file_path.clone())),
+                ("agents", Value::Array(agents.iter().map(|a| Value::String(a.clone())).collect())),
+            ]))
+        }
     }
 }
 

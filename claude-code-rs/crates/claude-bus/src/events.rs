@@ -207,6 +207,25 @@ pub enum AgentNotification {
         is_error: bool,
     },
 
+    // ── Extended lifecycle ──
+
+    /// A sub-agent was explicitly terminated (abort, TaskStop, user cancel).
+    /// Distinct from `AgentComplete` which signals normal completion.
+    AgentTerminated {
+        agent_id: String,
+        reason: String,
+    },
+
+    /// The model has selected a tool for invocation (pre-execution signal).
+    /// Fires before `ToolUseStart`; useful for permission checks / logging.
+    ToolSelected { tool_name: String },
+
+    /// A file conflict was detected among concurrent agents.
+    ConflictDetected {
+        file_path: String,
+        agents: Vec<String>,
+    },
+
     // ── Errors ──
 
     /// A non-fatal error occurred.
@@ -635,5 +654,42 @@ mod tests {
         assert_eq!(usage.output_tokens, 0);
         assert_eq!(usage.cache_read_tokens, 0);
         assert_eq!(usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn serde_agent_terminated() {
+        let n = AgentNotification::AgentTerminated {
+            agent_id: "task-42".into(),
+            reason: "user cancelled".into(),
+        };
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(json.contains("AgentTerminated"));
+        let back: AgentNotification = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AgentNotification::AgentTerminated { ref agent_id, .. } if agent_id == "task-42"));
+    }
+
+    #[test]
+    fn serde_tool_selected() {
+        let n = AgentNotification::ToolSelected { tool_name: "BashTool".into() };
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(json.contains("ToolSelected"));
+        let back: AgentNotification = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AgentNotification::ToolSelected { ref tool_name } if tool_name == "BashTool"));
+    }
+
+    #[test]
+    fn serde_conflict_detected() {
+        let n = AgentNotification::ConflictDetected {
+            file_path: "src/main.rs".into(),
+            agents: vec!["agent-1".into(), "agent-2".into()],
+        };
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(json.contains("ConflictDetected"));
+        let back: AgentNotification = serde_json::from_str(&json).unwrap();
+        if let AgentNotification::ConflictDetected { agents, .. } = back {
+            assert_eq!(agents.len(), 2);
+        } else {
+            panic!("wrong variant");
+        }
     }
 }

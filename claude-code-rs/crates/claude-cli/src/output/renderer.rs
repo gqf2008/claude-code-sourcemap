@@ -268,6 +268,22 @@ impl OutputRenderer {
                 let icon = if is_error { "❌" } else { "→" };
                 eprintln!("\x1b[2m🐝 {} {} {}\x1b[0m", agent_id, icon, text_preview);
             }
+
+            // ── Extended lifecycle events ──
+            AgentNotification::AgentTerminated { agent_id, reason } => {
+                eprintln!("\x1b[33m⚠ Agent '{}' terminated: {}\x1b[0m", agent_id, reason);
+            }
+            AgentNotification::ToolSelected { tool_name } => {
+                // Quiet; ToolUseStart follows shortly with more detail
+                tracing::debug!("Tool selected: {}", tool_name);
+            }
+            AgentNotification::ConflictDetected { file_path, agents } => {
+                eprintln!(
+                    "\x1b[31m⚠ File conflict: '{}' modified by: {}\x1b[0m",
+                    file_path,
+                    agents.join(", ")
+                );
+            }
         }
         false
     }

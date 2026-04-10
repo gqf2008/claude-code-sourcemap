@@ -224,6 +224,11 @@ impl AgentCoreAdapter {
                     match self.engine.cancel_agent(&agent_id).await {
                         Ok(()) => {
                             info!("Agent {} cancellation requested", agent_id);
+                            let bus = self.bus.lock().await;
+                            bus.notify(AgentNotification::AgentTerminated {
+                                agent_id: agent_id.clone(),
+                                reason: "stopped by user".into(),
+                            });
                         }
                         Err(e) => {
                             let bus = self.bus.lock().await;
@@ -334,6 +339,10 @@ impl AgentCoreAdapter {
 
                 AgentEvent::ToolUseStart { id, name } => {
                     self.tool_names.lock().await.insert(id.clone(), name.clone());
+                    // Pre-emit ToolSelected before the full ToolUseStart
+                    let bus = self.bus.lock().await;
+                    bus.notify(AgentNotification::ToolSelected { tool_name: name.clone() });
+                    drop(bus);
                     AgentNotification::ToolUseStart {
                         id,
                         tool_name: name,
