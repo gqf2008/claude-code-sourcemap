@@ -616,6 +616,7 @@ dependencies = [
  "claude-mcp",
  "claude-tools",
  "dirs",
+ "futures",
  "kameo",
  "serde",
  "serde_json",

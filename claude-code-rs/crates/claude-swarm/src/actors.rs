@@ -421,4 +421,95 @@ mod tests {
         let status2 = coord_ref.ask(GetTeamStatus).await.unwrap();
         assert_eq!(status2.agent_count, 0);
     }
+
+    #[tokio::test]
+    async fn route_to_nonexistent_agent_fails() {
+        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into());
+        let coord_ref = SwarmCoordinator::spawn(coord);
+
+        let route = coord_ref.ask(RouteMessage {
+            target_agent_id: "ghost@team".into(),
+            query: AgentQuery { prompt: "hello".into(), from: None },
+        }).await.unwrap();
+        assert!(!route.success);
+        assert!(route.error.is_some());
+        assert!(route.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn terminate_nonexistent_agent_fails() {
+        let coord = SwarmCoordinator::new("team".into(), "haiku".into(), "/tmp".into());
+        let coord_ref = SwarmCoordinator::spawn(coord);
+
+        let term = coord_ref.ask(TerminateAgent {
+            agent_id: "ghost@team".into(),
+        }).await.unwrap();
+        assert!(!term.success);
+        assert!(term.message.contains("ghost@team"));
+    }
+
+    #[tokio::test]
+    async fn broadcast_excludes_sender() {
+        let coord = SwarmCoordinator::new("bteam".into(), "haiku".into(), "/tmp".into());
+        let coord_ref = SwarmCoordinator::spawn(coord);
+
+        // Spawn three agents: alice, bob, carol
+        for name in ["alice", "bob", "carol"] {
+            coord_ref.ask(SpawnAgent {
+                name: name.into(),
+                model: None,
+                prompt: None,
+                cwd: None,
+            }).await.unwrap();
+        }
+
+        // Broadcast from alice — should reach bob + carol (2 recipients)
+        let results = coord_ref.ask(BroadcastMessage {
+            text: "All hands!".into(),
+            from: "alice@bteam".into(),
+        }).await.unwrap();
+        assert_eq!(results.0.len(), 2);
+        assert!(results.0.iter().all(|r| r.success));
+    }
+
+    #[tokio::test]
+    async fn token_accumulation_across_turns() {
+        let actor = AgentActor::new("worker", "team", "haiku".into(), None, "/tmp".into());
+        let actor_ref = AgentActor::spawn(actor);
+
+        for prompt in ["short", "a slightly longer prompt", "the longest prompt of them all"] {
+            actor_ref.ask(AgentQuery { prompt: prompt.into(), from: None }).await.unwrap();
+        }
+
+        let status = actor_ref.ask(GetStatus).await.unwrap();
+        assert_eq!(status.turn_count, 3);
+        // Each prompt contributes len*4 tokens
+        let expected: u64 = ["short", "a slightly longer prompt", "the longest prompt of them all"]
+            .iter()
+            .map(|s| s.len() as u64 * 4)
+            .sum();
+        assert_eq!(status.total_tokens, expected);
+    }
+
+    #[tokio::test]
+    async fn agent_model_override_on_spawn() {
+        let coord = SwarmCoordinator::new("team".into(), "default-model".into(), "/tmp".into());
+        let coord_ref = SwarmCoordinator::spawn(coord);
+
+        // Spawn with explicit model override
+        let r = coord_ref.ask(SpawnAgent {
+            name: "specialized".into(),
+            model: Some("claude-opus".into()),
+            prompt: None,
+            cwd: None,
+        }).await.unwrap();
+        assert!(r.success);
+
+        // Agent exists and responds
+        let route = coord_ref.ask(RouteMessage {
+            target_agent_id: "specialized@team".into(),
+            query: AgentQuery { prompt: "hello".into(), from: None },
+        }).await.unwrap();
+        assert!(route.success);
+    }
 }

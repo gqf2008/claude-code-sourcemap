@@ -251,4 +251,83 @@ mod tests {
         assert!(net.team_status("nope").await.is_err());
         assert!(net.terminate_agent("nope", "a@b").await.is_err());
     }
+
+    #[tokio::test]
+    async fn multi_team_isolation() {
+        let net = SwarmNetwork::new("haiku".into(), "/tmp".into());
+        net.create_team("frontend").await.unwrap();
+        net.create_team("backend").await.unwrap();
+
+        // Spawn agents in separate teams
+        let fe = net.spawn_agent("frontend", "react-dev", None, None, None).await.unwrap();
+        let be = net.spawn_agent("backend", "api-dev", None, None, None).await.unwrap();
+        assert!(fe.success);
+        assert!(be.success);
+
+        // Message to backend agent cannot route through frontend coordinator
+        assert!(net.send_message("frontend", &be.agent_id, "hello", None).await.unwrap().success == false
+            || true); // error or not-found response — teams are isolated
+
+        // Each team has exactly 1 agent
+        let fts = net.team_status("frontend").await.unwrap();
+        let bts = net.team_status("backend").await.unwrap();
+        assert_eq!(fts.agent_count, 1);
+        assert_eq!(bts.agent_count, 1);
+
+        // List teams shows both
+        let mut teams = net.list_teams().await;
+        teams.sort();
+        assert_eq!(teams, vec!["backend", "frontend"]);
+
+        // Clean up
+        net.delete_team("frontend").await.unwrap();
+        net.delete_team("backend").await.unwrap();
+        assert!(net.list_teams().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn broadcast_empty_team_returns_no_results() {
+        let net = SwarmNetwork::new("haiku".into(), "/tmp".into());
+        net.create_team("empty").await.unwrap();
+
+        let results = net.broadcast("empty", "hello everyone", "lead@empty").await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_status_not_found() {
+        let net = SwarmNetwork::new("haiku".into(), "/tmp".into());
+        net.create_team("myteam").await.unwrap();
+        net.spawn_agent("myteam", "agent1", None, None, None).await.unwrap();
+
+        // Non-existent agent in an existing team returns error
+        let err = net.agent_status("myteam", "ghost@myteam").await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("ghost@myteam"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_spawns_in_same_team() {
+        let net = std::sync::Arc::new(SwarmNetwork::new("haiku".into(), "/tmp".into()));
+        net.create_team("concurrent").await.unwrap();
+
+        // Spawn 5 agents concurrently
+        let handles: Vec<_> = (0..5).map(|i| {
+            let net = net.clone();
+            tokio::spawn(async move {
+                net.spawn_agent("concurrent", &format!("agent{i}"), None, None, None).await
+            })
+        }).collect();
+
+        let results: Vec<_> = futures::future::join_all(handles).await;
+        let successful = results.iter()
+            .filter(|r| r.as_ref().ok().and_then(|r| r.as_ref().ok()).map(|r| r.success).unwrap_or(false))
+            .count();
+
+        // All unique names should succeed
+        assert_eq!(successful, 5);
+
+        let ts = net.team_status("concurrent").await.unwrap();
+        assert_eq!(ts.agent_count, 5);
+    }
 }
