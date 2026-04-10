@@ -214,66 +214,80 @@ async fn check(state_arc: &Arc<Mutex<SchedulerState>>, opts: &CronSchedulerOptio
     let cfg = CronJitterConfig::default();
     let mut seen = HashSet::new();
     let mut fired_file_recurring = Vec::new();
+    let mut to_delete: Vec<String> = Vec::new();
 
-    let mut state = state_arc.lock().await;
+    {
+        let mut state = state_arc.lock().await;
 
-    // Process all tasks
-    let tasks: Vec<CronTask> = state.tasks.clone();
-    for t in &tasks {
-        seen.insert(t.id.clone());
-        if state.in_flight.contains(&t.id) {
-            continue;
-        }
-
-        let next = state.next_fire_at.entry(t.id.clone()).or_insert_with(|| {
-            let anchor = t.last_fired_at.unwrap_or(t.created_at);
-            if t.recurring {
-                jittered_next_cron_run_ms(&t.cron, anchor, &t.id, &cfg).unwrap_or(i64::MAX)
-            } else {
-                one_shot_jittered_next_cron_run_ms(&t.cron, t.created_at, &t.id, &cfg)
-                    .unwrap_or(i64::MAX)
+        // Process all tasks
+        let tasks: Vec<CronTask> = state.tasks.clone();
+        for t in &tasks {
+            seen.insert(t.id.clone());
+            if state.in_flight.contains(&t.id) {
+                continue;
             }
-        });
 
-        if now < *next {
-            continue;
-        }
-
-        tracing::debug!(
-            task_id = %t.id,
-            recurring = t.recurring,
-            "firing scheduled task"
-        );
-
-        (opts.on_fire)(t);
-
-        let aged = is_recurring_task_aged(t, now, cfg.recurring_max_age_ms);
-
-        if t.recurring && !aged {
-            // Reschedule from now
-            let new_next =
-                jittered_next_cron_run_ms(&t.cron, now, &t.id, &cfg).unwrap_or(i64::MAX);
-            state.next_fire_at.insert(t.id.clone(), new_next);
-            fired_file_recurring.push(t.id.clone());
-        } else {
-            // One-shot or aged recurring: delete
-            state.in_flight.insert(t.id.clone());
-            state.next_fire_at.remove(&t.id);
-            let id = t.id.clone();
-            let dir = opts.dir.clone();
-            let state_ref = state_arc.clone();
-            tokio::spawn(async move {
-                let _ = remove_cron_tasks(std::slice::from_ref(&id), &dir).await;
-                state_ref.lock().await.in_flight.remove(&id);
+            let next = state.next_fire_at.entry(t.id.clone()).or_insert_with(|| {
+                let anchor = t.last_fired_at.unwrap_or(t.created_at);
+                if t.recurring {
+                    jittered_next_cron_run_ms(&t.cron, anchor, &t.id, &cfg).unwrap_or(i64::MAX)
+                } else {
+                    one_shot_jittered_next_cron_run_ms(&t.cron, t.created_at, &t.id, &cfg)
+                        .unwrap_or(i64::MAX)
+                }
             });
+
+            if now < *next {
+                continue;
+            }
+
+            tracing::debug!(
+                task_id = %t.id,
+                recurring = t.recurring,
+                "firing scheduled task"
+            );
+
+            (opts.on_fire)(t);
+
+            let aged = is_recurring_task_aged(t, now, cfg.recurring_max_age_ms);
+
+            if t.recurring && !aged {
+                // Reschedule from now
+                let new_next =
+                    jittered_next_cron_run_ms(&t.cron, now, &t.id, &cfg).unwrap_or(i64::MAX);
+                state.next_fire_at.insert(t.id.clone(), new_next);
+                fired_file_recurring.push(t.id.clone());
+            } else {
+                // One-shot or aged recurring: mark for deletion
+                state.in_flight.insert(t.id.clone());
+                state.next_fire_at.remove(&t.id);
+                to_delete.push(t.id.clone());
+            }
         }
+
+        // Mark recurring fire IDs as in-flight before releasing lock
+        for id in &fired_file_recurring {
+            state.in_flight.insert(id.clone());
+        }
+
+        // Evict stale schedule entries
+        state.next_fire_at.retain(|id, _| seen.contains(id));
+        state.missed_asked.retain(|id| seen.contains(id));
+    }
+    // Lock released here — safe to spawn
+
+    // Spawn delete tasks
+    for id in to_delete {
+        let dir = opts.dir.clone();
+        let state_ref = state_arc.clone();
+        tokio::spawn(async move {
+            let _ = remove_cron_tasks(std::slice::from_ref(&id), &dir).await;
+            state_ref.lock().await.in_flight.remove(&id);
+        });
     }
 
     // Batch persist lastFiredAt for recurring tasks
     if !fired_file_recurring.is_empty() {
-        for id in &fired_file_recurring {
-            state.in_flight.insert(id.clone());
-        }
         let dir = opts.dir.clone();
         let ids = fired_file_recurring;
         let state_ref = state_arc.clone();
@@ -285,11 +299,6 @@ async fn check(state_arc: &Arc<Mutex<SchedulerState>>, opts: &CronSchedulerOptio
             }
         });
     }
-
-    // Evict stale schedule entries
-    state
-        .next_fire_at
-        .retain(|id, _| seen.contains(id));
 }
 
 #[cfg(test)]

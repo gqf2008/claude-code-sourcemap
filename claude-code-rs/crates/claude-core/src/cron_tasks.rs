@@ -214,8 +214,12 @@ pub fn jittered_next_cron_run_ms(
 ) -> Option<i64> {
     let t1 = next_cron_run_ms(cron, from_ms)?;
     let t2 = next_cron_run_ms(cron, t1)?;
-    let jitter = ((jitter_frac(task_id) * cfg.recurring_frac * (t2 - t1) as f64) as i64)
-        .min(cfg.recurring_cap_ms);
+    let jitter_raw = jitter_frac(task_id) * cfg.recurring_frac * (t2 - t1) as f64;
+    let jitter = if jitter_raw.is_finite() && jitter_raw >= 0.0 {
+        (jitter_raw as i64).min(cfg.recurring_cap_ms)
+    } else {
+        0
+    };
     Some(t1 + jitter)
 }
 
@@ -233,7 +237,8 @@ pub fn one_shot_jittered_next_cron_run_ms(
         return Some(t1);
     }
     let lead = jitter_frac(task_id)
-        .mul_add((cfg.one_shot_max_ms - cfg.one_shot_floor_ms) as f64, cfg.one_shot_floor_ms as f64);
+        .mul_add((cfg.one_shot_max_ms - cfg.one_shot_floor_ms) as f64, cfg.one_shot_floor_ms as f64)
+        .clamp(0.0, cfg.one_shot_max_ms as f64);
     Some((t1 - lead as i64).max(from_ms))
 }
 
