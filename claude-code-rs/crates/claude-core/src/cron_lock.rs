@@ -21,8 +21,8 @@ fn get_lock_path(dir: &Path) -> PathBuf {
     dir.join(LOCK_FILE_REL)
 }
 
-fn read_lock_sync(dir: &Path) -> Option<SchedulerLock> {
-    let raw = std::fs::read_to_string(get_lock_path(dir)).ok()?;
+async fn read_lock(dir: &Path) -> Option<SchedulerLock> {
+    let raw = tokio::fs::read_to_string(get_lock_path(dir)).await.ok()?;
     serde_json::from_str(&raw).ok()
 }
 
@@ -73,9 +73,11 @@ async fn try_create_exclusive(lock: &SchedulerLock, dir: &Path) -> std::io::Resu
         .open(&path)
         .await
     {
-        Ok(_file) => {
-            // File created successfully, now write the content
-            tokio::fs::write(&path, &body).await?;
+        Ok(mut file) => {
+            // Write directly to the opened handle — no gap for other readers
+            use tokio::io::AsyncWriteExt;
+            file.write_all(body.as_bytes()).await?;
+            file.flush().await?;
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
@@ -101,7 +103,7 @@ pub async fn try_acquire_scheduler_lock(
         return Ok(true);
     }
 
-    let existing = read_lock_sync(dir);
+    let existing = read_lock(dir).await;
 
     // Already ours (idempotent)
     if let Some(ref ex) = existing {
@@ -143,7 +145,7 @@ pub async fn try_acquire_scheduler_lock(
 
 /// Release the scheduler lock if the current session owns it.
 pub async fn release_scheduler_lock(dir: &Path, session_id: &str) -> std::io::Result<()> {
-    let existing = read_lock_sync(dir);
+    let existing = read_lock(dir).await;
     if let Some(ex) = existing {
         if ex.session_id != session_id {
             return Ok(());

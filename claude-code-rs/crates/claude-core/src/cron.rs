@@ -430,6 +430,7 @@ mod tests {
             .and_hms_opt(10, 3, 0)
             .unwrap();
         let next = compute_next_cron_run(&fields, from).unwrap();
+        assert_eq!(next.hour(), 10);
         assert_eq!(next.minute(), 5);
     }
 

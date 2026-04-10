@@ -143,9 +143,10 @@ async fn scheduler_loop(
     loop {
         tokio::select! {
             _ = check_interval.tick() => {
-                let mut s = state.lock().await;
+                let s = state.lock().await;
                 if s.is_owner {
-                    check(&mut s, &opts).await;
+                    drop(s); // Release lock before check (which locks internally)
+                    check(&state, &opts).await;
                 }
             }
             _ = lock_probe_interval.tick() => {
@@ -204,7 +205,7 @@ fn surface_missed_tasks(state: &mut SchedulerState, opts: &CronSchedulerOptions)
     }
 }
 
-async fn check(state: &mut SchedulerState, opts: &CronSchedulerOptions) {
+async fn check(state_arc: &Arc<Mutex<SchedulerState>>, opts: &CronSchedulerOptions) {
     if (opts.is_loading)() {
         return;
     }
@@ -213,6 +214,8 @@ async fn check(state: &mut SchedulerState, opts: &CronSchedulerOptions) {
     let cfg = CronJitterConfig::default();
     let mut seen = HashSet::new();
     let mut fired_file_recurring = Vec::new();
+
+    let mut state = state_arc.lock().await;
 
     // Process all tasks
     let tasks: Vec<CronTask> = state.tasks.clone();
@@ -258,21 +261,28 @@ async fn check(state: &mut SchedulerState, opts: &CronSchedulerOptions) {
             state.next_fire_at.remove(&t.id);
             let id = t.id.clone();
             let dir = opts.dir.clone();
-            let in_flight_cleanup = id.clone();
+            let state_ref = state_arc.clone();
             tokio::spawn(async move {
-                let _ = remove_cron_tasks(&[id], &dir).await;
-                // Note: in_flight cleanup happens on next reload
-                drop(in_flight_cleanup);
+                let _ = remove_cron_tasks(std::slice::from_ref(&id), &dir).await;
+                state_ref.lock().await.in_flight.remove(&id);
             });
         }
     }
 
     // Batch persist lastFiredAt for recurring tasks
     if !fired_file_recurring.is_empty() {
+        for id in &fired_file_recurring {
+            state.in_flight.insert(id.clone());
+        }
         let dir = opts.dir.clone();
         let ids = fired_file_recurring;
+        let state_ref = state_arc.clone();
         tokio::spawn(async move {
             let _ = mark_cron_tasks_fired(&ids, now, &dir).await;
+            let mut s = state_ref.lock().await;
+            for id in &ids {
+                s.in_flight.remove(id);
+            }
         });
     }
 
