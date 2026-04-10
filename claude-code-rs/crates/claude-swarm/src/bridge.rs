@@ -1,19 +1,18 @@
-//! Swarm tool bridge — wraps `claude-swarm` MCP server
-//! as `Tool` trait implementations for the agent's tool registry.
+//! Swarm tool bridge — wraps `SwarmMcpServer` as `Tool` trait implementations
+//! for the agent's tool registry.
 //!
 //! Each swarm tool is a thin wrapper that delegates to `SwarmMcpServer::call_tool()`.
 //! The server is shared via `Arc` across all tools.
-//!
-//! Gated by `CLAUDE_CODE_SWARM=1` environment variable.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use claude_core::message::ToolResultContent;
-use claude_swarm::SwarmMcpServer;
+use claude_core::tool::{Tool, ToolCategory, ToolContext, ToolResult};
 use serde_json::Value;
 use tracing::info;
+
+use crate::SwarmMcpServer;
 
 /// Shared swarm server instance.
 type SharedSwarmServer = Arc<SwarmMcpServer>;
@@ -36,7 +35,10 @@ pub fn register_swarm_tools(
     for tool_def in server.list_tools() {
         let name = tool_def.name.clone();
         let description = tool_def.description.clone().unwrap_or_default();
-        let schema = tool_def.input_schema.clone().unwrap_or(serde_json::json!({"type": "object"}));
+        let schema = tool_def
+            .input_schema
+            .clone()
+            .unwrap_or(serde_json::json!({"type": "object"}));
 
         registry.register(SwarmToolBridge {
             server: server.clone(),
@@ -76,7 +78,10 @@ impl Tool for SwarmToolBridge {
     }
 
     fn is_read_only(&self) -> bool {
-        matches!(self.tool_name.as_str(), "swarm_agent_status" | "swarm_team_status")
+        matches!(
+            self.tool_name.as_str(),
+            "swarm_agent_status" | "swarm_team_status"
+        )
     }
 
     async fn call(&self, input: Value, _context: &ToolContext) -> anyhow::Result<ToolResult> {
@@ -91,7 +96,9 @@ impl Tool for SwarmToolBridge {
         }
 
         if content.is_empty() {
-            content.push(ToolResultContent::Text { text: String::new() });
+            content.push(ToolResultContent::Text {
+                text: String::new(),
+            });
         }
 
         Ok(ToolResult {
@@ -129,7 +136,7 @@ mod tests {
             tool_schema: serde_json::json!({}),
         };
         let bridge2 = SwarmToolBridge {
-            server: server.clone(),
+            server,
             tool_name: "swarm_team_status".into(),
             tool_description: "".into(),
             tool_schema: serde_json::json!({}),
@@ -149,7 +156,10 @@ mod tests {
         };
 
         let ctx = ToolContext::default();
-        let result = bridge.call(serde_json::json!({"name": "test-team"}), &ctx).await.unwrap();
+        let result = bridge
+            .call(serde_json::json!({"name": "test-team"}), &ctx)
+            .await
+            .unwrap();
         assert!(!result.is_error);
     }
 }

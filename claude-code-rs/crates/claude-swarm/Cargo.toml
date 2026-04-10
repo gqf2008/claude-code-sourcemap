@@ -7,10 +7,12 @@ description = "Actor-based multi-agent swarm network for Claude Code, integrated
 [dependencies]
 claude-core = { path = "../claude-core" }
 claude-mcp = { path = "../claude-mcp" }
+claude-tools = { path = "../claude-tools" }
 
 kameo = "0.20"
 
 tokio = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

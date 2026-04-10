@@ -610,8 +610,10 @@ name = "claude-swarm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "claude-core",
  "claude-mcp",
+ "claude-tools",
  "kameo",
  "serde",
  "serde_json",
