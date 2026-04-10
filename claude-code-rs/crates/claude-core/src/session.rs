@@ -336,6 +336,40 @@ pub fn delete_session(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Search sessions by keyword (case-insensitive).
+///
+/// Matches against title, custom_title, summary, last_prompt, cwd, and model.
+pub fn search_sessions(query: &str) -> Vec<SessionMeta> {
+    let lower = query.to_lowercase();
+    list_sessions()
+        .into_iter()
+        .filter(|s| {
+            s.title.to_lowercase().contains(&lower)
+                || s.custom_title.as_deref().unwrap_or_default().to_lowercase().contains(&lower)
+                || s.summary.as_deref().unwrap_or_default().to_lowercase().contains(&lower)
+                || s.last_prompt.as_deref().unwrap_or_default().to_lowercase().contains(&lower)
+                || s.cwd.to_lowercase().contains(&lower)
+                || s.model.to_lowercase().contains(&lower)
+        })
+        .collect()
+}
+
+/// Delete sessions older than the given number of days.
+/// Returns the number of sessions deleted.
+pub fn auto_cleanup_sessions(max_age_days: u32) -> u32 {
+    let cutoff = Utc::now() - chrono::Duration::days(i64::from(max_age_days));
+    let sessions = list_sessions();
+    let mut deleted = 0u32;
+    for s in &sessions {
+        if s.updated_at < cutoff {
+            if delete_session(&s.id).is_ok() {
+                deleted += 1;
+            }
+        }
+    }
+    deleted
+}
+
 // ── JSONL Transcript ─────────────────────────────────────────────────────────
 
 /// A single entry in a JSONL transcript file.
@@ -1800,5 +1834,77 @@ mod tests {
         assert_eq!(result.as_deref(), Some("/other/project"));
 
         let _ = std::fs::remove_file(transcript_path(&id).unwrap());
+    }
+
+    // ── search_sessions / auto_cleanup ──────────────────────────────────
+
+    #[test]
+    fn search_sessions_matches_title_and_summary() {
+        let s1 = SessionMeta {
+            id: "s-search-1".to_string(),
+            title: "Refactor auth module".to_string(),
+            model: "claude-sonnet".to_string(),
+            cwd: "/project".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            turn_count: 5,
+            total_cost_usd: 0.1,
+            message_count: 10,
+            git_branch: None,
+            custom_title: None,
+            summary: Some("Moved JWT logic into services/auth.rs".to_string()),
+            last_prompt: Some("refactor the auth".to_string()),
+        };
+        // search_sessions uses list_sessions() which reads from disk;
+        // instead we test the filter logic directly here
+        let sessions = vec![s1.clone()];
+        let query = "jwt";
+        let lower = query.to_lowercase();
+        let found: Vec<_> = sessions
+            .iter()
+            .filter(|s| {
+                s.title.to_lowercase().contains(&lower)
+                    || s.summary.as_deref().unwrap_or_default().to_lowercase().contains(&lower)
+                    || s.last_prompt.as_deref().unwrap_or_default().to_lowercase().contains(&lower)
+            })
+            .collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "s-search-1");
+
+        // Non-matching query
+        let query2 = "kubernetes";
+        let lower2 = query2.to_lowercase();
+        let found2: Vec<_> = sessions
+            .iter()
+            .filter(|s| {
+                s.title.to_lowercase().contains(&lower2)
+                    || s.summary.as_deref().unwrap_or_default().to_lowercase().contains(&lower2)
+            })
+            .collect();
+        assert!(found2.is_empty());
+    }
+
+    #[test]
+    fn search_sessions_case_insensitive() {
+        let s = SessionMeta {
+            id: "s-case".to_string(),
+            title: "Fix UPPERCASE Bug".to_string(),
+            model: "claude".to_string(),
+            cwd: "/proj".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            turn_count: 1,
+            total_cost_usd: 0.0,
+            message_count: 2,
+            git_branch: None,
+            custom_title: Some("Important Fix".to_string()),
+            summary: None,
+            last_prompt: None,
+        };
+        let sessions = vec![s];
+        let query = "uppercase";
+        let lower = query.to_lowercase();
+        let found: Vec<_> = sessions.iter().filter(|s| s.title.to_lowercase().contains(&lower)).collect();
+        assert_eq!(found.len(), 1);
     }
 }

@@ -7,7 +7,7 @@ pub use stream::print_stream;
 pub(crate) use helpers::spawn_esc_listener;
 
 use claude_agent::engine::QueryEngine;
-use claude_agent::task_runner::{run_task, CompletionReason};
+use claude_agent::task_runner::{run_task, CompletionReason, TaskProgress};
 use helpers::format_tool_result_inline;
 
 pub async fn run_single(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> {
@@ -47,6 +47,74 @@ pub async fn run_json(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Run a task with NDJSON (newline-delimited JSON) streaming output.
+///
+/// Each event is emitted as a single JSON line to stdout as it happens.
+/// This is ideal for CI/CD pipelines, programmatic consumers, and log aggregation.
+///
+/// Event types:
+/// - `{"type":"turn_start","turn":0}`
+/// - `{"type":"text","text":"hello "}`
+/// - `{"type":"tool_use","name":"FileRead","turn":1}`
+/// - `{"type":"tool_done","name":"FileRead","is_error":false,"preview":"..."}`
+/// - `{"type":"tokens","input":1234,"output":567}`
+/// - `{"type":"done","success":true,"reason":"completed","turns":3,...}`
+pub async fn run_stream_json(engine: &QueryEngine, prompt: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let result = run_task(engine, prompt, |event| {
+        let json = match event {
+            TaskProgress::TurnStart { turn } => {
+                serde_json::json!({"type": "turn_start", "turn": turn})
+            }
+            TaskProgress::Text(t) => {
+                serde_json::json!({"type": "text", "text": t})
+            }
+            TaskProgress::ToolUse { name, turn } => {
+                serde_json::json!({"type": "tool_use", "name": name, "turn": turn})
+            }
+            TaskProgress::ToolDone { name, is_error, text } => {
+                serde_json::json!({
+                    "type": "tool_done",
+                    "name": name,
+                    "is_error": is_error,
+                    "preview": text.as_deref().unwrap_or(""),
+                })
+            }
+            TaskProgress::Tokens { input, output } => {
+                serde_json::json!({"type": "tokens", "input": input, "output": output})
+            }
+            TaskProgress::Done(_) => return, // handled after run_task completes
+        };
+        let _ = writeln!(std::io::stdout(), "{}", serde_json::to_string(&json).unwrap_or_default());
+        std::io::stdout().flush().ok();
+    }).await;
+
+    // Emit final summary event
+    let cost = engine.cost_tracker().total_usd();
+    let done = serde_json::json!({
+        "type": "done",
+        "success": result.success(),
+        "reason": format!("{}", result.reason),
+        "text": result.output,
+        "turns": result.turns,
+        "tool_uses": result.tool_uses,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "duration_ms": result.elapsed.as_millis(),
+        "cost_usd": cost,
+    });
+    println!("{}", serde_json::to_string(&done)?);
+
+    if !result.success() {
+        if let CompletionReason::Error(ref e) = result.reason {
+            return Err(anyhow::anyhow!("{}", e));
+        }
+    }
+
+    Ok(())
+}
+
 /// Run a task non-interactively with a rich progress display.
 ///
 /// This is the primary path for `claude -p "task"` mode.  It shows:
@@ -61,18 +129,18 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
 
     let result = run_task(engine, task, |event| {
         match event {
-            claude_agent::task_runner::TaskProgress::TurnStart { turn } if turn > 0 => {
+            TaskProgress::TurnStart { turn } if turn > 0 => {
                 eprintln!("\x1b[2m── turn {} ──\x1b[0m", turn);
             }
-            claude_agent::task_runner::TaskProgress::Text(t) => {
+            TaskProgress::Text(t) => {
                 print!("{}", t);
                 std::io::stdout().flush().ok();
             }
-            claude_agent::task_runner::TaskProgress::ToolUse { name, .. } => {
+            TaskProgress::ToolUse { name, .. } => {
                 last_tool = name.clone();
                 eprintln!("\n\x1b[36m⚙ {}\x1b[0m", name);
             }
-            claude_agent::task_runner::TaskProgress::ToolDone { is_error, text, .. } => {
+            TaskProgress::ToolDone { is_error, text, .. } => {
                 if is_error {
                     eprintln!("\x1b[31m  ✗\x1b[0m");
                 } else {
@@ -84,9 +152,9 @@ pub async fn run_task_interactive(engine: &QueryEngine, task: &str) -> anyhow::R
                     }
                 }
             }
-            claude_agent::task_runner::TaskProgress::TurnStart { .. }
-            | claude_agent::task_runner::TaskProgress::Tokens { .. }
-            | claude_agent::task_runner::TaskProgress::Done(_) => {}
+            TaskProgress::TurnStart { .. }
+            | TaskProgress::Tokens { .. }
+            | TaskProgress::Done(_) => {}
         }
     }).await;
 

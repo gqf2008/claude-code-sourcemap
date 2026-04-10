@@ -71,9 +71,10 @@ struct Cli {
     #[arg(long, short = 'p')]
     print: bool,
 
-    /// Output format for non-interactive mode: text | json.
-    ///   text — plain text output (default).
-    ///   json — structured JSON with messages, tool calls, and metadata
+    /// Output format for non-interactive mode: text | json | stream-json.
+    ///   text         — plain text output (default).
+    ///   json         — structured JSON with messages, tool calls, and metadata.
+    ///   stream-json  — NDJSON streaming: one JSON object per event line
     #[arg(long, default_value = "text")]
     output_format: String,
 
@@ -144,6 +145,12 @@ struct Cli {
     #[arg(long)]
     list_sessions: bool,
 
+    /// Search saved sessions by keyword and exit.
+    /// Matches title, summary, last prompt, cwd, and model (case-insensitive).
+    /// Example: claude --search-sessions "refactor auth"
+    #[arg(long, value_name = "QUERY")]
+    search_sessions: Option<String>,
+
     /// Generate shell completions and exit.
     /// Supported shells: bash, zsh, fish, powershell, elvish.
     /// Example: claude --completions bash >> ~/.bashrc
@@ -161,10 +168,41 @@ struct Cli {
     /// Example: --base-url http://localhost:11434/v1
     #[arg(long)]
     base_url: Option<String>,
+
+    /// Global session timeout in seconds.
+    /// Automatically exits after this duration — useful for CI/CD pipelines.
+    /// 0 means no timeout (default)
+    #[arg(long, default_value = "0")]
+    timeout: u64,
+}
+
+/// Exit codes for non-interactive mode (CI/CD friendly).
+mod exit_code {
+    #![allow(dead_code)]
+    pub const SUCCESS: i32 = 0;
+    pub const ERROR: i32 = 1;
+    pub const PERMISSION_DENIED: i32 = 2;
+    pub const CONTEXT_EXCEEDED: i32 = 3;
+    pub const TIMEOUT: i32 = 4;
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        let msg = format!("{e:#}");
+        eprintln!("\x1b[31mError: {msg}\x1b[0m");
+        let code = if msg.contains("permission") || msg.contains("Permission") {
+            exit_code::PERMISSION_DENIED
+        } else if msg.contains("context") && msg.contains("exceed") {
+            exit_code::CONTEXT_EXCEEDED
+        } else {
+            exit_code::ERROR
+        };
+        std::process::exit(code);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // ── Handle --completions: generate shell completions and exit ────────
@@ -186,6 +224,31 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{:.8}\t{}\t{} msgs\t{} turns\t${:.4}\t{}",
                     s.id, title, s.message_count, s.turn_count, s.total_cost_usd, age,
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // ── Handle --search-sessions: search and print matching sessions ─────
+    if let Some(ref query) = cli.search_sessions {
+        let sessions = claude_core::session::search_sessions(query);
+        if sessions.is_empty() {
+            println!("No sessions matching \"{}\".", query);
+        } else {
+            println!("{} session(s) matching \"{}\":", sessions.len(), query);
+            for s in &sessions {
+                let age = claude_core::session::format_age(&s.updated_at);
+                let title = s.custom_title.as_deref().unwrap_or(&s.title);
+                let prompt_preview = s.last_prompt.as_deref()
+                    .map(|p| {
+                        let trimmed = p.trim().replace('\n', " ");
+                        if trimmed.len() > 60 { format!("{}…", &trimmed[..60]) } else { trimmed }
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "{:.8}\t{}\t{} msgs\t{}\t{}",
+                    s.id, title, s.message_count, age, prompt_preview,
                 );
             }
         }
@@ -412,26 +475,38 @@ async fn main() -> anyhow::Result<()> {
             full_prompt
         };
 
-        if cli.output_format == "json" {
-            output::run_json(&engine, &full_prompt).await?;
-        } else if cli.print {
-            output::run_single(&engine, &full_prompt).await?;
-        } else {
-            output::run_task_interactive(&engine, &full_prompt).await?;
-        }
+        let task = async {
+            if cli.output_format == "json" {
+                output::run_json(&engine, &full_prompt).await
+            } else if cli.output_format == "stream-json" {
+                output::run_stream_json(&engine, &full_prompt).await
+            } else if cli.print {
+                output::run_single(&engine, &full_prompt).await
+            } else {
+                output::run_task_interactive(&engine, &full_prompt).await
+            }
+        };
+
+        run_with_timeout(task, cli.timeout).await?;
     } else if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         // Stdin-only mode: read from pipe with no explicit prompt
         let mut stdin_buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin_buf)?;
-        let stdin_buf = stdin_buf.trim();
+        let stdin_buf = stdin_buf.trim().to_string();
         if !stdin_buf.is_empty() {
-            if cli.output_format == "json" {
-                output::run_json(&engine, stdin_buf).await?;
-            } else if cli.print {
-                output::run_single(&engine, stdin_buf).await?;
-            } else {
-                output::run_task_interactive(&engine, stdin_buf).await?;
-            }
+            let task = async {
+                if cli.output_format == "json" {
+                    output::run_json(&engine, &stdin_buf).await
+                } else if cli.output_format == "stream-json" {
+                    output::run_stream_json(&engine, &stdin_buf).await
+                } else if cli.print {
+                    output::run_single(&engine, &stdin_buf).await
+                } else {
+                    output::run_task_interactive(&engine, &stdin_buf).await
+                }
+            };
+
+            run_with_timeout(task, cli.timeout).await?;
         } else {
             eprintln!("No input provided. Use `claude \"prompt\"` or pipe via stdin.");
         }
@@ -440,6 +515,25 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Run a future with an optional global timeout.
+/// When `timeout_secs` is 0, no timeout is applied.
+async fn run_with_timeout<F: std::future::Future<Output = anyhow::Result<()>>>(
+    task: F,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
+    if timeout_secs == 0 {
+        return task.await;
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), task).await {
+        Ok(result) => result,
+        Err(_) => {
+            eprintln!("\x1b[31m[Timeout: exceeded {}s limit]\x1b[0m", timeout_secs);
+            std::process::exit(exit_code::TIMEOUT);
+        }
+    }
 }
 
 #[cfg(test)]
