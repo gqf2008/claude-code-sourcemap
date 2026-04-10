@@ -217,7 +217,7 @@ impl Message<TerminateAgent> for SwarmCoordinator {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         if let Some(agent_ref) = self.agents.remove(&msg.agent_id) {
-            let _ = agent_ref.kill();
+            agent_ref.kill();
             info!(team = %self.team_name, agent = %msg.agent_id, "Agent terminated");
             TerminateResult {
                 success: true,

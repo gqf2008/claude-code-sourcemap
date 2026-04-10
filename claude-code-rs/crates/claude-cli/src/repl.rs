@@ -579,6 +579,94 @@ pub async fn run(
                                     println!("{}No assistant response to copy.\x1b[0m", theme::c_warn());
                                 }
                             }
+                            CommandResult::Share => {
+                                let state = engine.state().read().await;
+                                let mut md = String::from("# Claude Code Session\n\n");
+                                for msg in &state.messages {
+                                    match msg {
+                                        claude_core::message::Message::User(u) => {
+                                            md.push_str("## User\n\n");
+                                            for block in &u.content {
+                                                if let claude_core::message::ContentBlock::Text { text } = block {
+                                                    md.push_str(text);
+                                                    md.push_str("\n\n");
+                                                }
+                                            }
+                                        }
+                                        claude_core::message::Message::Assistant(a) => {
+                                            md.push_str("## Assistant\n\n");
+                                            for block in &a.content {
+                                                if let claude_core::message::ContentBlock::Text { text } = block {
+                                                    md.push_str(text);
+                                                    md.push_str("\n\n");
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                drop(state);
+                                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                                let filename = format!("claude-session-{ts}.md");
+                                match std::fs::write(&filename, &md) {
+                                    Ok(_) => println!("{}✓ Session exported to {filename} ({} bytes)\x1b[0m", theme::c_ok(), md.len()),
+                                    Err(e) => eprintln!("{}Export failed: {e}\x1b[0m", theme::c_err()),
+                                }
+                            }
+                            CommandResult::Files { pattern } => {
+                                let cwd = std::env::current_dir().unwrap_or_default();
+                                match std::fs::read_dir(&cwd) {
+                                    Ok(entries) => {
+                                        let mut items: Vec<_> = entries
+                                            .flatten()
+                                            .filter(|e| {
+                                                if pattern.is_empty() {
+                                                    true
+                                                } else {
+                                                    e.file_name().to_string_lossy().contains(pattern.as_str())
+                                                }
+                                            })
+                                            .collect();
+                                        items.sort_by_key(|e| e.file_name());
+                                        let mut count = 0;
+                                        for entry in &items {
+                                            let name = entry.file_name();
+                                            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                                println!("  \x1b[1;34m{}/\x1b[0m", name.to_string_lossy());
+                                            } else {
+                                                println!("  {}", name.to_string_lossy());
+                                            }
+                                            count += 1;
+                                        }
+                                        if count == 0 {
+                                            println!("{}No files matching '{pattern}'\x1b[0m", theme::c_warn());
+                                        } else {
+                                            println!("\x1b[2m({count} items in {})\x1b[0m", cwd.display());
+                                        }
+                                    }
+                                    Err(e) => eprintln!("{}Cannot read directory: {e}\x1b[0m", theme::c_err()),
+                                }
+                            }
+                            CommandResult::Env => {
+                                println!("\x1b[1mEnvironment\x1b[0m");
+                                println!("  OS:          {}", std::env::consts::OS);
+                                println!("  Arch:        {}", std::env::consts::ARCH);
+                                println!("  CWD:         {}", std::env::current_dir().unwrap_or_default().display());
+                                println!("  Version:     v{}", env!("CARGO_PKG_VERSION"));
+                                if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                                    println!("  Home:        {home}");
+                                }
+                                let state = engine.state().read().await;
+                                println!("  Model:       {}", state.model);
+                                println!("  Messages:    {}", state.messages.len());
+                                drop(state);
+                                if let Ok(shell) = std::env::var("SHELL").or_else(|_| std::env::var("COMSPEC")) {
+                                    println!("  Shell:       {shell}");
+                                }
+                                if let Ok(term) = std::env::var("TERM") {
+                                    println!("  Terminal:    {term}");
+                                }
+                            }
                         }
                     }
                     continue;

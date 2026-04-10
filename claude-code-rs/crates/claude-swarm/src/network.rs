@@ -56,7 +56,7 @@ impl SwarmNetwork {
         let mut teams = self.teams.write().await;
         if let Some(coord_ref) = teams.remove(name) {
             info!(team = %name, "Deleting team");
-            let _ = coord_ref.kill();
+            coord_ref.kill();
             Ok(())
         } else {
             anyhow::bail!("Team '{}' not found", name);

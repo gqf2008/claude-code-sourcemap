@@ -59,6 +59,12 @@ pub enum SlashCommand {
     Rename { name: String },
     /// Copy last assistant response to clipboard.
     Copy,
+    /// Export session to shareable markdown file.
+    Share,
+    /// List files in current context/working directory.
+    Files { pattern: String },
+    /// Show environment information.
+    Env,
     Exit,
     Unknown(String),
 }
@@ -118,6 +124,9 @@ impl SlashCommand {
             "summary" => Self::Summary,
             "rename" => Self::Rename { name: args },
             "copy" | "yank" => Self::Copy,
+            "share" => Self::Share,
+            "files" | "ls" => Self::Files { pattern: args },
+            "env" | "environment" => Self::Env,
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -231,6 +240,9 @@ impl SlashCommand {
             Self::Summary => CommandResult::Summary,
             Self::Rename { name } => CommandResult::Rename { name: name.clone() },
             Self::Copy => CommandResult::Copy,
+            Self::Share => CommandResult::Share,
+            Self::Files { pattern } => CommandResult::Files { pattern: pattern.clone() },
+            Self::Env => CommandResult::Env,
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -296,6 +308,12 @@ pub enum CommandResult {
     Rename { name: String },
     /// Copy last assistant response to clipboard (/copy).
     Copy,
+    /// Export session to shareable markdown file (/share).
+    Share,
+    /// List files in current working directory (/files [pattern]).
+    Files { pattern: String },
+    /// Show environment information (/env).
+    Env,
     Exit,
 }
 
@@ -372,6 +390,7 @@ const HELP_TEXT_BASE: &str = "\
   /summary           Generate a conversation summary
   /rename <name>     Rename current session
   /copy              Copy last assistant response to clipboard
+  /share             Export session to shareable markdown file
   /export [format]   Export session (markdown or json)
   /memory list       List memory files
   /memory open <f>   Open a memory file
@@ -385,12 +404,17 @@ const HELP_TEXT_BASE: &str = "\
   /skills            List available skills
   /agents            Manage agent definitions
   /add-dir <path>    Add context directory at runtime
+  /files [pattern]   List files in current directory
+  /env               Show environment information
   /version           Show version info
 
 \x1b[1mTips\x1b[0m
   • End a line with \\ to continue on the next line (multiline)
   • Shift+Enter or Alt+Enter to insert a newline
   • Ctrl+R to search command history
+  • Left/Right arrows to navigate within a line
+  • Alt+Left/Right to jump by word, Alt+Backspace to delete word
+  • Ctrl+A/Home to go to start, Ctrl+E/End to go to end
   • Attach images: type @path/to/image.png on its own line
   • Use --resume to restore the most recent session on startup
   • Use --init to create CLAUDE.md and project scaffolding";

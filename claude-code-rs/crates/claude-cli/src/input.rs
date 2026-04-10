@@ -24,8 +24,8 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
     "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
     "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
-    "/fast", "/add-dir", "/summary", "/rename", "/copy", "/agents", "/theme", "/plan",
-    "/think", "/break-cache", "/rewind",
+    "/fast", "/add-dir", "/summary", "/rename", "/copy", "/share", "/files",
+    "/env", "/agents", "/theme", "/plan", "/think", "/break-cache", "/rewind",
 ];
 
 /// Continuation prompt for multiline input.
@@ -321,7 +321,48 @@ impl InputReader {
                     redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
-                // ── Left arrow: move cursor left ─────────────────────
+                // ── Alt+Left: move cursor one word left ──────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::ALT) => {
+                    if cursor > 0 {
+                        let chars: Vec<char> = lines.last().map(|l| l.chars().collect()).unwrap_or_default();
+                        let mut pos = cursor;
+                        while pos > 0 && chars[pos - 1].is_whitespace() {
+                            pos -= 1;
+                        }
+                        while pos > 0 && !chars[pos - 1].is_whitespace() {
+                            pos -= 1;
+                        }
+                        cursor = pos;
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    }
+                }
+
+                // ── Alt+Right: move cursor one word right ─────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::ALT) => {
+                    let chars: Vec<char> = lines.last().map(|l| l.chars().collect()).unwrap_or_default();
+                    let len = chars.len();
+                    if cursor < len {
+                        let mut pos = cursor;
+                        while pos < len && !chars[pos].is_whitespace() {
+                            pos += 1;
+                        }
+                        while pos < len && chars[pos].is_whitespace() {
+                            pos += 1;
+                        }
+                        cursor = pos;
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    }
+                }
+
+                // ── Left arrow / Ctrl+B: move cursor left ────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Left, ..
                 })
@@ -337,7 +378,7 @@ impl InputReader {
                     }
                 }
 
-                // ── Right arrow: move cursor right ───────────────────
+                // ── Right arrow / Ctrl+F: move cursor right ──────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Right, ..
                 })
@@ -352,6 +393,54 @@ impl InputReader {
                         write!(stdout, "\x1b[C")?;
                         stdout.flush()?;
                     }
+                }
+
+                // ── Alt+Backspace: delete word before cursor ──────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Backspace,
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::ALT) => {
+                    if cursor > 0 {
+                        if let Some(last) = lines.last_mut() {
+                            let chars: Vec<char> = last.chars().collect();
+                            let mut pos = cursor;
+                            while pos > 0 && chars[pos - 1].is_whitespace() {
+                                pos -= 1;
+                            }
+                            while pos > 0 && !chars[pos - 1].is_whitespace() {
+                                pos -= 1;
+                            }
+                            let new_line: String = chars[..pos].iter().chain(chars[cursor..].iter()).collect();
+                            *last = new_line;
+                            cursor = pos;
+                        }
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    }
+                }
+
+                // ── Alt+D: delete word after cursor ───────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('d'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::ALT) => {
+                    if let Some(last) = lines.last_mut() {
+                        let chars: Vec<char> = last.chars().collect();
+                        let len = chars.len();
+                        if cursor < len {
+                            let mut pos = cursor;
+                            while pos < len && !chars[pos].is_whitespace() {
+                                pos += 1;
+                            }
+                            while pos < len && chars[pos].is_whitespace() {
+                                pos += 1;
+                            }
+                            let new_line: String = chars[..cursor].iter().chain(chars[pos..].iter()).collect();
+                            *last = new_line;
+                        }
+                    }
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Delete key: delete char at cursor ────────────────
