@@ -49,6 +49,10 @@ pub enum SlashCommand {
     BreakCache,
     /// Rewind conversation by N turns.
     Rewind { turns: String },
+    /// Quick model toggle (/fast → haiku, /fast off → restore previous).
+    Fast { toggle: String },
+    /// Add context directory at runtime.
+    AddDir { path: String },
     Exit,
     Unknown(String),
 }
@@ -103,6 +107,8 @@ impl SlashCommand {
             "think" | "thinking" => Self::Think { args },
             "break-cache" | "breakcache" => Self::BreakCache,
             "rewind" => Self::Rewind { turns: args },
+            "fast" => Self::Fast { toggle: args },
+            "add-dir" | "adddir" => Self::AddDir { path: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -211,6 +217,8 @@ impl SlashCommand {
             Self::Think { args } => CommandResult::Think { args: args.clone() },
             Self::BreakCache => CommandResult::BreakCache,
             Self::Rewind { turns } => CommandResult::Rewind { turns: turns.clone() },
+            Self::Fast { toggle } => CommandResult::Fast { toggle: toggle.clone() },
+            Self::AddDir { path } => CommandResult::AddDir { path: path.clone() },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -266,6 +274,10 @@ pub enum CommandResult {
     BreakCache,
     /// Rewind conversation by N turns (/rewind [N]).
     Rewind { turns: String },
+    /// Toggle fast/cheap model (/fast [off]).
+    Fast { toggle: String },
+    /// Add context directory at runtime (/add-dir <path>).
+    AddDir { path: String },
     Exit,
 }
 
@@ -321,6 +333,7 @@ const HELP_TEXT_BASE: &str = "\
 
 \x1b[1mConfiguration\x1b[0m
   /model <name>      Switch model (aliases: sonnet, opus, haiku, best)
+  /fast [off]        Toggle fast/cheap model (haiku)
   /think [on|off|N]  Toggle extended thinking (N = token budget)
   /theme [name]      Switch terminal theme (dark, light, dark-ansi, etc.)
   /break-cache       Force next request to skip prompt cache
@@ -350,6 +363,7 @@ const HELP_TEXT_BASE: &str = "\
   /doctor            Check environment health
   /skills            List available skills
   /agents            Manage agent definitions
+  /add-dir <path>    Add context directory at runtime
   /version           Show version info
 
 \x1b[1mTips\x1b[0m
@@ -1179,6 +1193,60 @@ mod tests {
         match cmd.execute(&no_skills(), &no_plugins()) {
             CommandResult::Rewind { turns } => assert_eq!(turns, "5"),
             _ => panic!("expected Rewind result"),
+        }
+    }
+
+    // ── /fast ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_fast() {
+        let s = no_skills();
+        match SlashCommand::parse("/fast", &s) {
+            Some(SlashCommand::Fast { toggle }) => assert!(toggle.is_empty()),
+            _ => panic!("expected Fast"),
+        }
+        match SlashCommand::parse("/fast off", &s) {
+            Some(SlashCommand::Fast { toggle }) => assert_eq!(toggle, "off"),
+            _ => panic!("expected Fast with off"),
+        }
+    }
+
+    #[test]
+    fn test_execute_fast() {
+        let cmd = SlashCommand::parse("/fast", &no_skills()).unwrap();
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Fast { toggle } => assert!(toggle.is_empty()),
+            _ => panic!("expected Fast result"),
+        }
+        let cmd = SlashCommand::parse("/fast off", &no_skills()).unwrap();
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::Fast { toggle } => assert_eq!(toggle, "off"),
+            _ => panic!("expected Fast off result"),
+        }
+    }
+
+    // ── /add-dir ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_add_dir() {
+        let s = no_skills();
+        match SlashCommand::parse("/add-dir ./src", &s) {
+            Some(SlashCommand::AddDir { path }) => assert_eq!(path, "./src"),
+            _ => panic!("expected AddDir"),
+        }
+        // alias
+        match SlashCommand::parse("/adddir /tmp/docs", &s) {
+            Some(SlashCommand::AddDir { path }) => assert_eq!(path, "/tmp/docs"),
+            _ => panic!("expected AddDir alias"),
+        }
+    }
+
+    #[test]
+    fn test_execute_add_dir() {
+        let cmd = SlashCommand::parse("/add-dir ./test", &no_skills()).unwrap();
+        match cmd.execute(&no_skills(), &no_plugins()) {
+            CommandResult::AddDir { path } => assert_eq!(path, "./test"),
+            _ => panic!("expected AddDir result"),
         }
     }
 }

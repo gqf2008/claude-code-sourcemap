@@ -6,6 +6,7 @@
 
 pub mod audit;
 pub mod computer_use;
+pub mod swarm_bridge;
 pub mod engine;
 pub mod query;
 pub mod executor;

@@ -458,6 +458,88 @@ pub async fn run(
                                     );
                                 }
                             }
+                            CommandResult::Fast { toggle } => {
+                                let state = engine.state();
+                                let current = state.read().await.model.clone();
+                                let fast_model = claude_core::model::small_fast_model();
+
+                                if toggle.eq_ignore_ascii_case("off") {
+                                    // Restore to default (sonnet)
+                                    let default = claude_core::model::resolve_model_string("sonnet");
+                                    if current == default {
+                                        println!("Already on default model: {}", claude_core::model::display_name_any(&default));
+                                    } else {
+                                        state.write().await.model = default.clone();
+                                        println!(
+                                            "{}✓ Switched back to: {} ({})\x1b[0m",
+                                            theme::c_ok(),
+                                            claude_core::model::display_name_any(&default),
+                                            default,
+                                        );
+                                    }
+                                } else {
+                                    // Toggle: if already on fast model, switch to sonnet; else switch to fast
+                                    if current == fast_model {
+                                        let default = claude_core::model::resolve_model_string("sonnet");
+                                        state.write().await.model = default.clone();
+                                        println!(
+                                            "{}✓ Fast mode off → {} ({})\x1b[0m",
+                                            theme::c_ok(),
+                                            claude_core::model::display_name_any(&default),
+                                            default,
+                                        );
+                                    } else {
+                                        state.write().await.model = fast_model.clone();
+                                        println!(
+                                            "{}✓ Fast mode on → {} ({})\x1b[0m",
+                                            theme::c_ok(),
+                                            claude_core::model::display_name_any(&fast_model),
+                                            fast_model,
+                                        );
+                                    }
+                                }
+                            }
+                            CommandResult::AddDir { path } => {
+                                if path.is_empty() {
+                                    println!("Usage: /add-dir <path>");
+                                    continue;
+                                }
+                                let dir_path = std::path::Path::new(&path);
+                                let dir_path = if dir_path.is_relative() {
+                                    cwd.join(dir_path)
+                                } else {
+                                    dir_path.to_path_buf()
+                                };
+                                if !dir_path.is_dir() {
+                                    println!("{}Directory not found: {}\x1b[0m", theme::c_warn(), dir_path.display());
+                                    continue;
+                                }
+                                // Read directory contents and inject as context
+                                let mut ctx = format!("<context source=\"{}\">\n", dir_path.display());
+                                let mut file_count = 0u32;
+                                if let Ok(entries) = std::fs::read_dir(&dir_path) {
+                                    for entry in entries.flatten() {
+                                        let p = entry.path();
+                                        if p.is_file() {
+                                            if let Ok(content) = std::fs::read_to_string(&p) {
+                                                let name = p.file_name().unwrap_or_default().to_string_lossy();
+                                                ctx.push_str(&format!("--- {} ---\n{}\n\n", name, content.trim()));
+                                                file_count += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                                ctx.push_str("</context>");
+                                // Inject as system prompt context update
+                                engine.update_system_prompt_context(&ctx).await;
+                                println!(
+                                    "{}✓ Added {} file{} from {}\x1b[0m",
+                                    theme::c_ok(),
+                                    file_count,
+                                    if file_count == 1 { "" } else { "s" },
+                                    dir_path.display(),
+                                );
+                            }
                         }
                     }
                     continue;

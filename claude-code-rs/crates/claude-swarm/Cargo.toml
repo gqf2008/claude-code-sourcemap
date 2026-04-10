@@ -1,0 +1,24 @@
+[package]
+name = "claude-swarm"
+version = "0.1.0"
+edition = "2021"
+description = "Actor-based multi-agent swarm network for Claude Code, integrated via MCP protocol"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-mcp = { path = "../claude-mcp" }
+
+kameo = "0.20"
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

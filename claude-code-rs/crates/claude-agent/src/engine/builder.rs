@@ -213,6 +213,13 @@ impl QueryEngineBuilder {
             }
         }
 
+        // Register Swarm tools if enabled via environment variable
+        if std::env::var("CLAUDE_CODE_SWARM").unwrap_or_default() == "1" {
+            let default_model = self.model.as_deref().unwrap_or("claude-sonnet-4-20250514");
+            let default_cwd = self.cwd.to_string_lossy();
+            crate::swarm_bridge::register_swarm_tools(&mut registry, default_model, &default_cwd);
+        }
+
         let permission_checker = Arc::new(self.permission_checker);
 
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
