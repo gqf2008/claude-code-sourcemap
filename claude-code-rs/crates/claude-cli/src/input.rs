@@ -12,7 +12,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal,
     execute,
 };
@@ -141,6 +141,13 @@ impl InputReader {
 
         loop {
             let evt = event::read()?;
+
+            // Skip key-release events — Windows crossterm fires both Press and Release,
+            // which would cause every keystroke to be processed twice.
+            if let Event::Key(KeyEvent { kind: KeyEventKind::Release, .. }) = &evt {
+                continue;
+            }
+
             match evt {
                 // ── Shift+Enter or Alt+Enter: insert newline ─────────
                 Event::Key(KeyEvent {
@@ -691,6 +698,9 @@ impl InputReader {
 
         loop {
             let evt = event::read()?;
+            if let Event::Key(KeyEvent { kind: KeyEventKind::Release, .. }) = &evt {
+                continue;
+            }
             match evt {
                 // Typing narrows the search
                 Event::Key(KeyEvent {

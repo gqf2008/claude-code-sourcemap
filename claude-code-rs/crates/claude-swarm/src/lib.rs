@@ -21,6 +21,7 @@
 
 pub mod actors;
 pub mod bridge;
+pub mod session;
 pub mod conflict;
 pub mod helpers;
 pub mod messages;
