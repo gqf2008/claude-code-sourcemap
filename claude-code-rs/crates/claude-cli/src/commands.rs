@@ -363,6 +363,8 @@ const HELP_TEXT_BASE: &str = "\
   /session list      List saved sessions
   /session load <q>  Resume session (ID prefix or keyword search)
   /session delete <id> Delete a saved session
+  /summary           Generate a conversation summary
+  /rename <name>     Rename current session
   /export [format]   Export session (markdown or json)
   /memory list       List memory files
   /memory open <f>   Open a memory file
@@ -380,6 +382,8 @@ const HELP_TEXT_BASE: &str = "\
 
 \x1b[1mTips\x1b[0m
   • End a line with \\ to continue on the next line (multiline)
+  • Shift+Enter or Alt+Enter to insert a newline
+  • Ctrl+R to search command history
   • Attach images: type @path/to/image.png on its own line
   • Use --resume to restore the most recent session on startup
   • Use --init to create CLAUDE.md and project scaffolding";

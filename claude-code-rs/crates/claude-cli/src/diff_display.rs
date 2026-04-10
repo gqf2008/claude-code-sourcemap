@@ -1,20 +1,65 @@
 //! Structured diff display with syntax highlighting.
 //!
-//! Renders unified diffs with red/green coloring and optional word-level highlighting.
+//! Renders unified diffs with red/green coloring and optional syntax-aware highlighting.
 //! Used by `/review`, permission dialogs, and file edit previews.
 use similar::{ChangeTag, TextDiff};
 use std::io::Write;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::util::as_24_bit_terminal_escaped;
 
-/// Display a unified diff between two strings with colored output.
+/// Lazy-initialized syntax highlighting resources.
+struct SyntaxRes {
+    ss: SyntaxSet,
+    ts: ThemeSet,
+}
+
+impl SyntaxRes {
+    fn get() -> &'static Self {
+        use std::sync::OnceLock;
+        static INSTANCE: OnceLock<SyntaxRes> = OnceLock::new();
+        INSTANCE.get_or_init(|| SyntaxRes {
+            ss: SyntaxSet::load_defaults_newlines(),
+            ts: ThemeSet::load_defaults(),
+        })
+    }
+}
+
+/// Highlight a single line using syntect for the given syntax reference.
+fn highlight_line(line: &str, hl: &mut HighlightLines, ss: &SyntaxSet) -> String {
+    let line_nl = if line.ends_with('\n') {
+        line.to_string()
+    } else {
+        format!("{}\n", line)
+    };
+    match hl.highlight_line(&line_nl, ss) {
+        Ok(ranges) => as_24_bit_terminal_escaped(&ranges, false),
+        Err(_) => line.to_string(),
+    }
+}
+
+/// Display a unified diff between two strings with colored + syntax-highlighted output.
 ///
 /// Red (`-`) for removed lines, green (`+`) for added lines, dim for context.
-/// Includes a header with the file path if provided.
+/// When a file path is given, attempts syntax highlighting for the language.
 pub fn print_diff(old: &str, new: &str, file_path: Option<&str>) {
     let diff = TextDiff::from_lines(old, new);
 
     if let Some(path) = file_path {
         eprintln!("\x1b[1;34m── {} ──\x1b[0m", path);
     }
+
+    // Try to get syntax highlighter from file extension
+    let res = SyntaxRes::get();
+    let syntax: Option<&SyntaxReference> = file_path
+        .and_then(|p| std::path::Path::new(p).extension())
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| res.ss.find_syntax_by_extension(ext));
+
+    let theme = &res.ts.themes["base16-ocean.dark"];
+    let mut hl_old = syntax.map(|s| HighlightLines::new(s, theme));
+    let mut hl_new = syntax.map(|s| HighlightLines::new(s, theme));
 
     for group in diff.grouped_ops(3) {
         // Hunk header
@@ -32,15 +77,41 @@ pub fn print_diff(old: &str, new: &str, file_path: Option<&str>) {
 
         for op in &group {
             for change in diff.iter_changes(op) {
-                let (sign, color) = match change.tag() {
-                    ChangeTag::Delete => ('-', "\x1b[31m"),   // red
-                    ChangeTag::Insert => ('+', "\x1b[32m"),   // green
-                    ChangeTag::Equal => (' ', "\x1b[2m"),     // dim
-                };
                 let line = change.value();
-                // Print without trailing newline from the value itself
                 let trimmed = line.strip_suffix('\n').unwrap_or(line);
-                eprintln!("{}{} {}\x1b[0m", color, sign, trimmed);
+
+                match change.tag() {
+                    ChangeTag::Delete => {
+                        if let Some(ref mut hl) = hl_old {
+                            let highlighted = highlight_line(trimmed, hl, &res.ss);
+                            eprint!("\x1b[41m\x1b[97m-\x1b[0m ");
+                            eprintln!("{}\x1b[0m", highlighted.trim_end());
+                        } else {
+                            eprintln!("\x1b[31m- {}\x1b[0m", trimmed);
+                        }
+                    }
+                    ChangeTag::Insert => {
+                        if let Some(ref mut hl) = hl_new {
+                            let highlighted = highlight_line(trimmed, hl, &res.ss);
+                            eprint!("\x1b[42m\x1b[97m+\x1b[0m ");
+                            eprintln!("{}\x1b[0m", highlighted.trim_end());
+                        } else {
+                            eprintln!("\x1b[32m+ {}\x1b[0m", trimmed);
+                        }
+                    }
+                    ChangeTag::Equal => {
+                        if let Some(ref mut hl) = hl_new {
+                            let highlighted = highlight_line(trimmed, hl, &res.ss);
+                            // Also advance old highlighter to keep state in sync
+                            if let Some(ref mut hl_o) = hl_old {
+                                let _ = highlight_line(trimmed, hl_o, &res.ss);
+                            }
+                            eprintln!("\x1b[2m  {}\x1b[0m", highlighted.trim_end());
+                        } else {
+                            eprintln!("\x1b[2m  {}\x1b[0m", trimmed);
+                        }
+                    }
+                }
             }
         }
     }
