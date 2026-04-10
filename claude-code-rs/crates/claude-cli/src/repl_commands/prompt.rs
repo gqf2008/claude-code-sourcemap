@@ -448,6 +448,18 @@ pub(crate) async fn handle_bug(engine: &QueryEngine, custom_prompt: &str, cwd: &
     }
 }
 
+/// /summary — ask the model to summarize the conversation so far.
+pub(crate) async fn handle_summary(engine: &QueryEngine) {
+    let prompt = "Please provide a concise summary of our conversation so far, \
+        including the key topics discussed, decisions made, and any pending items or next steps.";
+    println!("\x1b[35m[Summary]\x1b[0m Generating conversation summary…");
+    let model = { engine.state().read().await.model.clone() };
+    let stream = engine.submit(prompt).await;
+    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), None).await {
+        eprintln!("\x1b[31mSummary error: {}\x1b[0m", e);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -53,6 +53,10 @@ pub enum SlashCommand {
     Fast { toggle: String },
     /// Add context directory at runtime.
     AddDir { path: String },
+    /// Generate a session summary.
+    Summary,
+    /// Rename current session.
+    Rename { name: String },
     Exit,
     Unknown(String),
 }
@@ -109,6 +113,8 @@ impl SlashCommand {
             "rewind" => Self::Rewind { turns: args },
             "fast" => Self::Fast { toggle: args },
             "add-dir" | "adddir" => Self::AddDir { path: args },
+            "summary" => Self::Summary,
+            "rename" => Self::Rename { name: args },
             "exit" | "quit" => Self::Exit,
             name => {
                 // Check if it matches a loaded skill
@@ -219,6 +225,8 @@ impl SlashCommand {
             Self::Rewind { turns } => CommandResult::Rewind { turns: turns.clone() },
             Self::Fast { toggle } => CommandResult::Fast { toggle: toggle.clone() },
             Self::AddDir { path } => CommandResult::AddDir { path: path.clone() },
+            Self::Summary => CommandResult::Summary,
+            Self::Rename { name } => CommandResult::Rename { name: name.clone() },
             Self::Exit => CommandResult::Exit,
             Self::Unknown(cmd) => {
                 CommandResult::Print(format!("Unknown command: /{}. Type /help.", cmd))
@@ -278,6 +286,10 @@ pub enum CommandResult {
     Fast { toggle: String },
     /// Add context directory at runtime (/add-dir <path>).
     AddDir { path: String },
+    /// Generate a summary of the current conversation (/summary).
+    Summary,
+    /// Rename the current session (/rename <name>).
+    Rename { name: String },
     Exit,
 }
 

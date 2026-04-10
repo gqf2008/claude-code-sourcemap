@@ -29,7 +29,7 @@ pub(crate) use session::{handle_session_command, handle_undo, handle_export, han
 pub(crate) use config::{handle_config_command, handle_context, handle_login, handle_logout, handle_reload_context};
 pub(crate) use doctor::handle_doctor;
 pub(crate) use review::handle_review;
-pub(crate) use prompt::{handle_init, handle_commit, handle_pr, handle_bug, handle_commit_push_pr};
+pub(crate) use prompt::{handle_init, handle_commit, handle_pr, handle_bug, handle_commit_push_pr, handle_summary};
 pub(crate) use skill::run_skill;
 pub(crate) use mcp::handle_mcp_command;
 pub(crate) use pr_comments::handle_pr_comments;

@@ -540,6 +540,19 @@ pub async fn run(
                                     dir_path.display(),
                                 );
                             }
+                            CommandResult::Summary => {
+                                handle_summary(&engine).await;
+                            }
+                            CommandResult::Rename { name } => {
+                                if name.is_empty() {
+                                    println!("{}Usage: /rename <new name>\x1b[0m", theme::c_warn());
+                                } else {
+                                    match engine.rename_session(&name).await {
+                                        Ok(_) => println!("{}✓ Session renamed to '{}'\x1b[0m", theme::c_ok(), name),
+                                        Err(e) => eprintln!("{}Rename failed: {}\x1b[0m", theme::c_err(), e),
+                                    }
+                                }
+                            }
                         }
                     }
                     continue;

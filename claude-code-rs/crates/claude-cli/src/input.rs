@@ -24,6 +24,8 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
     "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
     "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
+    "/fast", "/add-dir", "/summary", "/rename", "/agents", "/theme", "/plan",
+    "/think", "/break-cache", "/rewind",
 ];
 
 /// Continuation prompt for multiline input.
@@ -244,6 +246,36 @@ impl InputReader {
                     redraw_buffer(&mut stdout, prompt, &lines)?;
                 }
 
+                // ── Ctrl+R: reverse history search ───────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('r'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(found) = self.reverse_search(&mut stdout)? {
+                        lines = found.split('\n').map(String::from).collect();
+                        hist_idx = self.history.iter().position(|h| h == &found)
+                            .unwrap_or(self.history.len());
+                    }
+                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                }
+
+                // ── Ctrl+A: move cursor to start of line ─────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('a'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                }
+
+                // ── Home key ─────────────────────────────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Home, ..
+                }) => {
+                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                }
+
                 // ── Backspace ────────────────────────────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Backspace,
@@ -415,6 +447,118 @@ impl InputReader {
                 _ => {} // Ignore resize, mouse, focus events
             }
         }
+    }
+
+    /// Interactive reverse history search (Ctrl+R).
+    ///
+    /// Displays `(reverse-i-search)`query`: result` and incrementally filters
+    /// history. Returns `Some(entry)` if user selects, `None` if cancelled.
+    fn reverse_search(&self, stdout: &mut io::Stdout) -> io::Result<Option<String>> {
+        let mut query = String::new();
+        let mut match_idx: Option<usize> = None;
+
+        self.draw_search_prompt(stdout, &query, match_idx)?;
+
+        loop {
+            let evt = event::read()?;
+            match evt {
+                // Typing narrows the search
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers,
+                    ..
+                }) if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    query.push(c);
+                    match_idx = self.find_reverse_match(&query, match_idx);
+                    self.draw_search_prompt(stdout, &query, match_idx)?;
+                }
+
+                // Backspace narrows less
+                Event::Key(KeyEvent { code: KeyCode::Backspace, .. }) => {
+                    query.pop();
+                    match_idx = if query.is_empty() {
+                        None
+                    } else {
+                        self.find_reverse_match(&query, None)
+                    };
+                    self.draw_search_prompt(stdout, &query, match_idx)?;
+                }
+
+                // Ctrl+R again: find next (older) match
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('r'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    if !query.is_empty() {
+                        let next_start = match_idx.and_then(|i| if i > 0 { Some(i - 1) } else { None });
+                        if let Some(start) = next_start {
+                            match_idx = self.find_reverse_match_from(&query, start);
+                        }
+                        self.draw_search_prompt(stdout, &query, match_idx)?;
+                    }
+                }
+
+                // Enter: accept the match
+                Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
+                    // Clear search line
+                    write!(stdout, "\r\x1b[K")?;
+                    stdout.flush()?;
+                    return Ok(match_idx.map(|i| self.history[i].clone()));
+                }
+
+                // Escape / Ctrl+C / Ctrl+G: cancel
+                Event::Key(KeyEvent { code: KeyCode::Esc, .. })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('c') | KeyCode::Char('g'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    write!(stdout, "\r\x1b[K")?;
+                    stdout.flush()?;
+                    return Ok(None);
+                }
+
+                _ => {}
+            }
+        }
+    }
+
+    /// Draw the reverse search prompt line.
+    fn draw_search_prompt(
+        &self,
+        stdout: &mut io::Stdout,
+        query: &str,
+        match_idx: Option<usize>,
+    ) -> io::Result<()> {
+        let display = match match_idx {
+            Some(i) => {
+                let entry = &self.history[i];
+                // Show first line only for multi-line entries
+                entry.lines().next().unwrap_or("")
+            }
+            None if query.is_empty() => "",
+            None => "(no match)",
+        };
+        write!(
+            stdout,
+            "\r\x1b[K\x1b[33m(reverse-i-search)\x1b[0m`\x1b[1m{query}\x1b[0m': {display}"
+        )?;
+        stdout.flush()
+    }
+
+    /// Find the most recent history entry containing `query`, searching backwards.
+    fn find_reverse_match(&self, query: &str, _current: Option<usize>) -> Option<usize> {
+        let q = query.to_lowercase();
+        self.history.iter().rposition(|entry| entry.to_lowercase().contains(&q))
+    }
+
+    /// Find match starting from a specific index (for Ctrl+R repeat).
+    fn find_reverse_match_from(&self, query: &str, start: usize) -> Option<usize> {
+        let q = query.to_lowercase();
+        (0..=start).rev().find(|&i| self.history[i].to_lowercase().contains(&q))
     }
 }
 
