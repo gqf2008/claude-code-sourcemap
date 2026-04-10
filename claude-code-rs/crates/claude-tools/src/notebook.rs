@@ -73,7 +73,7 @@ impl Tool for NotebookEditTool {
             return Ok(ToolResult::error("File must be a .ipynb notebook"));
         }
 
-        let path = match path_util::resolve_path(notebook_path, &context.cwd) {
+        let path = match path_util::resolve_path_safe(notebook_path, &context.cwd) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };

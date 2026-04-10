@@ -40,7 +40,7 @@ impl Tool for GlobTool {
         }
 
         let search_dir = match input["path"].as_str() {
-            Some(p) => match path_util::resolve_path(p, &context.cwd) {
+            Some(p) => match path_util::resolve_path_safe(p, &context.cwd) {
                 Ok(resolved) => resolved,
                 Err(e) => return Ok(ToolResult::error(format!("{e}"))),
             },

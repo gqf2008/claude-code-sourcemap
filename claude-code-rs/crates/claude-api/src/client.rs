@@ -112,6 +112,17 @@ impl ApiClient {
             .and_then(|s| s.parse::<u64>().ok())
     }
 
+    /// Extract rate limit metadata from response headers.
+    fn extract_rate_limit(headers: &reqwest::header::HeaderMap) -> Option<crate::retry::RateLimitInfo> {
+        let pairs: Vec<(String, String)> = headers.iter()
+            .filter_map(|(k, v)| {
+                let key = k.as_str().to_string();
+                v.to_str().ok().map(|val| (key, val.to_string()))
+            })
+            .collect();
+        crate::retry::RateLimitInfo::from_headers(&pairs)
+    }
+
     /// Quick connectivity check: send a minimal request to verify the API key
     /// and network. Returns `Ok(model_name)` on success, or an error describing
     /// the problem (auth, network, etc.).
@@ -179,8 +190,9 @@ impl ApiClient {
                     if !response.status().is_success() {
                         let status = response.status().as_u16();
                         let retry_after = Self::parse_retry_after(response.headers());
+                        let rate_limit_info = Self::extract_rate_limit(response.headers());
                         let body = response.text().await.unwrap_or_default();
-                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info: None });
+                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info });
                     }
 
                     response.json::<MessagesResponse>().await.map_err(|e| ApiHttpError {
@@ -256,8 +268,9 @@ impl ApiClient {
                     if !response.status().is_success() {
                         let status = response.status().as_u16();
                         let retry_after = Self::parse_retry_after(response.headers());
+                        let rate_limit_info = Self::extract_rate_limit(response.headers());
                         let body = response.text().await.unwrap_or_default();
-                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info: None });
+                        return Err(ApiHttpError { status, body, retry_after, rate_limit_info });
                     }
 
                     Ok(response)

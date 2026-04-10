@@ -149,7 +149,7 @@ impl Tool for FileReadTool {
             }
         }
 
-        let path = match path_util::resolve_path(file_path, &context.cwd) {
+        let path = match path_util::resolve_path_safe(file_path, &context.cwd) {
             Ok(p) => p,
             Err(e) => {
                 warn!(file_path, error = %e, "Path resolution rejected");

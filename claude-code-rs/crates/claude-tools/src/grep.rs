@@ -93,7 +93,7 @@ impl Tool for GrepTool {
         let search_path: PathBuf = match input["path"].as_str() {
             Some(p) => {
                 // Validate path stays within project boundary
-                crate::path_util::resolve_path(p, &context.cwd)?
+                crate::path_util::resolve_path_safe(p, &context.cwd)?
             }
             None => context.cwd.clone(),
         };

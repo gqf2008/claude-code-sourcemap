@@ -20,6 +20,18 @@ static PROJECT_ROOT_CACHE: Mutex<Option<(PathBuf, Option<PathBuf>)>> = Mutex::ne
 /// Returns the resolved path. Does NOT require the file to exist (for write/create operations).
 /// Validates that the resolved path does not escape the project root (git root or cwd).
 pub fn resolve_path(file_path: &str, cwd: &Path) -> anyhow::Result<PathBuf> {
+    resolve_path_inner(file_path, cwd, false)
+}
+
+/// Like `resolve_path`, but additionally checks symlink targets for existing files.
+///
+/// Use this for read operations where the file should exist. If the path is a
+/// symlink whose target escapes the project boundary, returns an error.
+pub fn resolve_path_safe(file_path: &str, cwd: &Path) -> anyhow::Result<PathBuf> {
+    resolve_path_inner(file_path, cwd, true)
+}
+
+fn resolve_path_inner(file_path: &str, cwd: &Path, check_symlink: bool) -> anyhow::Result<PathBuf> {
     let p = Path::new(file_path);
     let path = if p.is_absolute() {
         p.to_path_buf()
@@ -42,6 +54,11 @@ pub fn resolve_path(file_path: &str, cwd: &Path) -> anyhow::Result<PathBuf> {
             file_path,
             boundary_normalized.display()
         );
+    }
+
+    // For existing files, verify symlinks don't escape the boundary
+    if check_symlink && normalized.exists() && normalized.is_symlink() {
+        resolve_symlink_safe(&normalized, &boundary_normalized)?;
     }
 
     Ok(normalized)

@@ -43,7 +43,7 @@ impl Tool for LsTool {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
-        let dir = match path_util::resolve_path(raw_path, &context.cwd) {
+        let dir = match path_util::resolve_path_safe(raw_path, &context.cwd) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(format!("{e}"))),
         };
