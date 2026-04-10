@@ -12,6 +12,8 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
 walkdir = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }

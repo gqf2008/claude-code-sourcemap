@@ -5,6 +5,7 @@ use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
 use claude_bus::bus::ClientHandle;
 use claude_bus::events::AgentRequest;
+use claude_core::file_watcher::ConfigWatcher;
 
 use crate::commands::{CommandResult, SlashCommand};
 use crate::config;
@@ -24,32 +25,6 @@ async fn recv_with_timeout(
     match tokio::time::timeout(timeout, client.recv_notification()).await {
         Ok(Some(n)) => Some(n),
         Ok(None) | Err(_) => None,
-    }
-}
-
-/// Snapshot of config file modification times for auto-reload detection.
-struct ConfigMtimes {
-    claude_md: Option<std::time::SystemTime>,
-    settings: Option<std::time::SystemTime>,
-}
-
-impl ConfigMtimes {
-    fn capture(cwd: &std::path::Path) -> Self {
-        Self {
-            claude_md: Self::mtime(&cwd.join("CLAUDE.md")),
-            settings: claude_core::config::settings_path()
-                .and_then(|p| Self::mtime(&p)),
-        }
-    }
-
-    fn mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
-        std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
-    }
-
-    /// Returns true if any watched file has changed since the last snapshot.
-    fn changed_since(&self, cwd: &std::path::Path) -> bool {
-        let current = Self::capture(cwd);
-        self.claude_md != current.claude_md || self.settings != current.settings
     }
 }
 
@@ -84,8 +59,8 @@ pub async fn run(
         rl.load_history(path);
     }
 
-    // Track config file modification times for auto-reload
-    let mut config_mtimes = ConfigMtimes::capture(&cwd);
+    // Start real-time config file watcher (CLAUDE.md + settings.json)
+    let mut config_watcher = ConfigWatcher::start(&cwd).ok();
 
     // Session start time for /stats display
     let session_start = std::time::Instant::now();
@@ -811,11 +786,27 @@ pub async fn run(
                     }
                 }
 
-                // Auto-reload config if files changed on disk
-                if config_mtimes.changed_since(&cwd) {
-                    println!("\x1b[2m[Config changed on disk — reloading…]\x1b[0m");
-                    handle_reload_context(&engine, &cwd).await;
-                    config_mtimes = ConfigMtimes::capture(&cwd);
+                // Auto-reload config if watcher detected changes
+                if let Some(ref mut watcher) = config_watcher {
+                    let changes = watcher.drain();
+                    if !changes.is_empty() {
+                        let changed_files: Vec<String> = changes
+                            .iter()
+                            .map(|e| match e {
+                                claude_core::file_watcher::ConfigChangeEvent::ClaudeMd(p) => {
+                                    format!("CLAUDE.md ({})", p.display())
+                                }
+                                claude_core::file_watcher::ConfigChangeEvent::Settings(p) => {
+                                    format!("settings.json ({})", p.display())
+                                }
+                            })
+                            .collect();
+                        println!(
+                            "\x1b[2m[Config changed: {} — reloading…]\x1b[0m",
+                            changed_files.join(", ")
+                        );
+                        handle_reload_context(&engine, &cwd).await;
+                    }
                 }
 
                 let model = { engine.state().read().await.model.clone() };

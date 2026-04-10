@@ -27,3 +27,4 @@ pub mod plugin;
 pub mod cron;
 pub mod cron_tasks;
 pub mod cron_lock;
+pub mod file_watcher;
