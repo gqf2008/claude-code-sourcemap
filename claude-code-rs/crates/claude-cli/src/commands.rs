@@ -274,6 +274,7 @@ const HELP_TEXT_BASE: &str = "\
   /history [page]    Browse conversation turns
   /retry             Retry the last failed prompt (alias: /redo)
   /cost              Show token usage and costs
+  /paste             Multi-line paste mode (end with empty line)
   /exit              Exit the CLI
 
 \x1b[1mGit & Code\x1b[0m

@@ -39,7 +39,7 @@ const SLASH_COMMANDS: &[&str] = &[
     "/session", "/diff", "/status", "/permissions", "/config", "/undo",
     "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
     "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
-    "/context", "/export", "/reload-context", "/mcp", "/plugin", "/exit",
+    "/context", "/export", "/reload-context", "/mcp", "/plugin", "/paste", "/exit",
 ];
 
 impl Completer for CommandCompleter {
@@ -293,6 +293,41 @@ pub async fn run(
             Ok(line) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() { continue; }
+
+                // /paste: multi-line input mode (bypasses readline line-splitting)
+                if trimmed == "/paste" {
+                    println!("\x1b[36mPaste mode: enter text, then submit with an empty line.\x1b[0m");
+                    let mut buf = String::new();
+                    loop {
+                        match rl.readline("│ ") {
+                            Ok(ln) if ln.is_empty() => break,
+                            Ok(ln) => {
+                                if !buf.is_empty() { buf.push('\n'); }
+                                buf.push_str(&ln);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let input = buf.trim().to_string();
+                    if input.is_empty() { continue; }
+                    let _ = rl.add_history_entry(&input);
+                    let model = { engine.state().read().await.model.clone() };
+                    let stream = engine.submit(&input).await;
+                    let _esc_guard = spawn_esc_listener(engine.abort_signal());
+                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
+                        if engine.abort_signal().is_aborted() {
+                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
+                            engine.abort_signal().reset();
+                            let _ = engine.save_session().await;
+                            turns_since_save = 0;
+                        } else {
+                            eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                        }
+                    }
+                    print_turn_stats(&engine).await;
+                    turns_since_save += 1;
+                    continue;
+                }
 
                 // Parse slash commands BEFORE multiline expansion
                 if trimmed.starts_with('/') {
