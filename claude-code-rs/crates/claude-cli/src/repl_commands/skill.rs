@@ -2,11 +2,9 @@
 
 use claude_agent::engine::QueryEngine;
 use claude_core::skills::SkillEntry;
-use rustyline::Editor;
-use rustyline::history::DefaultHistory;
 
+use crate::input::{InputReader, InputResult};
 use crate::output::print_stream;
-use crate::repl::CommandCompleter;
 
 /// Run a skill as a single-shot sub-agent conversation.
 pub(crate) async fn run_skill(
@@ -14,7 +12,7 @@ pub(crate) async fn run_skill(
     skills: &[SkillEntry],
     name: &str,
     prompt: &str,
-    rl: &mut Editor<CommandCompleter, DefaultHistory>,
+    rl: &InputReader,
 ) {
     let skill = match skills.iter().find(|s| s.name == name) {
         Some(s) => s,
@@ -22,8 +20,9 @@ pub(crate) async fn run_skill(
     };
 
     let user_prompt: String = if prompt.is_empty() {
-        match rl.readline(&format!("\x1b[1;35m[{}]> \x1b[0m", skill.name)) {
-            Ok(p) if !p.trim().is_empty() => p,
+        let prompt_text = format!("[{}]> ", skill.name);
+        match rl.readline(&prompt_text) {
+            Ok(InputResult::Line(p)) if !p.trim().is_empty() => p,
             _ => return,
         }
     } else {

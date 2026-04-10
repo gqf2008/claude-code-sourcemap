@@ -7,8 +7,8 @@
 //! - Generic confirm / select helpers
 //!
 //! These are intended for structured multi-step interactions.
-//! The main REPL loop continues to use `rustyline` for line editing,
-//! and streaming output uses `crossterm` directly.
+//! The main REPL loop uses `crossterm` for line editing with paste support,
+//! and streaming output also uses `crossterm` directly.
 
 #![allow(dead_code)]
 

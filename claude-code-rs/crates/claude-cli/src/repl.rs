@@ -5,15 +5,10 @@ use claude_agent::engine::QueryEngine;
 use claude_agent::plugin::PluginLoader;
 use claude_bus::bus::ClientHandle;
 use claude_bus::events::AgentRequest;
-use rustyline::completion::{Completer, Pair};
-use rustyline::error::ReadlineError;
-use rustyline::highlight::Highlighter;
-use rustyline::hint::Hinter;
-use rustyline::validate::Validator;
-use rustyline::{Editor, Helper};
 
 use crate::commands::{CommandResult, SlashCommand};
 use crate::config;
+use crate::input::{InputReader, InputResult, history_file_path};
 use crate::output::{print_stream, spawn_esc_listener, OutputRenderer};
 use crate::repl_commands::*;
 
@@ -30,196 +25,6 @@ async fn recv_with_timeout(
         Ok(None) | Err(_) => None,
     }
 }
-
-/// Tab-completion helper for slash commands.
-pub struct CommandCompleter;
-
-const SLASH_COMMANDS: &[&str] = &[
-    "/help", "/clear", "/model", "/compact", "/cost", "/skills", "/memory",
-    "/session", "/diff", "/status", "/permissions", "/config", "/undo",
-    "/review", "/doctor", "/init", "/commit", "/commit-push-pr", "/pr",
-    "/bug", "/search", "/history", "/retry", "/version", "/login", "/logout",
-    "/context", "/export", "/reload-context", "/mcp", "/plugin", "/paste", "/exit",
-];
-
-impl Completer for CommandCompleter {
-    type Candidate = Pair;
-
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &rustyline::Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        // Slash command completion
-        if line.starts_with('/') {
-            let prefix = &line[..pos];
-            let matches: Vec<Pair> = SLASH_COMMANDS
-                .iter()
-                .filter(|cmd| cmd.starts_with(prefix))
-                .map(|cmd| Pair {
-                    display: cmd.to_string(),
-                    replacement: cmd.to_string(),
-                })
-                .collect();
-            return Ok((0, matches));
-        }
-
-        // @file path completion — find the last @ token
-        let before_cursor = &line[..pos];
-        if let Some(at_pos) = before_cursor.rfind('@') {
-            let partial = &before_cursor[at_pos + 1..];
-            if let Ok(completions) = complete_file_path(partial) {
-                return Ok((at_pos, completions));
-            }
-        }
-
-        Ok((0, vec![]))
-    }
-}
-
-/// Complete file paths relative to the current directory.
-/// Returns pairs with @-prefixed display and replacement strings.
-fn complete_file_path(partial: &str) -> std::io::Result<Vec<Pair>> {
-    let (dir, prefix) = if partial.contains('/') || partial.contains('\\') {
-        let p = std::path::Path::new(partial);
-        let parent = p.parent().unwrap_or(std::path::Path::new("."));
-        let file_prefix = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        (parent.to_path_buf(), file_prefix)
-    } else {
-        (std::path::PathBuf::from("."), partial.to_string())
-    };
-
-    // Prevent path traversal outside project root
-    let project_root = std::path::Path::new(".").canonicalize()?;
-    if let Ok(canonical_dir) = dir.canonicalize() {
-        if !canonical_dir.starts_with(&project_root) {
-            return Ok(vec![]);
-        }
-    }
-
-    let mut results = Vec::new();
-    let prefix_lower = prefix.to_lowercase();
-
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue; // skip hidden files
-            }
-            if !name.to_lowercase().starts_with(&prefix_lower) {
-                continue;
-            }
-
-            let full = if dir == std::path::Path::new(".") {
-                name.clone()
-            } else {
-                format!("{}/{}", dir.display(), name).replace('\\', "/")
-            };
-
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let display_name = if is_dir {
-                format!("@{}/", full)
-            } else {
-                format!("@{}", full)
-            };
-            let replacement = display_name.clone();
-
-            results.push(Pair {
-                display: display_name,
-                replacement,
-            });
-        }
-    }
-
-    results.sort_by(|a, b| a.display.cmp(&b.display));
-    if results.len() > 20 {
-        results.truncate(20);
-    }
-    Ok(results)
-}
-
-impl Hinter for CommandCompleter {
-    type Hint = String;
-
-    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
-        if !line.starts_with('/') || pos < line.len() {
-            return None;
-        }
-        // When user types just "/", show a brief command summary as hint
-        if line == "/" {
-            return Some("help  clear  compact  model  cost  skills  status  diff  ...".to_string());
-        }
-        // Find the first matching command and show the remaining text as a hint
-        SLASH_COMMANDS
-            .iter()
-            .find(|cmd| cmd.starts_with(line) && **cmd != line)
-            .map(|cmd| cmd[line.len()..].to_string())
-    }
-}
-
-impl Highlighter for CommandCompleter {
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-        &'s self,
-        prompt: &'p str,
-        _default: bool,
-    ) -> std::borrow::Cow<'b, str> {
-        match prompt {
-            "> " => std::borrow::Cow::Borrowed("\x1b[1;32m> \x1b[0m"),
-            "` " => std::borrow::Cow::Borrowed("\x1b[2m` \x1b[0m"),
-            ". " => std::borrow::Cow::Borrowed("\x1b[2m. \x1b[0m"),
-            _ => std::borrow::Cow::Borrowed(prompt),
-        }
-    }
-
-    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
-        // Show hints in dim grey
-        std::borrow::Cow::Owned(format!("\x1b[2m{}\x1b[0m", hint))
-    }
-
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
-        if line.starts_with('/') {
-            // Slash commands in cyan
-            std::borrow::Cow::Owned(format!("\x1b[36m{}\x1b[0m", line))
-        } else {
-            std::borrow::Cow::Borrowed(line)
-        }
-    }
-
-    fn highlight_char(&self, _line: &str, _pos: usize, _forced: rustyline::highlight::CmdKind) -> bool {
-        true
-    }
-}
-impl Validator for CommandCompleter {
-    fn validate(
-        &self,
-        ctx: &mut rustyline::validate::ValidationContext,
-    ) -> rustyline::Result<rustyline::validate::ValidationResult> {
-        let input = ctx.input();
-        // Slash commands are always single-line — submit immediately
-        if input.starts_with('/') {
-            return Ok(rustyline::validate::ValidationResult::Valid(None));
-        }
-        // Triple-backtick code block: incomplete until closing ```
-        let trimmed = input.trim_start();
-        if let Some(after_open) = trimmed.strip_prefix("```") {
-            // Check if there's a closing ``` on a separate line
-            if !after_open.contains("\n```") {
-                return Ok(rustyline::validate::ValidationResult::Incomplete);
-            }
-        }
-        // Trailing backslash = explicit continuation
-        if input.ends_with('\\') {
-            return Ok(rustyline::validate::ValidationResult::Incomplete);
-        }
-        // Unmatched brackets = auto-continuation
-        if count_bracket_depth(input) > 0 {
-            return Ok(rustyline::validate::ValidationResult::Incomplete);
-        }
-        Ok(rustyline::validate::ValidationResult::Valid(None))
-    }
-}
-impl Helper for CommandCompleter {}
 
 /// Snapshot of config file modification times for auto-reload detection.
 struct ConfigMtimes {
@@ -259,6 +64,7 @@ pub async fn run(
     println!("\x1b[1;34m│  Model: {:<23} │\x1b[0m", display);
     println!("\x1b[1;34m│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
     println!("\x1b[1;34m│  Type /help for commands        │\x1b[0m");
+    println!("\x1b[1;34m│  Shift/Alt+Enter for newline    │\x1b[0m");
     println!("\x1b[1;34m╰─────────────────────────────────╯\x1b[0m\n");
 
     // Lazy-loaded and cached — first call scans disk, subsequent calls O(1)
@@ -268,16 +74,12 @@ pub async fn run(
         println!("\x1b[33mSkills loaded: {}\x1b[0m\n", names.join(", "));
     }
 
-    let config = rustyline::Config::builder()
-        .bracketed_paste(true)
-        .build();
-    let mut rl = Editor::with_config(config)?;
-    rl.set_helper(Some(CommandCompleter));
+    let mut rl = InputReader::new();
 
     // Load persistent history
-    let history_path = history_file_path();
-    if let Some(ref path) = history_path {
-        let _ = rl.load_history(path);
+    let hist_path = history_file_path();
+    if let Some(ref path) = hist_path {
+        rl.load_history(path);
     }
 
     // Track config file modification times for auto-reload
@@ -290,48 +92,13 @@ pub async fn run(
     loop {
         let readline = rl.readline("> ");
         match readline {
-            Ok(line) => {
+            Ok(InputResult::Line(line)) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() { continue; }
 
-                // /paste: multi-line input mode (bypasses readline line-splitting)
-                if trimmed == "/paste" {
-                    println!("\x1b[36mPaste mode: enter text, then submit with an empty line.\x1b[0m");
-                    let mut buf = String::new();
-                    loop {
-                        match rl.readline("│ ") {
-                            Ok(ln) if ln.is_empty() => break,
-                            Ok(ln) => {
-                                if !buf.is_empty() { buf.push('\n'); }
-                                buf.push_str(&ln);
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    let input = buf.trim().to_string();
-                    if input.is_empty() { continue; }
-                    let _ = rl.add_history_entry(&input);
-                    let model = { engine.state().read().await.model.clone() };
-                    let stream = engine.submit(&input).await;
-                    let _esc_guard = spawn_esc_listener(engine.abort_signal());
-                    if let Err(e) = print_stream(stream, &model, Some(engine.cost_tracker()), Some(&engine.abort_signal())).await {
-                        if engine.abort_signal().is_aborted() {
-                            eprintln!("\x1b[33m⏹ Interrupted\x1b[0m");
-                            engine.abort_signal().reset();
-                            let _ = engine.save_session().await;
-                            turns_since_save = 0;
-                        } else {
-                            eprintln!("\x1b[31mError: {}\x1b[0m", e);
-                        }
-                    }
-                    print_turn_stats(&engine).await;
-                    turns_since_save += 1;
-                    continue;
-                }
-
                 // Parse slash commands BEFORE multiline expansion
                 if trimmed.starts_with('/') {
-                    let _ = rl.add_history_entry(trimmed);
+                    rl.add_history(trimmed);
                     // Re-fetch skills each time (cached; refreshed by /reload-context)
                     let skills = claude_core::skills::get_skills(&cwd);
                     if let Some(cmd) = SlashCommand::parse(trimmed, &skills) {
@@ -572,7 +339,7 @@ pub async fn run(
                                 handle_plugin_command(&sub, &cwd);
                             }
                             CommandResult::RunSkill { name, prompt } => {
-                                run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
+                                run_skill(&engine, &skills, &name, &prompt, &rl).await;
                             }
                             CommandResult::RunPluginCommand { name, prompt } => {
                                 handle_plugin_run(&engine, &name, &prompt).await;
@@ -585,14 +352,11 @@ pub async fn run(
                     continue;
                 }
 
-                // Non-slash input: the Validator handles multiline continuation
-                // (trailing backslash, unmatched brackets, code blocks).
-                // rustyline returns the complete buffer once Validator says Valid.
-                // Post-process: strip continuation backslashes.
-                let input = line.replace("\\\n", "\n");
-                let input = input.trim();
+                // Non-slash input: InputReader handles multiline via
+                // Shift+Enter / Alt+Enter / bracketed paste.
+                let input = line.trim();
                 if input.is_empty() { continue; }
-                let _ = rl.add_history_entry(input);
+                rl.add_history(input);
 
                 // Check auto-compact before submitting
                 if engine.should_auto_compact().await {
@@ -755,8 +519,8 @@ pub async fn run(
                     }
                 }
             }
-            Err(ReadlineError::Interrupted) => { println!("^C"); continue; }
-            Err(ReadlineError::Eof) => { println!("Goodbye!"); break; }
+            Ok(InputResult::Interrupted) => { continue; }
+            Ok(InputResult::Eof) => { println!("Goodbye!"); break; }
             Err(err) => {
                 eprintln!("\x1b[31mInput error: {}\x1b[0m", err);
                 break;
@@ -765,8 +529,8 @@ pub async fn run(
     }
 
     // Save persistent history
-    if let Some(ref path) = history_path {
-        let _ = rl.save_history(path);
+    if let Some(ref path) = hist_path {
+        rl.save_history(path);
     }
 
     // Auto-save session on exit (if there's history)
@@ -780,15 +544,6 @@ pub async fn run(
     }
 
     Ok(())
-}
-
-/// Get the path to the persistent history file (~/.claude/history).
-fn history_file_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|home| {
-        let dir = home.join(".claude");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("history")
-    })
 }
 
 /// Display token usage and cost after each turn.
@@ -830,36 +585,6 @@ fn truncate_path(path: &std::path::Path, max_len: usize) -> String {
     let skip = s.chars().count() - max_len + 1;
     let tail: String = s.chars().skip(skip).collect();
     format!("…{}", tail)
-}
-
-/// Count unmatched open brackets in text. Returns positive for unmatched open brackets.
-/// Ignores brackets inside string literals (double-quoted) to avoid false continuations.
-fn count_bracket_depth(s: &str) -> i32 {
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape = false;
-    for ch in s.chars() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if ch == '\\' && in_string {
-            escape = true;
-            continue;
-        }
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if !in_string {
-            match ch {
-                '{' | '[' | '(' => depth += 1,
-                '}' | ']' | ')' => depth -= 1,
-                _ => {}
-            }
-        }
-    }
-    depth
 }
 
 #[cfg(test)]
@@ -908,64 +633,5 @@ mod tests {
         assert!(result.starts_with('…'));
         // Display length matters, not byte length
         assert!(result.chars().count() <= 16);
-    }
-
-    #[test]
-    fn complete_file_path_current_dir() {
-        // Should find at least Cargo.toml in current dir (or wherever tests run)
-        let result = complete_file_path("").unwrap_or_default();
-        // May be empty if run from an unexpected dir, but should not panic
-        assert!(result.len() <= 20); // respects limit
-    }
-
-    #[test]
-    fn complete_file_path_nonexistent() {
-        let result = complete_file_path("zzz_no_such_prefix").unwrap_or_default();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn complete_file_path_skips_hidden() {
-        let result = complete_file_path("").unwrap_or_default();
-        // No entries should start with @.
-        for pair in &result {
-            let after_at = pair.display.strip_prefix('@').unwrap_or(&pair.display);
-            assert!(!after_at.starts_with('.'), "should skip hidden: {}", pair.display);
-        }
-    }
-
-    // ── count_bracket_depth ─────────────────────────────────────────
-
-    #[test]
-    fn bracket_depth_empty() {
-        assert_eq!(count_bracket_depth(""), 0);
-        assert_eq!(count_bracket_depth("hello world"), 0);
-    }
-
-    #[test]
-    fn bracket_depth_balanced() {
-        assert_eq!(count_bracket_depth("fn main() { }"), 0);
-        assert_eq!(count_bracket_depth("[1, 2, 3]"), 0);
-        assert_eq!(count_bracket_depth("(a + b)"), 0);
-    }
-
-    #[test]
-    fn bracket_depth_unmatched_open() {
-        assert_eq!(count_bracket_depth("{"), 1);
-        assert_eq!(count_bracket_depth("fn main() {"), 1);
-        assert_eq!(count_bracket_depth("vec!["), 1);
-        assert_eq!(count_bracket_depth("{ {"), 2);
-    }
-
-    #[test]
-    fn bracket_depth_in_string_ignored() {
-        assert_eq!(count_bracket_depth(r#"let x = "{";"#), 0);
-        assert_eq!(count_bracket_depth(r#""[""#), 0);
-    }
-
-    #[test]
-    fn bracket_depth_negative_ignored() {
-        // Extra closing bracket — depth goes negative but we just return the value
-        assert_eq!(count_bracket_depth("}"), -1);
     }
 }

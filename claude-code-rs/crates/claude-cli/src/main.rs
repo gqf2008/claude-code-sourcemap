@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod init;
+mod input;
 mod repl;
 mod repl_commands;
 mod commands;
