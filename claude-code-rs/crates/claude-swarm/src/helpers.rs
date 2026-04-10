@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
-use super::types::{TeamFile, TeamMember, sanitize_name};
+use crate::types::{TeamFile, TeamMember, sanitize_name};
 
 /// Get the teams root directory: `~/.claude/teams/`.
 pub fn teams_dir() -> Result<PathBuf> {
@@ -173,7 +173,7 @@ pub fn pick_teammate_color(existing_members: &[TeamMember]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::types::{TeamFile, TeamMember, TEAM_LEAD_NAME, format_agent_id};
+    use crate::types::{TeamFile, TeamMember, TEAM_LEAD_NAME, format_agent_id};
 
     fn make_test_team(name: &str) -> TeamFile {
         TeamFile {

@@ -11,11 +11,7 @@ use kameo::Reply;
 use tracing::{debug, info, warn};
 
 use crate::messages::*;
-
-/// Format a deterministic agent ID: `{name}@{team_name}`.
-pub fn format_agent_id(name: &str, team_name: &str) -> String {
-    format!("{name}@{team_name}")
-}
+use crate::types::format_agent_id;
 
 // ── Reply types ──────────────────────────────────────────────────────────
 

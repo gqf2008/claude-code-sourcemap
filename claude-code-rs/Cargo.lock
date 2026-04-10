@@ -614,12 +614,14 @@ dependencies = [
  "claude-core",
  "claude-mcp",
  "claude-tools",
+ "dirs",
  "kameo",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

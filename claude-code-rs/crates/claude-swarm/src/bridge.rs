@@ -19,8 +19,9 @@ type SharedSwarmServer = Arc<SwarmMcpServer>;
 
 /// Register all Swarm tools into the given tool registry.
 ///
-/// Creates a shared `SwarmMcpServer` and registers one `SwarmToolBridge`
-/// per MCP tool definition.
+/// Registers:
+/// 1. MCP bridge tools from `SwarmMcpServer` (actor-based, in-memory)
+/// 2. Direct team management tools (disk-based, persistent)
 pub fn register_swarm_tools(
     registry: &mut claude_tools::ToolRegistry,
     default_model: &str,
@@ -48,7 +49,12 @@ pub fn register_swarm_tools(
         });
     }
 
-    info!(count = tool_count, "Swarm tools registered");
+    // Register disk-based team management tools
+    registry.register(crate::TeamCreateTool);
+    registry.register(crate::TeamDeleteTool);
+    registry.register(crate::TeamStatusTool);
+
+    info!(count = tool_count + 3, "Swarm tools registered");
 }
 
 /// A single swarm tool exposed to the agent.

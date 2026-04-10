@@ -5,7 +5,7 @@ use tracing::info;
 
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 
-use super::helpers;
+use crate::helpers;
 
 /// Tool for deleting an agent team in coordinator mode.
 pub struct TeamDeleteTool;
@@ -88,7 +88,7 @@ impl Tool for TeamDeleteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::types::*;
+    use crate::types::*;
     use claude_core::permissions::PermissionMode;
     use std::path::PathBuf;
 

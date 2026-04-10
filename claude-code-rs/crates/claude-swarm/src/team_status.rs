@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use claude_core::tool::{Tool, ToolContext, ToolResult};
 
-use super::helpers;
+use crate::helpers;
 
 /// Tool for querying team status and aggregated results.
 pub struct TeamStatusTool;
@@ -139,7 +139,7 @@ pub fn format_team_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::types::*;
+    use crate::types::*;
     use claude_core::permissions::PermissionMode;
     use std::path::PathBuf;
 
