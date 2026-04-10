@@ -134,6 +134,8 @@ impl InputReader {
         let mut lines: Vec<String> = vec![String::new()];
         let mut hist_idx = self.history.len();
         let mut saved_lines: Vec<String> = vec![String::new()];
+        // Cursor position (char index) within the last line
+        let mut cursor: usize = 0;
 
         loop {
             let evt = event::read()?;
@@ -147,6 +149,7 @@ impl InputReader {
                     || modifiers.contains(KeyModifiers::ALT) =>
                 {
                     lines.push(String::new());
+                    cursor = 0;
                     // Move to next line and show continuation prompt
                     write!(stdout, "\r\n{CONT_PROMPT}")?;
                     stdout.flush()?;
@@ -166,6 +169,7 @@ impl InputReader {
                         if last.ends_with('\\') {
                             last.pop(); // remove trailing backslash
                             lines.push(String::new());
+                            cursor = 0;
                             write!(stdout, "\r\n{CONT_PROMPT}")?;
                             stdout.flush()?;
                             continue;
@@ -211,7 +215,8 @@ impl InputReader {
                     if let Some(last) = lines.last_mut() {
                         last.clear();
                     }
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    cursor = 0;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+K: delete from cursor to end of line ────────
@@ -220,12 +225,15 @@ impl InputReader {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Cursor is always at end, so Ctrl+K on last line is a no-op.
-                    // But if multiline, remove all lines after current.
+                    if let Some(last) = lines.last_mut() {
+                        let byte_pos = last.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(last.len());
+                        last.truncate(byte_pos);
+                    }
+                    // Also remove any continuation lines after current
                     if lines.len() > 1 {
                         lines.truncate(1);
-                        redraw_buffer(&mut stdout, prompt, &lines)?;
                     }
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+W: delete last word ─────────────────────────
@@ -235,15 +243,25 @@ impl InputReader {
                     ..
                 }) if modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(last) = lines.last_mut() {
-                        let trimmed = last.trim_end().len();
-                        last.truncate(trimmed);
-                        if let Some(pos) = last.rfind(char::is_whitespace) {
-                            last.truncate(pos + 1);
-                        } else {
-                            last.clear();
+                        // Delete word before cursor
+                        let chars: Vec<char> = last.chars().collect();
+                        let before = &chars[..cursor];
+                        // Skip trailing whitespace
+                        let end = before.len();
+                        let mut pos = end;
+                        while pos > 0 && before[pos - 1].is_whitespace() {
+                            pos -= 1;
                         }
+                        // Skip word chars
+                        while pos > 0 && !before[pos - 1].is_whitespace() {
+                            pos -= 1;
+                        }
+                        // Reconstruct: [0..pos] + [cursor..]
+                        let new_line: String = chars[..pos].iter().chain(chars[cursor..].iter()).collect();
+                        *last = new_line;
+                        cursor = pos;
                     }
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+L: clear screen ─────────────────────────────
@@ -254,7 +272,7 @@ impl InputReader {
                 }) if modifiers.contains(KeyModifiers::CONTROL) => {
                     execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
                     execute!(stdout, crossterm::cursor::MoveTo(0, 0))?;
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+R: reverse history search ───────────────────
@@ -268,7 +286,8 @@ impl InputReader {
                         hist_idx = self.history.iter().position(|h| h == &found)
                             .unwrap_or(self.history.len());
                     }
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+A: move cursor to start of line ─────────────
@@ -277,14 +296,16 @@ impl InputReader {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    cursor = 0;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Home key ─────────────────────────────────────────
                 Event::Key(KeyEvent {
                     code: KeyCode::Home, ..
                 }) => {
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    cursor = 0;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Ctrl+E / End: move to end of line ────────────────
@@ -296,7 +317,54 @@ impl InputReader {
                     modifiers: KeyModifiers::CONTROL,
                     ..
                 }) => {
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                }
+
+                // ── Left arrow: move cursor left ─────────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Left, ..
+                })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('b'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                        write!(stdout, "\x1b[D")?;
+                        stdout.flush()?;
+                    }
+                }
+
+                // ── Right arrow: move cursor right ───────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Right, ..
+                })
+                | Event::Key(KeyEvent {
+                    code: KeyCode::Char('f'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    let line_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    if cursor < line_len {
+                        cursor += 1;
+                        write!(stdout, "\x1b[C")?;
+                        stdout.flush()?;
+                    }
+                }
+
+                // ── Delete key: delete char at cursor ────────────────
+                Event::Key(KeyEvent {
+                    code: KeyCode::Delete, ..
+                }) => {
+                    if let Some(last) = lines.last_mut() {
+                        let line_len = last.chars().count();
+                        if cursor < line_len {
+                            str_remove_char(last, cursor);
+                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                        }
+                    }
                 }
 
                 // ── Backspace ────────────────────────────────────────
@@ -304,20 +372,25 @@ impl InputReader {
                     code: KeyCode::Backspace,
                     ..
                 }) => {
-                    if let Some(last) = lines.last_mut() {
-                        if last.pop().is_some() {
-                            // Single-line optimization: just erase one char
-                            if lines.len() == 1 {
-                                write!(stdout, "\x08 \x08")?;
-                                stdout.flush()?;
-                            } else {
-                                redraw_buffer(&mut stdout, prompt, &lines)?;
-                            }
-                        } else if lines.len() > 1 {
-                            // Empty continuation line: merge up
-                            lines.pop();
-                            redraw_buffer(&mut stdout, prompt, &lines)?;
+                    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    if cursor > 0 && last_len > 0 {
+                        if let Some(last) = lines.last_mut() {
+                            str_remove_char(last, cursor - 1);
                         }
+                        cursor -= 1;
+                        let new_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                        if lines.len() == 1 && cursor == new_len {
+                            // At end of single line: simple erase
+                            write!(stdout, "\x08 \x08")?;
+                            stdout.flush()?;
+                        } else {
+                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                        }
+                    } else if cursor == 0 && lines.len() > 1 {
+                        // At start of continuation line: merge up
+                        lines.pop();
+                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     }
                 }
 
@@ -330,18 +403,18 @@ impl InputReader {
                     && !modifiers.contains(KeyModifiers::ALT) =>
                 {
                     if let Some(last) = lines.last_mut() {
-                        last.push(c);
+                        str_insert_char(last, cursor, c);
+                        cursor += 1;
                     }
-                    // Single-char optimization: just write the char
-                    if lines.len() == 1 {
-                        // If typing a slash command, show hint
+                    let line_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    let at_end = cursor == line_len;
+                    // Single-char optimization: just write the char if at end of single line
+                    if lines.len() == 1 && at_end {
                         let line = &lines[0];
                         if line.starts_with('/') {
-                            // Check for a unique matching command to show as hint
                             if let Some(hint) = get_slash_hint(line) {
                                 let remaining = &hint[line.len()..];
                                 write!(stdout, "{c}\x1b[2m{remaining}\x1b[0m")?;
-                                // Move cursor back to end of actual input
                                 let back = remaining.len();
                                 if back > 0 {
                                     write!(stdout, "\x1b[{back}D")?;
@@ -354,8 +427,7 @@ impl InputReader {
                         }
                         stdout.flush()?;
                     } else {
-                        write!(stdout, "{c}")?;
-                        stdout.flush()?;
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     }
                 }
 
@@ -374,13 +446,14 @@ impl InputReader {
                                 .collect();
                             if matches.len() == 1 {
                                 lines[0] = format!("{} ", matches[0]);
-                                redraw_buffer(&mut stdout, prompt, &lines)?;
+                                cursor = lines[0].chars().count();
+                                redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                             } else if matches.len() > 1 {
                                 write!(stdout, "\r\n")?;
                                 for m in &matches {
                                     write!(stdout, "  \x1b[36m{m}\x1b[0m\r\n")?;
                                 }
-                                redraw_buffer(&mut stdout, prompt, &lines)?;
+                                redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                             }
                         } else if let Some(at_pos) = buf.rfind('@') {
                             // @file path completion
@@ -389,13 +462,14 @@ impl InputReader {
                                 if completions.len() == 1 {
                                     let completed = format!("{}@{}", &buf[..at_pos], completions[0]);
                                     lines[0] = completed;
-                                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                                    cursor = lines[0].chars().count();
+                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                                 } else if completions.len() > 1 {
                                     write!(stdout, "\r\n")?;
                                     for c in &completions {
                                         write!(stdout, "  \x1b[33m@{c}\x1b[0m\r\n")?;
                                     }
-                                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                                 }
                             }
                         }
@@ -420,7 +494,8 @@ impl InputReader {
                             .split('\n')
                             .map(String::from)
                             .collect();
-                        redraw_buffer(&mut stdout, prompt, &lines)?;
+                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     }
                 }
 
@@ -443,7 +518,8 @@ impl InputReader {
                                 .map(String::from)
                                 .collect();
                         }
-                        redraw_buffer(&mut stdout, prompt, &lines)?;
+                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     }
                 }
 
@@ -457,6 +533,7 @@ impl InputReader {
                     for pl in &paste_lines[1..] {
                         lines.push(pl.to_string());
                     }
+                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
                     if paste_lines.len() > 1 {
                         let count = lines.len();
                         write!(
@@ -464,7 +541,7 @@ impl InputReader {
                             "\r\n\x1b[36m[Pasted {count} lines — Enter to submit, Shift+Enter to add more]\x1b[0m\r\n"
                         )?;
                     }
-                    redraw_buffer(&mut stdout, prompt, &lines)?;
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
                 // ── Escape: cancel multiline (revert to single empty line) ──
@@ -473,7 +550,8 @@ impl InputReader {
                 }) => {
                     if lines.len() > 1 || !lines[0].is_empty() {
                         lines = vec![String::new()];
-                        redraw_buffer(&mut stdout, prompt, &lines)?;
+                        cursor = 0;
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     }
                 }
 
@@ -672,8 +750,20 @@ fn complete_file_path(partial: &str) -> Option<Vec<String>> {
     Some(results)
 }
 
+/// Insert a char at a character position in a string.
+fn str_insert_char(s: &mut String, pos: usize, c: char) {
+    let byte_pos = s.char_indices().nth(pos).map(|(i, _)| i).unwrap_or(s.len());
+    s.insert(byte_pos, c);
+}
+
+/// Remove a char at a character position from a string and return it.
+fn str_remove_char(s: &mut String, pos: usize) -> Option<char> {
+    let byte_pos = s.char_indices().nth(pos).map(|(i, _)| i)?;
+    Some(s.remove(byte_pos))
+}
+
 /// Redraw the entire multiline buffer.
-fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String]) -> io::Result<()> {
+fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String], cursor: usize) -> io::Result<()> {
     // Move cursor to start of first line: go up (lines.len() - 1) then to column 0
     let total = lines.len();
     if total > 1 {
@@ -701,6 +791,14 @@ fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String]) -> io:
             write!(stdout, "\r\n")?;
         }
     }
+
+    // Position cursor: it's on the last line now. Move it to the right column.
+    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+    if cursor < last_len {
+        let back = last_len - cursor;
+        write!(stdout, "\x1b[{back}D")?;
+    }
+
     stdout.flush()
 }
 
