@@ -61,6 +61,9 @@ pub mod cron_create;
 pub mod cron_list;
 pub mod cron_delete;
 
+// ── Workflow scripting ───────────────────────────────────────────────────────
+pub mod workflow;
+
 // ── MCP (Model Context Protocol) ────────────────────────────────────────────
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -132,7 +135,7 @@ pub fn tool_category(name: &str) -> ToolCategory {
         | "EnterPlanMode" | "ExitPlanMode" => ToolCategory::Agent,
 
         "TodoWrite" | "TodoRead" | "Config" | "ContextInspect"
-        | "Verify" | "Sleep"
+        | "Verify" | "Sleep" | "Workflow"
         | "CronCreate" | "CronList" | "CronDelete" => ToolCategory::Management,
 
         _ => ToolCategory::Mcp, // MCP proxy tools and unknown
@@ -265,6 +268,9 @@ impl ToolRegistry {
         registry.register(cron_create::CronCreateTool);
         registry.register(cron_list::CronListTool);
         registry.register(cron_delete::CronDeleteTool);
+
+        // Workflow scripting (always included)
+        registry.register(workflow::WorkflowTool);
 
         // MCP resource tools require a manager — use register_mcp() to add them
         registry
