@@ -54,6 +54,7 @@ indicatif = "0.18.4"
 unicode-width = "0.2"
 arboard = "3"
 png = "0.17"
+rustyline = { version = "15", features = ["with-file-history"] }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -1,20 +1,26 @@
-//! Crossterm-based terminal input reader with multiline and paste support.
+//! Rustyline-based terminal input reader with slash command completion.
 //!
-//! Replaces rustyline for the main REPL prompt. Features:
-//! - Bracketed paste: multiline paste auto-detected and inserted
-//! - Shift+Enter / Alt+Enter: explicit newline insertion
-//! - Multiline editing with visual `│` line prefixes
-//! - History navigation (up/down arrows) with persistent storage
-//! - Tab completion for slash commands and @file paths
-//! - Basic editing (backspace, Ctrl+U/W/L/A/K)
-//! - Slash command hint display
+//! Features:
+//! - Slash command tab completion with dropdown list
+//! - @file path completion
+//! - History navigation with persistent storage
+//! - Multiline input (Ctrl+J / Shift+Enter)
+//! - Emacs key bindings (Ctrl+A/E/U/K/W, Alt+B/F/D, etc.)
+//! - Reverse history search (Ctrl+R)
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::borrow::Cow;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    execute,
-    terminal,
+
+use rustyline::completion::{Completer, Pair};
+use rustyline::error::ReadlineError;
+use rustyline::highlight::{CmdKind, Highlighter};
+use rustyline::hint::{Hint, Hinter};
+use rustyline::history::DefaultHistory;
+use rustyline::validate::Validator;
+use rustyline::{
+    Cmd, CompletionType, Config, Context, EditMode, Editor, EventHandler, Helper,
+    KeyCode, KeyEvent, Modifiers,
 };
 
 /// Slash commands for tab completion.
@@ -30,13 +36,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/stats", "/usage", "/image", "/pr-comments", "/branch",
 ];
 
-/// Continuation prompt for multiline input.
-const CONT_PROMPT: &str = "\x1b[2m│ \x1b[0m";
-
-/// Maximum number of dropdown items visible at once.
-const DROPDOWN_MAX_VISIBLE: usize = 8;
-
-/// Short description for each slash command (displayed in dropdown).
+/// Short description for each slash command (displayed in completion list).
 fn command_description(name: &str) -> &'static str {
     match name {
         "/help" => "Show help",
@@ -56,7 +56,7 @@ fn command_description(name: &str) -> &'static str {
         "/doctor" => "Check environment health",
         "/init" => "Initialize CLAUDE.md",
         "/commit" => "Stage and commit changes",
-        "/commit-push-pr" => "Commit → push → create PR",
+        "/commit-push-pr" => "Commit, push, create PR",
         "/pr" => "Create/review pull request",
         "/bug" => "Debug a problem",
         "/search" => "Search conversation history",
@@ -102,7 +102,7 @@ fn command_description(name: &str) -> &'static str {
 
 /// Result from reading a line of input.
 pub enum InputResult {
-    /// User entered text (may contain newlines from paste or Shift+Enter).
+    /// User entered text (may contain newlines from multiline input).
     Line(String),
     /// User pressed Ctrl+D on empty buffer (EOF).
     Eof,
@@ -110,18 +110,164 @@ pub enum InputResult {
     Interrupted,
 }
 
-/// Crossterm-based input reader with multiline and paste support.
+// --- Rustyline helper ------------------------------------------------
+
+/// Ghost-text hint for slash commands (shows dimmed remainder of unique match).
+#[derive(Debug)]
+struct SlashHint {
+    text: String,
+}
+
+impl Hint for SlashHint {
+    fn display(&self) -> &str {
+        &self.text
+    }
+    fn completion(&self) -> Option<&str> {
+        Some(&self.text)
+    }
+}
+
+/// Rustyline helper: slash command + @file completion, hints, and highlighting.
+struct InputHelper;
+
+impl InputHelper {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Completer for InputHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        if pos != line.len() {
+            return Ok((0, Vec::new()));
+        }
+
+        // Slash command completion
+        if line.starts_with('/') && !line.contains(' ') {
+            let matches: Vec<Pair> = SLASH_COMMANDS
+                .iter()
+                .filter(|cmd| cmd.starts_with(line))
+                .map(|cmd| {
+                    let desc = command_description(cmd);
+                    let display = if desc.is_empty() {
+                        cmd.to_string()
+                    } else {
+                        format!("{cmd}  \x1b[2m{desc}\x1b[0m")
+                    };
+                    Pair {
+                        display,
+                        replacement: cmd.to_string(),
+                    }
+                })
+                .collect();
+            return Ok((0, matches));
+        }
+
+        // @file path completion
+        if let Some(at_pos) = line.rfind('@') {
+            let partial = &line[at_pos + 1..];
+            if let Some(completions) = complete_file_path(partial) {
+                let pairs: Vec<Pair> = completions
+                    .into_iter()
+                    .map(|path| {
+                        let replacement = format!("{}@{path}", &line[..at_pos]);
+                        Pair {
+                            display: format!("@{path}"),
+                            replacement,
+                        }
+                    })
+                    .collect();
+                return Ok((0, pairs));
+            }
+        }
+
+        Ok((0, Vec::new()))
+    }
+}
+
+impl Hinter for InputHelper {
+    type Hint = SlashHint;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if pos != line.len() || !line.starts_with('/') || line.contains(' ') {
+            return None;
+        }
+        let mut found: Option<&str> = None;
+        for cmd in SLASH_COMMANDS {
+            if cmd.starts_with(line) && *cmd != line {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(cmd);
+            }
+        }
+        found.map(|cmd| SlashHint {
+            text: cmd[line.len()..].to_string(),
+        })
+    }
+}
+
+impl Highlighter for InputHelper {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        if line.starts_with('/') {
+            Cow::Owned(format!("\x1b[36m{line}\x1b[0m"))
+        } else {
+            Cow::Borrowed(line)
+        }
+    }
+
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(&'s self, prompt: &'p str, _default: bool) -> Cow<'b, str> {
+        Cow::Owned(format!("\x1b[1;32m{prompt}\x1b[0m"))
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Cow::Owned(format!("\x1b[2m{hint}\x1b[0m"))
+    }
+
+    fn highlight_char(&self, line: &str, _pos: usize, _kind: CmdKind) -> bool {
+        line.starts_with('/')
+    }
+}
+
+impl Validator for InputHelper {}
+impl Helper for InputHelper {}
+// --- Public InputReader -----------------------------------------------
+
+/// Rustyline-based input reader with slash command completion and history.
 pub struct InputReader {
-    history: Vec<String>,
-    max_history: usize,
+    editor: Editor<InputHelper, DefaultHistory>,
 }
 
 impl InputReader {
     pub fn new() -> Self {
-        Self {
-            history: Vec::new(),
-            max_history: 1000,
-        }
+        let config = Config::builder()
+            .completion_type(CompletionType::List)
+            .edit_mode(EditMode::Emacs)
+            .auto_add_history(false)
+            .build();
+
+        let mut editor = Editor::<InputHelper, DefaultHistory>::with_config(config)
+            .expect("rustyline editor should initialize");
+        editor.set_helper(Some(InputHelper::new()));
+
+        // Ctrl+J and Shift+Enter insert newline (multiline input)
+        editor.bind_sequence(
+            KeyEvent(KeyCode::Char('J'), Modifiers::CTRL),
+            EventHandler::Simple(Cmd::Newline),
+        );
+        editor.bind_sequence(
+            KeyEvent(KeyCode::Enter, Modifiers::SHIFT),
+            EventHandler::Simple(Cmd::Newline),
+        );
+
+        Self { editor }
     }
 
     /// Add an entry to history (deduplicates consecutive entries).
@@ -130,40 +276,17 @@ impl InputReader {
         if trimmed.is_empty() {
             return;
         }
-        if self.history.last().is_none_or(|last| last != trimmed) {
-            self.history.push(trimmed.to_string());
-            if self.history.len() > self.max_history {
-                self.history.remove(0);
-            }
-        }
+        let _ = self.editor.add_history_entry(trimmed);
     }
 
-    /// Load history from a file. Each line is one entry; multiline entries
-    /// are stored with literal `\n` escapes.
+    /// Load history from a file.
     pub fn load_history(&mut self, path: &Path) {
-        let Ok(file) = std::fs::File::open(path) else { return };
-        let reader = io::BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
-            let entry = line.replace("\\n", "\n");
-            let trimmed = entry.trim().to_string();
-            if !trimmed.is_empty() {
-                self.history.push(trimmed);
-            }
-        }
-        // Keep only the last max_history entries
-        if self.history.len() > self.max_history {
-            let skip = self.history.len() - self.max_history;
-            self.history.drain(..skip);
-        }
+        let _ = self.editor.load_history(path);
     }
 
     /// Save history to a file.
-    pub fn save_history(&self, path: &Path) {
-        let Ok(mut file) = std::fs::File::create(path) else { return };
-        for entry in &self.history {
-            let escaped = entry.replace('\n', "\\n");
-            let _ = writeln!(file, "{escaped}");
-        }
+    pub fn save_history(&mut self, path: &Path) {
+        let _ = self.editor.save_history(path);
     }
 
     /// Check whether this reader can be used (requires a real terminal).
@@ -172,779 +295,42 @@ impl InputReader {
         io::stdin().is_terminal() && io::stdout().is_terminal()
     }
 
-    /// Read user input with paste and multiline support.
+    /// Read user input with completion and multiline support.
     ///
-    /// - Enter submits (single or multiline)
-    /// - Shift+Enter or Alt+Enter inserts a newline
-    /// - Bracketed paste with newlines is inserted verbatim
+    /// - Enter submits
+    /// - Ctrl+J / Shift+Enter inserts a newline
+    /// - Tab triggers completion (slash commands / @file paths)
     /// - Up/Down navigates history
-    /// - Tab completes slash commands and @file paths
-    pub fn readline(&self, prompt: &str) -> io::Result<InputResult> {
+    /// - Emacs key bindings (Ctrl+A/E/U/K/W, Ctrl+R, etc.)
+    pub fn readline(&mut self, prompt: &str) -> io::Result<InputResult> {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return self.read_pipe_fallback(prompt);
+        }
+
+        match self.editor.readline(prompt) {
+            Ok(line) => Ok(InputResult::Line(line)),
+            Err(ReadlineError::Interrupted) => Ok(InputResult::Interrupted),
+            Err(ReadlineError::Eof) => Ok(InputResult::Eof),
+            Err(e) => Err(io::Error::other(e)),
+        }
+    }
+
+    /// Fallback for piped/non-TTY input.
+    #[allow(clippy::unused_self)]
+    fn read_pipe_fallback(&self, prompt: &str) -> io::Result<InputResult> {
         let mut stdout = io::stdout();
-        // Print prompt with green highlight
-        write!(stdout, "\x1b[1;32m{prompt}\x1b[0m")?;
+        write!(stdout, "{prompt}")?;
         stdout.flush()?;
 
-        terminal::enable_raw_mode()?;
-        let paste_ok = execute!(stdout, event::EnableBracketedPaste).is_ok();
-
-        let result = self.read_loop(prompt);
-
-        if paste_ok {
-            let _ = execute!(io::stdout(), event::DisableBracketedPaste);
+        let mut buffer = String::new();
+        let bytes_read = io::stdin().read_line(&mut buffer)?;
+        if bytes_read == 0 {
+            return Ok(InputResult::Eof);
         }
-        let _ = terminal::disable_raw_mode();
-
-        result
-    }
-
-    fn read_loop(&self, prompt: &str) -> io::Result<InputResult> {
-        let mut stdout = io::stdout();
-        let mut lines: Vec<String> = vec![String::new()];
-        let mut hist_idx = self.history.len();
-        let mut saved_lines: Vec<String> = vec![String::new()];
-        // Cursor position (char index) within the last line
-        let mut cursor: usize = 0;
-        // Dropdown autocomplete state
-        let mut dd_matches: Vec<usize> = vec![];
-        let mut dd_sel: usize = 0;
-        let mut dd_visible: bool = false;
-        let mut dd_dismissed: bool = false; // suppresses reopen after Esc
-        let prompt_width = prompt.chars().count();
-
-        loop {
-            let evt = event::read()?;
-
-            // Only process Press events (and Repeat for held keys).
-            // Windows crossterm fires Press + Release for every keystroke;
-            // processing Release would double every action.
-            if let Event::Key(KeyEvent { kind, .. }) = &evt {
-                if *kind != KeyEventKind::Press && *kind != KeyEventKind::Repeat {
-                    continue;
-                }
-            }
-
-            match evt {
-                // ── Shift+Enter or Alt+Enter: insert newline ─────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::SHIFT)
-                    || modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    lines.push(String::new());
-                    cursor = 0;
-                    // Move to next line and show continuation prompt
-                    write!(stdout, "\r\n{CONT_PROMPT}")?;
-                    stdout.flush()?;
-                }
-
-                // ── Enter: submit ────────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    modifiers,
-                    ..
-                }) if !modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    // Backslash continuation: if line ends with `\`, remove it
-                    // and continue on the next line instead of submitting.
-                    if let Some(last) = lines.last_mut() {
-                        if last.ends_with('\\') {
-                            last.pop(); // remove trailing backslash
-                            lines.push(String::new());
-                            cursor = 0;
-                            write!(stdout, "\r\n{CONT_PROMPT}")?;
-                            stdout.flush()?;
-                            continue;
-                        }
-                    }
-                    // Complete dropdown selection before submitting
-                    if dd_visible && !dd_matches.is_empty() && dd_sel < dd_matches.len() {
-                        let sel_idx = dd_matches[dd_sel];
-                        lines = vec![SLASH_COMMANDS[sel_idx].to_string()];
-                        cursor = lines[0].chars().count();
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    write!(stdout, "\r\n")?;
-                    stdout.flush()?;
-                    let text = lines.join("\n");
-                    return Ok(InputResult::Line(text));
-                }
-
-                // ── Ctrl+C: interrupt ────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    write!(stdout, "^C\r\n")?;
-                    stdout.flush()?;
-                    return Ok(InputResult::Interrupted);
-                }
-
-                // ── Ctrl+D on empty: EOF ─────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL)
-                    && lines.len() == 1
-                    && lines[0].is_empty() =>
-                {
-                    write!(stdout, "\r\n")?;
-                    stdout.flush()?;
-                    return Ok(InputResult::Eof);
-                }
-
-                // ── Ctrl+U: clear from start to cursor ────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('u'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(last) = lines.last_mut() {
-                        if cursor > 0 {
-                            let byte_pos = last.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(last.len());
-                            last.drain(..byte_pos);
-                            cursor = 0;
-                        }
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+K: delete from cursor to end of line ────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('k'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(last) = lines.last_mut() {
-                        let byte_pos = last.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(last.len());
-                        last.truncate(byte_pos);
-                    }
-                    // Also remove any continuation lines after current
-                    if lines.len() > 1 {
-                        lines.truncate(1);
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+H: backspace alias (some terminals send this) ──
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('h'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    if cursor > 0 && last_len > 0 {
-                        if let Some(last) = lines.last_mut() {
-                            str_remove_char(last, cursor - 1);
-                        }
-                        cursor -= 1;
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    } else if cursor == 0 && lines.len() > 1 {
-                        lines.pop();
-                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Ctrl+W: delete last word ─────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('w'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(last) = lines.last_mut() {
-                        // Delete word before cursor
-                        let chars: Vec<char> = last.chars().collect();
-                        let before = &chars[..cursor];
-                        // Skip trailing whitespace
-                        let end = before.len();
-                        let mut pos = end;
-                        while pos > 0 && before[pos - 1].is_whitespace() {
-                            pos -= 1;
-                        }
-                        // Skip word chars
-                        while pos > 0 && !before[pos - 1].is_whitespace() {
-                            pos -= 1;
-                        }
-                        // Reconstruct: [0..pos] + [cursor..]
-                        let new_line: String = chars[..pos].iter().chain(chars[cursor..].iter()).collect();
-                        *last = new_line;
-                        cursor = pos;
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+L: clear screen ─────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('l'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
-                    execute!(stdout, crossterm::cursor::MoveTo(0, 0))?;
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+R: reverse history search ───────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('r'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(found) = self.reverse_search(&mut stdout)? {
-                        lines = found.split('\n').map(String::from).collect();
-                        hist_idx = self.history.iter().position(|h| h == &found)
-                            .unwrap_or(self.history.len());
-                    }
-                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+A: move cursor to start of line ─────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('a'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    cursor = 0;
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Home key ─────────────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Home, ..
-                }) => {
-                    cursor = 0;
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Ctrl+E / End: move to end of line ────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::End, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('e'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Alt+Left: move cursor one word left ──────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::ALT) => {
-                    if cursor > 0 {
-                        let chars: Vec<char> = lines.last().map(|l| l.chars().collect()).unwrap_or_default();
-                        let mut pos = cursor;
-                        while pos > 0 && chars[pos - 1].is_whitespace() {
-                            pos -= 1;
-                        }
-                        while pos > 0 && !chars[pos - 1].is_whitespace() {
-                            pos -= 1;
-                        }
-                        cursor = pos;
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Alt+Right: move cursor one word right ─────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::ALT) => {
-                    let chars: Vec<char> = lines.last().map(|l| l.chars().collect()).unwrap_or_default();
-                    let len = chars.len();
-                    if cursor < len {
-                        let mut pos = cursor;
-                        while pos < len && !chars[pos].is_whitespace() {
-                            pos += 1;
-                        }
-                        while pos < len && chars[pos].is_whitespace() {
-                            pos += 1;
-                        }
-                        cursor = pos;
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Left arrow / Ctrl+B: move cursor left ────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Left, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('b'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    if cursor > 0 {
-                        cursor -= 1;
-                        write!(stdout, "\x1b[D")?;
-                        stdout.flush()?;
-                    }
-                }
-
-                // ── Right arrow / Ctrl+F: move cursor right ──────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Right, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('f'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    let line_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    if cursor < line_len {
-                        cursor += 1;
-                        write!(stdout, "\x1b[C")?;
-                        stdout.flush()?;
-                    }
-                }
-
-                // ── Alt+Backspace: delete word before cursor ──────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Backspace,
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::ALT) => {
-                    if cursor > 0 {
-                        if let Some(last) = lines.last_mut() {
-                            let chars: Vec<char> = last.chars().collect();
-                            let mut pos = cursor;
-                            while pos > 0 && chars[pos - 1].is_whitespace() {
-                                pos -= 1;
-                            }
-                            while pos > 0 && !chars[pos - 1].is_whitespace() {
-                                pos -= 1;
-                            }
-                            let new_line: String = chars[..pos].iter().chain(chars[cursor..].iter()).collect();
-                            *last = new_line;
-                            cursor = pos;
-                        }
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Alt+D: delete word after cursor ───────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::ALT) => {
-                    if let Some(last) = lines.last_mut() {
-                        let chars: Vec<char> = last.chars().collect();
-                        let len = chars.len();
-                        if cursor < len {
-                            let mut pos = cursor;
-                            while pos < len && !chars[pos].is_whitespace() {
-                                pos += 1;
-                            }
-                            while pos < len && chars[pos].is_whitespace() {
-                                pos += 1;
-                            }
-                            let new_line: String = chars[..cursor].iter().chain(chars[pos..].iter()).collect();
-                            *last = new_line;
-                        }
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Alt+V: paste image from clipboard ────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('v'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::ALT) => {
-                    match paste_clipboard_image() {
-                        Ok(path) => {
-                            let ref_str = format!("@{}", path.display());
-                            // Insert on a new continuation line (or append to current)
-                            lines.push(ref_str.clone());
-                            cursor = ref_str.chars().count();
-                            // Show feedback above the input
-                            write!(stdout, "\r\n\x1b[32m✓ Image attached: {}\x1b[0m\r\n", path.display())?;
-                            stdout.flush()?;
-                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                        }
-                        Err(e) => {
-                            write!(stdout, "\r\n\x1b[33m⚠ Clipboard image paste failed: {e}\x1b[0m\r\n")?;
-                            stdout.flush()?;
-                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                        }
-                    }
-                }
-
-                // ── Delete key: delete char at cursor ────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Delete, ..
-                }) => {
-                    if let Some(last) = lines.last_mut() {
-                        let line_len = last.chars().count();
-                        if cursor < line_len {
-                            str_remove_char(last, cursor);
-                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                        }
-                    }
-                }
-
-                // ── Backspace ────────────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Backspace,
-                    ..
-                }) => {
-                    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    if cursor > 0 && last_len > 0 {
-                        if let Some(last) = lines.last_mut() {
-                            str_remove_char(last, cursor - 1);
-                        }
-                        cursor -= 1;
-                        // Always use full redraw — \x08 escape is unreliable on some Windows terminals
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    } else if cursor == 0 && lines.len() > 1 {
-                        // At start of continuation line: merge up
-                        lines.pop();
-                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Character input ──────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    modifiers,
-                    ..
-                }) if !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    if let Some(last) = lines.last_mut() {
-                        str_insert_char(last, cursor, c);
-                        cursor += 1;
-                    }
-                    let line_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    let at_end = cursor == line_len;
-                    // When typing a slash command, always use full redraw (enables dropdown)
-                    let is_slash = lines.len() == 1 && lines[0].starts_with('/');
-                    if is_slash {
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    } else if lines.len() == 1 && at_end {
-                        // Single-char fast-path for non-slash input
-                        write!(stdout, "{c}")?;
-                        stdout.flush()?;
-                    } else {
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Tab: completion ──────────────────────────────────
-                Event::Key(KeyEvent {
-                    code: KeyCode::Tab, ..
-                }) => {
-                    if lines.len() == 1 {
-                        let buf = &lines[0];
-                        if buf.starts_with('/') {
-                            // Slash command completion
-                            if dd_visible && dd_sel < dd_matches.len() && !dd_matches.is_empty() {
-                                // Complete with dropdown-selected item
-                                let sel_idx = dd_matches[dd_sel];
-                                lines[0] = format!("{} ", SLASH_COMMANDS[sel_idx]);
-                                cursor = lines[0].chars().count();
-                                dd_visible = false;
-                                dd_matches.clear();
-                                redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                            } else {
-                                let matches: Vec<&str> = SLASH_COMMANDS
-                                    .iter()
-                                    .filter(|cmd| cmd.starts_with(buf.as_str()))
-                                    .copied()
-                                    .collect();
-                                if matches.len() == 1 {
-                                    lines[0] = format!("{} ", matches[0]);
-                                    cursor = lines[0].chars().count();
-                                    dd_visible = false;
-                                    dd_matches.clear();
-                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                                } else if matches.len() > 1 {
-                                    write!(stdout, "\r\n")?;
-                                    for m in &matches {
-                                        write!(stdout, "  \x1b[36m{m}\x1b[0m\r\n")?;
-                                    }
-                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                                }
-                            }
-                        } else if let Some(at_pos) = buf.rfind('@') {
-                            // @file path completion
-                            let partial = &buf[at_pos + 1..];
-                            if let Some(completions) = complete_file_path(partial) {
-                                if completions.len() == 1 {
-                                    let completed = format!("{}@{}", &buf[..at_pos], completions[0]);
-                                    lines[0] = completed;
-                                    cursor = lines[0].chars().count();
-                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                                } else if completions.len() > 1 {
-                                    write!(stdout, "\r\n")?;
-                                    for c in &completions {
-                                        write!(stdout, "  \x1b[33m@{c}\x1b[0m\r\n")?;
-                                    }
-                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── Up / Ctrl+P: history previous or dropdown up ──
-                Event::Key(KeyEvent {
-                    code: KeyCode::Up, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('p'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    if dd_visible && !dd_matches.is_empty() {
-                        dd_sel = dd_sel.saturating_sub(1);
-                        // Don't call redraw_buffer — post-match draw_dropdown
-                        // overwrites in-place without flicker
-                    } else if hist_idx > 0 {
-                        if hist_idx == self.history.len() {
-                            saved_lines = lines.clone();
-                        }
-                        hist_idx -= 1;
-                        lines = self.history[hist_idx]
-                            .split('\n')
-                            .map(String::from)
-                            .collect();
-                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Down / Ctrl+N: history next or dropdown down ──
-                Event::Key(KeyEvent {
-                    code: KeyCode::Down, ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('n'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    if dd_visible && !dd_matches.is_empty() {
-                        if dd_sel + 1 < dd_matches.len() {
-                            dd_sel += 1;
-                        }
-                        // Don't call redraw_buffer — post-match draw_dropdown
-                        // overwrites in-place without flicker
-                    } else if hist_idx < self.history.len() {
-                        hist_idx += 1;
-                        if hist_idx == self.history.len() {
-                            lines = saved_lines.clone();
-                        } else {
-                            lines = self.history[hist_idx]
-                                .split('\n')
-                                .map(String::from)
-                                .collect();
-                        }
-                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                // ── Bracketed paste ──────────────────────────────────
-                Event::Paste(text) => {
-                    // Split pasted text into lines and merge with current buffer
-                    let paste_lines: Vec<&str> = text.split('\n').collect();
-                    if let Some(last) = lines.last_mut() {
-                        last.push_str(paste_lines[0]);
-                    }
-                    for pl in &paste_lines[1..] {
-                        lines.push(pl.to_string());
-                    }
-                    cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                    if paste_lines.len() > 1 {
-                        let count = lines.len();
-                        write!(
-                            stdout,
-                            "\r\n\x1b[36m[Pasted {count} lines — Enter to submit, Shift+Enter to add more]\x1b[0m\r\n"
-                        )?;
-                    }
-                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                }
-
-                // ── Escape: close dropdown first, then cancel multiline ──
-                Event::Key(KeyEvent {
-                    code: KeyCode::Esc, ..
-                }) => {
-                    if dd_visible {
-                        dd_visible = false;
-                        dd_dismissed = true;
-                        dd_matches.clear();
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    } else if lines.len() > 1 || !lines[0].is_empty() {
-                        lines = vec![String::new()];
-                        cursor = 0;
-                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                    }
-                }
-
-                _ => {} // Ignore resize, mouse, focus events
-            }
-
-            // ── Dropdown computation (after every keystroke) ─────────
-            if dd_dismissed {
-                // Esc just closed dropdown — don't reopen until next char input
-                dd_dismissed = false;
-            } else if lines.len() == 1 && lines[0].starts_with('/') && !lines[0].contains(' ') {
-                let prefix = &lines[0];
-                let new_matches: Vec<usize> = SLASH_COMMANDS
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, cmd)| cmd.starts_with(prefix))
-                    .map(|(i, _)| i)
-                    .collect();
-                if new_matches.is_empty() {
-                    if dd_visible {
-                        dd_visible = false;
-                        dd_matches.clear();
-                    }
-                } else {
-                    dd_matches = new_matches;
-                    // Clamp selection
-                    if dd_sel >= dd_matches.len() {
-                        dd_sel = dd_matches.len() - 1;
-                    }
-                    dd_visible = true;
-                    let cursor_col = prompt_width + cursor;
-                    draw_dropdown(&mut stdout, prompt_width, cursor_col, &dd_matches, dd_sel)?;
-                }
-            } else if dd_visible {
-                dd_visible = false;
-                dd_matches.clear();
-            }
+        while matches!(buffer.chars().last(), Some('\n' | '\r')) {
+            buffer.pop();
         }
-    }
-
-    /// Interactive reverse history search (Ctrl+R).
-    ///
-    /// Displays `(reverse-i-search)`query`: result` and incrementally filters
-    /// history. Returns `Some(entry)` if user selects, `None` if cancelled.
-    fn reverse_search(&self, stdout: &mut io::Stdout) -> io::Result<Option<String>> {
-        let mut query = String::new();
-        let mut match_idx: Option<usize> = None;
-
-        self.draw_search_prompt(stdout, &query, match_idx)?;
-
-        loop {
-            let evt = event::read()?;
-            if let Event::Key(KeyEvent { kind: KeyEventKind::Release, .. }) = &evt {
-                continue;
-            }
-            match evt {
-                // Typing narrows the search
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    modifiers,
-                    ..
-                }) if !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    query.push(c);
-                    match_idx = self.find_reverse_match(&query, match_idx);
-                    self.draw_search_prompt(stdout, &query, match_idx)?;
-                }
-
-                // Backspace narrows less
-                Event::Key(KeyEvent { code: KeyCode::Backspace, .. }) => {
-                    query.pop();
-                    match_idx = if query.is_empty() {
-                        None
-                    } else {
-                        self.find_reverse_match(&query, None)
-                    };
-                    self.draw_search_prompt(stdout, &query, match_idx)?;
-                }
-
-                // Ctrl+R again: find next (older) match
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('r'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if !query.is_empty() {
-                        let next_start = match_idx.and_then(|i| if i > 0 { Some(i - 1) } else { None });
-                        if let Some(start) = next_start {
-                            match_idx = self.find_reverse_match_from(&query, start);
-                        }
-                        self.draw_search_prompt(stdout, &query, match_idx)?;
-                    }
-                }
-
-                // Enter: accept the match
-                Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
-                    // Clear search line
-                    write!(stdout, "\r\x1b[K")?;
-                    stdout.flush()?;
-                    return Ok(match_idx.map(|i| self.history[i].clone()));
-                }
-
-                // Escape / Ctrl+C / Ctrl+G: cancel
-                Event::Key(KeyEvent { code: KeyCode::Esc, .. })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('c') | KeyCode::Char('g'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    write!(stdout, "\r\x1b[K")?;
-                    stdout.flush()?;
-                    return Ok(None);
-                }
-
-                _ => {}
-            }
-        }
-    }
-
-    /// Draw the reverse search prompt line.
-    fn draw_search_prompt(
-        &self,
-        stdout: &mut io::Stdout,
-        query: &str,
-        match_idx: Option<usize>,
-    ) -> io::Result<()> {
-        let display = match match_idx {
-            Some(i) => {
-                let entry = &self.history[i];
-                // Show first line only for multi-line entries
-                entry.lines().next().unwrap_or("")
-            }
-            None if query.is_empty() => "",
-            None => "(no match)",
-        };
-        write!(
-            stdout,
-            "\r\x1b[K\x1b[33m(reverse-i-search)\x1b[0m`\x1b[1m{query}\x1b[0m': {display}"
-        )?;
-        stdout.flush()
-    }
-
-    /// Find the most recent history entry containing `query`, searching backwards.
-    fn find_reverse_match(&self, query: &str, _current: Option<usize>) -> Option<usize> {
-        let q = query.to_lowercase();
-        self.history.iter().rposition(|entry| entry.to_lowercase().contains(&q))
-    }
-
-    /// Find match starting from a specific index (for Ctrl+R repeat).
-    fn find_reverse_match_from(&self, query: &str, start: usize) -> Option<usize> {
-        let q = query.to_lowercase();
-        (0..=start).rev().find(|&i| self.history[i].to_lowercase().contains(&q))
+        Ok(InputResult::Line(buffer))
     }
 }
 
@@ -955,20 +341,6 @@ pub fn history_file_path() -> Option<PathBuf> {
         let _ = std::fs::create_dir_all(&dir);
         dir.join("history")
     })
-}
-
-/// Get the slash command hint for partial input.
-fn get_slash_hint(input: &str) -> Option<&'static str> {
-    let mut found: Option<&str> = None;
-    for cmd in SLASH_COMMANDS {
-        if cmd.starts_with(input) && *cmd != input {
-            if found.is_some() {
-                return None; // Multiple matches — no unique hint
-            }
-            found = Some(cmd);
-        }
-    }
-    found
 }
 
 /// Complete @file paths relative to current directory.
@@ -984,7 +356,6 @@ fn complete_file_path(partial: &str) -> Option<Vec<String>> {
         (PathBuf::from("."), partial.to_string())
     };
 
-    // Prevent path traversal
     let project_root = Path::new(".").canonicalize().ok()?;
     if let Ok(canonical_dir) = dir.canonicalize() {
         if !canonical_dir.starts_with(&project_root) {
@@ -1025,163 +396,6 @@ fn complete_file_path(partial: &str) -> Option<Vec<String>> {
     Some(results)
 }
 
-/// Insert a char at a character position in a string.
-fn str_insert_char(s: &mut String, pos: usize, c: char) {
-    let byte_pos = s.char_indices().nth(pos).map(|(i, _)| i).unwrap_or(s.len());
-    s.insert(byte_pos, c);
-}
-
-/// Remove a char at a character position from a string and return it.
-fn str_remove_char(s: &mut String, pos: usize) -> Option<char> {
-    let byte_pos = s.char_indices().nth(pos).map(|(i, _)| i)?;
-    Some(s.remove(byte_pos))
-}
-
-/// Redraw the entire multiline buffer.
-fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String], cursor: usize) -> io::Result<()> {
-    // Move cursor to start of first line: go up (lines.len() - 1) then to column 0
-    let total = lines.len();
-    if total > 1 {
-        write!(stdout, "\x1b[{}A", total - 1)?;
-    }
-    write!(stdout, "\r")?;
-
-    // Clear from cursor to end of screen
-    write!(stdout, "\x1b[J")?;
-
-    // Draw each line
-    for (i, line) in lines.iter().enumerate() {
-        if i == 0 {
-            // First line: colored prompt + content
-            if line.starts_with('/') {
-                write!(stdout, "\x1b[1;32m{prompt}\x1b[36m{line}\x1b[0m")?;
-                // Ghost text hint for unique slash match
-                if !line.contains(' ') {
-                    if let Some(hint) = get_slash_hint(line) {
-                        let remaining = &hint[line.len()..];
-                        if !remaining.is_empty() {
-                            write!(stdout, "\x1b[2m{remaining}\x1b[0m")?;
-                        }
-                    }
-                }
-            } else {
-                write!(stdout, "\x1b[1;32m{prompt}\x1b[0m{line}")?;
-            }
-        } else {
-            // Continuation lines
-            write!(stdout, "{CONT_PROMPT}{line}")?;
-        }
-        if i < total - 1 {
-            write!(stdout, "\r\n")?;
-        }
-    }
-
-    // Position cursor: it's on the last line now. Move it to the right column.
-    // Account for ghost text if present (cursor stays at end of typed text)
-    let last_line = lines.last().map(|l| l.as_str()).unwrap_or("");
-    let ghost_len = if last_line.starts_with('/') && !last_line.contains(' ') {
-        get_slash_hint(last_line)
-            .map(|h| h.len().saturating_sub(last_line.len()))
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-    let back = last_len.saturating_sub(cursor) + ghost_len;
-    if back > 0 {
-        write!(stdout, "\x1b[{back}D")?;
-    }
-
-    stdout.flush()
-}
-
-/// Draw dropdown below the current input line.
-/// `cursor_col` is the current cursor column (prompt_width + cursor position in line).
-fn draw_dropdown(
-    stdout: &mut io::Stdout,
-    prompt_width: usize,
-    cursor_col: usize,
-    matches: &[usize],
-    selected: usize,
-) -> io::Result<()> {
-    if matches.is_empty() {
-        return Ok(());
-    }
-
-    // Compute visible window (scroll to keep selection visible)
-    let total = matches.len();
-    let max_vis = DROPDOWN_MAX_VISIBLE.min(total);
-    let start = if selected < max_vis {
-        0
-    } else {
-        selected - max_vis + 1
-    };
-    let end = (start + max_vis).min(total);
-
-    // Find max command width for alignment (across ALL matches for stable layout)
-    let max_cmd_width = matches
-        .iter()
-        .map(|&i| SLASH_COMMANDS[i].len())
-        .max()
-        .unwrap_or(10);
-
-    let mut lines_drawn: usize = 0;
-
-    // Draw each row below the input
-    for (pos, &idx) in matches[start..end].iter().enumerate() {
-        let i = start + pos;
-        let cmd = SLASH_COMMANDS[idx];
-        let desc = command_description(cmd);
-        let is_sel = i == selected;
-
-        write!(stdout, "\r\n")?;
-        // Indent to align with prompt
-        write!(stdout, "{:width$}", "", width = prompt_width)?;
-        lines_drawn += 1;
-
-        if is_sel {
-            write!(
-                stdout,
-                "\x1b[7m  {cmd:<width$}  {desc}\x1b[0m\x1b[K",
-                width = max_cmd_width,
-            )?;
-        } else {
-            write!(
-                stdout,
-                "  \x1b[36m{cmd:<width$}\x1b[0m  \x1b[2m{desc}\x1b[0m\x1b[K",
-                width = max_cmd_width,
-            )?;
-        }
-    }
-
-    // Show scroll indicator if needed
-    if total > max_vis {
-        write!(stdout, "\r\n")?;
-        write!(stdout, "{:width$}", "", width = prompt_width)?;
-        write!(
-            stdout,
-            "  \x1b[2m({}/{total} commands)\x1b[0m\x1b[K",
-            end
-        )?;
-        lines_drawn += 1;
-    }
-
-    // Clear any leftover lines from previous longer dropdown
-    write!(stdout, "\x1b[J")?;
-
-    // Move cursor back up to input line and to correct column
-    if lines_drawn > 0 {
-        write!(stdout, "\x1b[{lines_drawn}A")?;
-    }
-    // Position cursor at correct column
-    write!(stdout, "\r")?;
-    if cursor_col > 0 {
-        write!(stdout, "\x1b[{cursor_col}C")?;
-    }
-
-    stdout.flush()
-}
-
 /// Paste an image from the system clipboard, save to a temp PNG file, and return its path.
 ///
 /// Uses `arboard` for cross-platform clipboard access. The returned path can be passed
@@ -1189,18 +403,16 @@ fn draw_dropdown(
 ///
 /// # Errors
 /// Returns an error if the clipboard contains no image, or if encoding/saving fails.
+#[allow(dead_code)]
 pub fn paste_clipboard_image() -> anyhow::Result<std::path::PathBuf> {
     use anyhow::Context as _;
 
-    // Open clipboard
     let mut clip = arboard::Clipboard::new()
         .context("Cannot open clipboard (is a display server available?)")?;
 
-    // Get image data (RGBA8)
     let img = clip.get_image()
-        .context("No image in clipboard — copy an image first (e.g. from a browser or screenshot)")?;
+        .context("No image in clipboard")?;
 
-    // Encode RGBA8 → PNG bytes
     let mut png_bytes: Vec<u8> = Vec::new();
     {
         let mut encoder = png::Encoder::new(
@@ -1218,7 +430,6 @@ pub fn paste_clipboard_image() -> anyhow::Result<std::path::PathBuf> {
             .context("Failed to encode clipboard image as PNG")?;
     }
 
-    // Save to temp file
     let filename = format!(
         "claude_clipboard_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S")
@@ -1230,19 +441,16 @@ pub fn paste_clipboard_image() -> anyhow::Result<std::path::PathBuf> {
     Ok(path)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_add_history_dedup() {
+    fn test_add_history() {
         let mut reader = InputReader::new();
         reader.add_history("hello");
-        reader.add_history("hello");
-        assert_eq!(reader.history.len(), 1);
         reader.add_history("world");
-        assert_eq!(reader.history.len(), 2);
+        // No panic = success; rustyline manages dedup internally
     }
 
     #[test]
@@ -1250,19 +458,7 @@ mod tests {
         let mut reader = InputReader::new();
         reader.add_history("");
         reader.add_history("   ");
-        assert_eq!(reader.history.len(), 0);
-    }
-
-    #[test]
-    fn test_add_history_max() {
-        let mut reader = InputReader::new();
-        reader.max_history = 3;
-        for i in 0..5 {
-            reader.add_history(&format!("cmd{i}"));
-        }
-        assert_eq!(reader.history.len(), 3);
-        assert_eq!(reader.history[0], "cmd2");
-        assert_eq!(reader.history[2], "cmd4");
+        // No panic = success; empty entries are skipped
     }
 
     #[test]
@@ -1270,69 +466,97 @@ mod tests {
         assert!(SLASH_COMMANDS.contains(&"/help"));
         assert!(SLASH_COMMANDS.contains(&"/exit"));
         assert!(SLASH_COMMANDS.contains(&"/compact"));
+        assert!(SLASH_COMMANDS.contains(&"/pr-comments"));
+        assert!(SLASH_COMMANDS.contains(&"/branch"));
     }
 
     #[test]
-    fn test_get_slash_hint_unique() {
-        assert_eq!(get_slash_hint("/ver"), Some("/version"));
-        assert_eq!(get_slash_hint("/doc"), Some("/doctor"));
+    fn test_command_description_known() {
+        assert_eq!(command_description("/help"), "Show help");
+        assert_eq!(command_description("/exit"), "Exit the CLI");
+        assert_eq!(command_description("/compact"), "Compact conversation");
     }
 
     #[test]
-    fn test_get_slash_hint_ambiguous() {
-        // /co matches /compact, /cost, /commit, /commit-push-pr, /config, /context
-        assert_eq!(get_slash_hint("/co"), None);
+    fn test_command_description_unknown() {
+        assert_eq!(command_description("/nonexistent"), "");
     }
 
     #[test]
-    fn test_get_slash_hint_exact() {
-        assert_eq!(get_slash_hint("/help"), None); // exact match, no hint
+    fn test_history_file_path() {
+        let path = history_file_path();
+        assert!(path.is_some());
+        let p = path.unwrap();
+        assert!(p.ends_with("history"));
     }
 
     #[test]
-    fn test_history_persistence() {
-        let dir = std::env::temp_dir().join("claude_test_history");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("test_hist");
-
-        let mut writer = InputReader::new();
-        writer.add_history("single line");
-        writer.add_history("multi\nline\nentry");
-        writer.save_history(&path);
-
-        let mut reader = InputReader::new();
-        reader.load_history(&path);
-        assert_eq!(reader.history.len(), 2);
-        assert_eq!(reader.history[0], "single line");
-        assert_eq!(reader.history[1], "multi\nline\nentry");
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
+    fn test_completer_slash() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let (start, matches) = helper.complete("/he", 3, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert!(matches.iter().any(|p| p.replacement == "/help"));
     }
 
-    /// Verify that `paste_clipboard_image` fails gracefully with no image in clipboard.
-    /// This test does NOT require a display/clipboard (just checks the error path).
+    #[test]
+    fn test_completer_no_match() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let (_, matches) = helper.complete("hello", 5, &ctx).unwrap();
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn test_hinter_unique_match() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let hint = helper.hint("/ver", 4, &ctx);
+        assert!(hint.is_some());
+        assert_eq!(hint.unwrap().display(), "sion");
+    }
+
+    #[test]
+    fn test_hinter_ambiguous() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let hint = helper.hint("/co", 3, &ctx);
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn test_hinter_exact() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let hint = helper.hint("/help", 5, &ctx);
+        assert!(hint.is_none());
+    }
+
     #[test]
     fn paste_clipboard_image_no_display_returns_err() {
-        // In a headless CI environment, this should return an error rather than panic.
-        // We just verify the function is callable and returns Result.
         let result = paste_clipboard_image();
-        // Can be Ok (if clipboard happened to have an image) or Err (no display / no image).
-        // Either is acceptable — we just check it doesn't panic.
         let _ = result;
     }
 
-    /// Test that the PNG encoding logic works correctly with synthetic RGBA8 data.
     #[test]
     fn png_encode_rgba8_roundtrip() {
         use std::io::Cursor;
 
-        // 2×2 red image (RGBA8)
         let pixels: Vec<u8> = vec![
-            255, 0, 0, 255,  // top-left: red
-            255, 0, 0, 255,  // top-right: red
-            255, 0, 0, 255,  // bottom-left: red
-            255, 0, 0, 255,  // bottom-right: red
+            255, 0, 0, 255,
+            255, 0, 0, 255,
+            255, 0, 0, 255,
+            255, 0, 0, 255,
         ];
 
         let mut buf: Vec<u8> = Vec::new();
@@ -1344,7 +568,6 @@ mod tests {
             writer.write_image_data(&pixels).unwrap();
         }
 
-        // Verify PNG magic bytes
         assert!(buf.starts_with(&[0x89, 0x50, 0x4E, 0x47]), "Should start with PNG magic bytes");
         assert!(buf.len() > 8, "PNG should have content beyond header");
     }

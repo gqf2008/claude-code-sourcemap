@@ -1,26 +1,92 @@
 [
   {
-    "id": "analyze-ts",
-    "content": "Analyze TypeScript source code structure and feature inventory",
+    "id": "review-core",
+    "content": "Review claude-core crate implementation status",
     "status": "completed",
     "priority": "high"
   },
   {
-    "id": "analyze-rust",
-    "content": "Analyze Rust crate structure and feature inventory",
+    "id": "review-api",
+    "content": "Review claude-api crate implementation status",
     "status": "completed",
     "priority": "high"
   },
   {
-    "id": "compare-features",
-    "content": "Source-level alignment comparison: modules, tools, commands, features",
-    "status": "in_progress",
+    "id": "review-tools",
+    "content": "Review claude-tools crate implementation status",
+    "status": "completed",
     "priority": "high"
+  },
+  {
+    "id": "review-agent",
+    "content": "Review claude-agent crate implementation status",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "review-cli",
+    "content": "Review claude-cli crate implementation status",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "review-mcp",
+    "content": "Review claude-mcp crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "review-rpc",
+    "content": "Review claude-rpc crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "review-bridge",
+    "content": "Review claude-bridge crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "review-swarm",
+    "content": "Review claude-swarm crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "review-bus",
+    "content": "Review claude-bus crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "review-computer",
+    "content": "Review claude-computer-use crate implementation status",
+    "status": "completed",
+    "priority": "medium"
+  },
+  {
+    "id": "check-stubs",
+    "content": "Check for unimplemented!/todo!/stub markers across all crates",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "check-tests",
+    "content": "Run tests and verify status",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "id": "check-git",
+    "content": "Review git history and development velocity",
+    "status": "completed",
+    "priority": "low"
   },
   {
     "id": "generate-report",
-    "content": "Generate completion report with missing items",
-    "status": "pending",
+    "content": "Generate comprehensive audit report",
+    "status": "completed",
     "priority": "high"
   }
 ]

@@ -333,7 +333,7 @@ pub async fn run(
                                 handle_plugin_command(&sub, &cwd);
                             }
                             CommandResult::RunSkill { name, prompt } => {
-                                run_skill(&engine, &skills, &name, &prompt, &rl).await;
+                                run_skill(&engine, &skills, &name, &prompt, &mut rl).await;
                             }
                             CommandResult::RunPluginCommand { name, prompt } => {
                                 handle_plugin_run(&engine, &name, &prompt).await;

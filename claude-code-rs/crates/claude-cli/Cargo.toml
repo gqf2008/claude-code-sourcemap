@@ -36,6 +36,7 @@ unicode-width = { workspace = true }
 opener = { workspace = true }
 arboard = { workspace = true }
 png = { workspace = true }
+rustyline = { workspace = true }
 reqwest = { workspace = true }
 base64 = { workspace = true }
 

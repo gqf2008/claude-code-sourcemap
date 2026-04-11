@@ -12,7 +12,7 @@ pub(crate) async fn run_skill(
     skills: &[SkillEntry],
     name: &str,
     prompt: &str,
-    rl: &InputReader,
+    rl: &mut InputReader,
 ) {
     let skill = match skills.iter().find(|s| s.name == name) {
         Some(s) => s,
