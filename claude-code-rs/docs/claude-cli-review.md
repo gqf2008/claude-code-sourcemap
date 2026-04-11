@@ -1,7 +1,7 @@
-# claude-cli Crate 深度评审
+# clawed-cli Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-cli/` 全部源码（二进制入口 + REPL + 输出层）
+> 评审范围：`crates/clawed-cli/` 全部源码（二进制入口 + REPL + 输出层）
 
 ## 架构概览
 
@@ -225,7 +225,7 @@ if let Some(ref mut client) = client {
 
 ```rust
 while let Some(n) = c.recv_notification().await {
-    if matches!(n, claude_bus::events::AgentNotification::HistoryCleared) {
+    if matches!(n, clawed_bus::events::AgentNotification::HistoryCleared) {
         println!("Conversation history cleared.");
         break;
     }

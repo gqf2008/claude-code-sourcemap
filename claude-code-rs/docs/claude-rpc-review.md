@@ -1,7 +1,7 @@
-# claude-rpc Crate 深度评审
+# clawed-rpc Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-rpc/` 全部源码（8 个文件，77.1KB）
+> 评审范围：`crates/clawed-rpc/` 全部源码（8 个文件，77.1KB）
 
 ## 架构概览
 
@@ -32,7 +32,7 @@
 | `transport/mod.rs` | 2.0KB | Transport trait |
 | `error.rs` | 618B | 错误类型 |
 
-**依赖**：`claude-bus`, `claude-agent`, `serde`, `serde_json`, `tokio`, `tracing`
+**依赖**：`clawed-bus`, `clawed-agent`, `serde`, `serde_json`, `tokio`, `tracing`
 
 ---
 

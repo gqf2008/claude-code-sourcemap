@@ -1,7 +1,7 @@
-# claude-api Crate 深度评审
+# clawed-api Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-api/` 全部源码
+> 评审范围：`crates/clawed-api/` 全部源码
 
 ## 架构概览
 
@@ -22,7 +22,7 @@ ApiClient（门面）
   └── usage.rs ────────── 用量追踪
 ```
 
-**依赖流向**：`claude-api → claude-core`（单向，无循环依赖）
+**依赖流向**：`clawed-api → clawed-core`（单向，无循环依赖）
 
 ### 模块结构
 

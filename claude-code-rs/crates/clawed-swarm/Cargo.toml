@@ -1,0 +1,32 @@
+[package]
+name = "clawed-swarm"
+version = "0.1.0"
+edition = "2021"
+description = "Actor-based multi-agent swarm network for Claude Code, integrated via MCP protocol"
+
+[dependencies]
+clawed-core = { path = "../clawed-core" }
+clawed-api = { path = "../clawed-api" }
+clawed-bus = { path = "../clawed-bus" }
+clawed-mcp = { path = "../clawed-mcp" }
+clawed-tools = { path = "../clawed-tools" }
+
+kameo = "0.20"
+
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+futures = { workspace = true }
+
+[lints]
+workspace = true

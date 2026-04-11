@@ -1,14 +1,14 @@
-# claude-core Crate 深度评审
+# clawed-core Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-core/` 全部源码（基础类型 + 配置 + 工具 trait）
+> 评审范围：`crates/clawed-core/` 全部源码（基础类型 + 配置 + 工具 trait）
 
 ## 架构概览
 
 该 crate 是整个项目的**基础层**，提供所有 crate 共享的类型、trait 和工具函数。它是依赖图的叶子节点 — 只依赖外部库，不依赖任何其他项目 crate。
 
 ```
-claude-core（基础层，无内部依赖）
+clawed-core（基础层，无内部依赖）
   ├── message.rs ───────── 消息类型（User, Assistant, ContentBlock, StopReason）
   ├── tool.rs ──────────── Tool trait + ToolContext + AbortSignal
   ├── permissions.rs ──── 权限模式 + PermissionChecker
@@ -59,7 +59,7 @@ claude-core（基础层，无内部依赖）
 
 ### 1. 零内部依赖的干净架构
 
-作为项目的叶子节点，`claude-core` 不依赖任何其他 crate。所有上层 crate（`claude-api`, `claude-tools`, `claude-agent`, `claude-cli`）都依赖它。这使得它成为：
+作为项目的叶子节点，`clawed-core` 不依赖任何其他 crate。所有上层 crate（`clawed-api`, `clawed-tools`, `clawed-agent`, `clawed-cli`）都依赖它。这使得它成为：
 - 稳定的类型定义中心
 - 不会引入循环依赖风险
 - 可以独立编译和测试
@@ -228,7 +228,7 @@ hooks 是覆盖式合并（overlay 完全替换 base），而其他字段（如 
 
 #### 5. `RuntimeConfig` 的值在构建后才加载，但很多地方使用硬编码值
 
-`RuntimeConfig::from_env()` 加载运行时配置，但 `claude-agent` 中多处使用硬编码值（如 `MAX_TOOL_CONCURRENCY = 10`），没有从 `RuntimeConfig` 读取。
+`RuntimeConfig::from_env()` 加载运行时配置，但 `clawed-agent` 中多处使用硬编码值（如 `MAX_TOOL_CONCURRENCY = 10`），没有从 `RuntimeConfig` 读取。
 
 ### P2 — 设计/代码质量问题
 
@@ -259,9 +259,9 @@ hooks 是覆盖式合并（overlay 完全替换 base），而其他字段（如 
 
 #### 8. `ContentBlock` 和 `ApiContentBlock` 重复定义
 
-`claude-core::message::ContentBlock` 和 `claude-api::types::ApiContentBlock` 几乎完全相同，但定义在两个不同的 crate 中。这意味着每次在 API 层和核心层之间传递消息时都需要转换。
+`clawed-core::message::ContentBlock` 和 `clawed-api::types::ApiContentBlock` 几乎完全相同，但定义在两个不同的 crate 中。这意味着每次在 API 层和核心层之间传递消息时都需要转换。
 
-**修复建议**：共享类型定义，或将 `ApiContentBlock` 移入 `claude-core`。
+**修复建议**：共享类型定义，或将 `ApiContentBlock` 移入 `clawed-core`。
 
 #### 9. `tool.rs` 的 `Tool` trait 返回 `anyhow::Result` 而非具体错误类型
 
@@ -273,9 +273,9 @@ async fn call(&self, input: Value, context: &ToolContext) -> anyhow::Result<Tool
 
 **修复建议**：定义 `ToolError` 枚举，或至少在错误消息中使用统一前缀。
 
-#### 10. `permissions.rs` 的权限检查在 `claude-core` 和 `claude-agent` 中重复
+#### 10. `permissions.rs` 的权限检查在 `clawed-core` 和 `clawed-agent` 中重复
 
-`claude-core::permissions` 定义了 `PermissionMode`、`PermissionRule` 和基础检查逻辑，但 `claude-agent::permissions::PermissionChecker` 也有类似的检查逻辑。两个模块的边界不清晰。
+`clawed-core::permissions` 定义了 `PermissionMode`、`PermissionRule` 和基础检查逻辑，但 `clawed-agent::permissions::PermissionChecker` 也有类似的检查逻辑。两个模块的边界不清晰。
 
 #### 11. `write_queue.rs` 的异步写入队列缺少背压控制
 
@@ -353,7 +353,7 @@ let re = Regex::new(r"@([^\s]+\.(png|jpg|jpeg|gif|webp))").unwrap();
 
 ## 总体评价
 
-`claude-core` 是整个项目的**基石 crate**，承担了最多的职责 — 从基础类型到配置系统到技能/记忆/会话管理。它的核心优势在于：
+`clawed-core` 是整个项目的**基石 crate**，承担了最多的职责 — 从基础类型到配置系统到技能/记忆/会话管理。它的核心优势在于：
 
 1. **零内部依赖的干净架构** — 作为依赖图的叶子节点，不会引入循环依赖
 2. **消息类型设计出色** — 与 Anthropic API 格式完美对齐

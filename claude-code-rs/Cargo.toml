@@ -1,16 +1,16 @@
 [workspace]
 members = [
-    "crates/claude-core",
-    "crates/claude-api",
-    "crates/claude-tools",
-    "crates/claude-agent",
-    "crates/claude-bus",
-    "crates/claude-cli",
-    "crates/claude-mcp",
-    "crates/claude-rpc",
-    "crates/claude-bridge",
-    "crates/claude-computer-use",
-    "crates/claude-swarm",
+    "crates/clawed-core",
+    "crates/clawed-api",
+    "crates/clawed-tools",
+    "crates/clawed-agent",
+    "crates/clawed-bus",
+    "crates/clawed-cli",
+    "crates/clawed-mcp",
+    "crates/clawed-rpc",
+    "crates/clawed-bridge",
+    "crates/clawed-computer-use",
+    "crates/clawed-swarm",
 ]
 resolver = "2"
 

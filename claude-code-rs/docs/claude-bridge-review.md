@@ -1,7 +1,7 @@
-# claude-bridge Crate 深度评审
+# clawed-bridge Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-bridge/` 全部源码（8 个文件 + 2 个适配器）
+> 评审范围：`crates/clawed-bridge/` 全部源码（8 个文件 + 2 个适配器）
 
 ## 架构概览
 
@@ -436,7 +436,7 @@ pub struct Attachment {
 
 ## 总体评价
 
-**claude-bridge 是一个设计精良、架构清晰的外部平台集成框架**，具有以下核心优势：
+**clawed-bridge 是一个设计精良、架构清晰的外部平台集成框架**，具有以下核心优势：
 
 1. **优秀的抽象设计**：平台无关的消息类型、统一的适配器接口、清晰的会话管理
 2. **完整的事件流**：从平台事件到 Agent 请求再到回复的完整闭环

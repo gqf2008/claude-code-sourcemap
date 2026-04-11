@@ -37,17 +37,17 @@
 
 | Rust Crate | 文件数 | 行数 | 测试数 | 对应 TS 模块 | 职责 |
 |-----------|--------|------|--------|-------------|------|
-| `claude-core` | 30 | 13,431 | 451 | `types/`, `schemas/`, 基础工具函数 | 基础类型、Tool trait、配置、权限、会话 |
-| `claude-api` | 15 | 6,693 | 179 | API 调用 (内嵌于 main.tsx) | HTTP 客户端、SSE 流、OAuth、多 Provider |
-| `claude-tools` | 41 | 10,225 | 323 | `tools/` (184 文件) | 41 个内建工具 + 功能门控工具 |
-| `claude-agent` | 38 | 15,154 | 470 | `main.tsx` (agent loop), `state/`, `tasks/` | Agent 引擎、查询、执行、压缩、协调 |
-| `claude-cli` | 30 | 11,600 | 298 | `commands/`, `components/`, `ink/` | REPL、59 个命令、TUI、Markdown |
-| `claude-mcp` | 8 | 2,546 | 73 | `services/mcp/` (29 文件) | MCP 2.0 协议、传输、注册表 |
-| `claude-bus` | 3 | 1,198 | 23 | (无直接对应) | 跨 crate 事件总线 |
-| `claude-rpc` | 9 | 2,251 | 84 | `bridge/`, `cli/transports/` | JSON-RPC 服务器 (stdio/TCP) |
-| `claude-bridge` | 11 | 2,087 | 52 | (无直接对应) | 外部平台网关 (飞书/Telegram) |
-| `claude-computer-use` | 5 | 1,237 | 16 | `utils/computerUse/` (13 文件) | 桌面自动化 MCP 服务 |
-| `claude-swarm` | 14 | 3,134 | 65 | `coordinator/`, `utils/swarm/` | kameo Actor 多 Agent 网络 |
+| `clawed-core` | 30 | 13,431 | 451 | `types/`, `schemas/`, 基础工具函数 | 基础类型、Tool trait、配置、权限、会话 |
+| `clawed-api` | 15 | 6,693 | 179 | API 调用 (内嵌于 main.tsx) | HTTP 客户端、SSE 流、OAuth、多 Provider |
+| `clawed-tools` | 41 | 10,225 | 323 | `tools/` (184 文件) | 41 个内建工具 + 功能门控工具 |
+| `clawed-agent` | 38 | 15,154 | 470 | `main.tsx` (agent loop), `state/`, `tasks/` | Agent 引擎、查询、执行、压缩、协调 |
+| `clawed-cli` | 30 | 11,600 | 298 | `commands/`, `components/`, `ink/` | REPL、59 个命令、TUI、Markdown |
+| `clawed-mcp` | 8 | 2,546 | 73 | `services/mcp/` (29 文件) | MCP 2.0 协议、传输、注册表 |
+| `clawed-bus` | 3 | 1,198 | 23 | (无直接对应) | 跨 crate 事件总线 |
+| `clawed-rpc` | 9 | 2,251 | 84 | `bridge/`, `cli/transports/` | JSON-RPC 服务器 (stdio/TCP) |
+| `clawed-bridge` | 11 | 2,087 | 52 | (无直接对应) | 外部平台网关 (飞书/Telegram) |
+| `clawed-computer-use` | 5 | 1,237 | 16 | `utils/computerUse/` (13 文件) | 桌面自动化 MCP 服务 |
+| `clawed-swarm` | 14 | 3,134 | 65 | `coordinator/`, `utils/swarm/` | kameo Actor 多 Agent 网络 |
 | **合计** | **204** | **68,556** | **2,034** | — | — |
 
 > 依赖流向: `cli → agent → {api, tools, bus} → core`; `{mcp, swarm, bridge, rpc, cu} → bus → core`
@@ -317,14 +317,14 @@ ListTools, SetThinking, BreakCache
 
 | 创新 | Crate | 说明 |
 |------|-------|------|
-| **EventBus 架构** | `claude-bus` | 39 种通知 + 18 种请求，解耦 Agent ↔ UI |
-| **JSON-RPC 服务器** | `claude-rpc` | 多传输 (stdio/TCP)，支持 IDE/Web 远程控制 |
-| **外部平台网关** | `claude-bridge` | 飞书、Telegram、微信、钉钉适配器 |
-| **Actor 多 Agent** | `claude-swarm` | kameo 框架的 Actor 网络 (vs TS 的进程内 Coordinator) |
-| **ComputerUse MCP Server** | `claude-computer-use` | 独立 MCP server (vs TS 的内嵌工具) |
-| **CU 自动检测** | `claude-agent/builder` | 启动时自动检测平台能力并注册 |
-| **语法高亮 Diff** | `claude-cli/diff_display` | 基于 syntect 的语法高亮文件差异 |
-| **多 Provider** | `claude-api/provider` | Claude/OpenAI/DeepSeek/DashScope 统一接口 |
+| **EventBus 架构** | `clawed-bus` | 39 种通知 + 18 种请求，解耦 Agent ↔ UI |
+| **JSON-RPC 服务器** | `clawed-rpc` | 多传输 (stdio/TCP)，支持 IDE/Web 远程控制 |
+| **外部平台网关** | `clawed-bridge` | 飞书、Telegram、微信、钉钉适配器 |
+| **Actor 多 Agent** | `clawed-swarm` | kameo 框架的 Actor 网络 (vs TS 的进程内 Coordinator) |
+| **ComputerUse MCP Server** | `clawed-computer-use` | 独立 MCP server (vs TS 的内嵌工具) |
+| **CU 自动检测** | `clawed-agent/builder` | 启动时自动检测平台能力并注册 |
+| **语法高亮 Diff** | `clawed-cli/diff_display` | 基于 syntect 的语法高亮文件差异 |
+| **多 Provider** | `clawed-api/provider` | Claude/OpenAI/DeepSeek/DashScope 统一接口 |
 
 ---
 
@@ -377,16 +377,16 @@ ListTools, SetThinking, BreakCache
 
 | Crate | 测试数 | 主要测试文件 |
 |-------|--------|-------------|
-| `claude-core` | 451 | skills (52), session (49), memory (39), message_sanitize (24) |
-| `claude-agent` | 470 | commands (94), permissions/tests (53), coordinator (35), memory_extractor (31) |
-| `claude-tools` | 323 | bash (37), lsp (35), web_fetch (23), path_util (22) |
-| `claude-cli` | 298 | commands (94), output/helpers (48), markdown (22), main (15) |
-| `claude-rpc` | 84 | methods (41), protocol (19), session (8) |
-| `claude-mcp` | 73 | registry (26), types (19), protocol (12) |
-| `claude-swarm` | 65 | actors (9), conflict (9), network (7) |
-| `claude-bridge` | 52 | formatter (9), message (10), gateway (8) |
-| `claude-bus` | 23 | bus (14), events (9) |
-| `claude-computer-use` | 16 | server (6), input (5), session_lock (4) |
+| `clawed-core` | 451 | skills (52), session (49), memory (39), message_sanitize (24) |
+| `clawed-agent` | 470 | commands (94), permissions/tests (53), coordinator (35), memory_extractor (31) |
+| `clawed-tools` | 323 | bash (37), lsp (35), web_fetch (23), path_util (22) |
+| `clawed-cli` | 298 | commands (94), output/helpers (48), markdown (22), main (15) |
+| `clawed-rpc` | 84 | methods (41), protocol (19), session (8) |
+| `clawed-mcp` | 73 | registry (26), types (19), protocol (12) |
+| `clawed-swarm` | 65 | actors (9), conflict (9), network (7) |
+| `clawed-bridge` | 52 | formatter (9), message (10), gateway (8) |
+| `clawed-bus` | 23 | bus (14), events (9) |
+| `clawed-computer-use` | 16 | server (6), input (5), session_lock (4) |
 | **合计** | **2,034** | — |
 
 **质量指标**: 0 clippy warnings | 0 unsafe | 0 panic! | 0 .lock().unwrap()

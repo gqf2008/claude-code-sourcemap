@@ -2,7 +2,7 @@
 
 ## 核心循环位置
 
-`crates/claude-agent/src/query/mod.rs` — `query_stream_with_injection` 函数（第 100-615 行）
+`crates/clawed-agent/src/query/mod.rs` — `query_stream_with_injection` 函数（第 100-615 行）
 
 ## 1. ReAct 主循环
 
@@ -131,7 +131,7 @@ HookDecision::FeedbackAndContinue { feedback }
 
 ## 5. 协调者模式（Coordinator Mode）
 
-`crates/claude-agent/src/coordinator.rs`
+`crates/clawed-agent/src/coordinator.rs`
 
 协调者可以：
 - 通过 `Agent` 工具启动后台 worker agent

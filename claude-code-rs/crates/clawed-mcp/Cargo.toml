@@ -1,0 +1,26 @@
+[package]
+name = "clawed-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP (Model Context Protocol) — protocol types, client, transport, and server registry"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+clawed-bus = { path = "../clawed-bus" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

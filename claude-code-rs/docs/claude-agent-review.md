@@ -1,7 +1,7 @@
-# claude-agent Crate 深度评审
+# clawed-agent Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-agent/` 全部源码
+> 评审范围：`crates/clawed-agent/` 全部源码
 
 ## 架构概览
 

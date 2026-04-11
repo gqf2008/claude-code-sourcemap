@@ -19,17 +19,17 @@
 ## 分层架构
 
 ```
-Layer 3  claude-cli           (30 files, 11,570 LoC,  297 tests)  二进制入口, REPL, 主题, NDJSON 输出
-Layer 3  claude-rpc           ( 9 files,  2,251 LoC,   84 tests)  JSON-RPC 外部接口 (TCP/stdio)
-Layer 3  claude-bridge        (11 files,  2,087 LoC,   52 tests)  外部消息渠道网关 (飞书/Telegram/Slack)
-Layer 2  claude-agent         (38 files, 15,144 LoC,  483 tests)  引擎编排, 会话, Hooks, 权限, 压缩
-Layer 2  claude-mcp           ( 8 files,  2,546 LoC,   73 tests)  MCP 注册, 健康监控, 自动重连
-Layer 2  claude-swarm         (14 files,  3,134 LoC,   65 tests)  kameo Actor 多 Agent 网络
-Layer 2  claude-computer-use  ( 5 files,  1,237 LoC,   16 tests)  Computer Use (截屏/键鼠/内置 MCP)
-Layer 1  claude-bus           ( 3 files,  1,198 LoC,   23 tests)  事件总线, ClientHandle, 广播通知
-Layer 1  claude-api           (15 files,  6,693 LoC,  180 tests)  HTTP 客户端, 流式 SSE, OAuth PKCE
-Layer 1  claude-tools         (41 files, 10,225 LoC,  323 tests)  28+ 工具实现, ToolRegistry, LSP
-Layer 0  claude-core          (30 files, 13,431 LoC,  452 tests)  基础类型, Tool trait, 权限, 配置, 文件监听
+Layer 3  clawed-cli           (30 files, 11,570 LoC,  297 tests)  二进制入口, REPL, 主题, NDJSON 输出
+Layer 3  clawed-rpc           ( 9 files,  2,251 LoC,   84 tests)  JSON-RPC 外部接口 (TCP/stdio)
+Layer 3  clawed-bridge        (11 files,  2,087 LoC,   52 tests)  外部消息渠道网关 (飞书/Telegram/Slack)
+Layer 2  clawed-agent         (38 files, 15,144 LoC,  483 tests)  引擎编排, 会话, Hooks, 权限, 压缩
+Layer 2  clawed-mcp           ( 8 files,  2,546 LoC,   73 tests)  MCP 注册, 健康监控, 自动重连
+Layer 2  clawed-swarm         (14 files,  3,134 LoC,   65 tests)  kameo Actor 多 Agent 网络
+Layer 2  clawed-computer-use  ( 5 files,  1,237 LoC,   16 tests)  Computer Use (截屏/键鼠/内置 MCP)
+Layer 1  clawed-bus           ( 3 files,  1,198 LoC,   23 tests)  事件总线, ClientHandle, 广播通知
+Layer 1  clawed-api           (15 files,  6,693 LoC,  180 tests)  HTTP 客户端, 流式 SSE, OAuth PKCE
+Layer 1  clawed-tools         (41 files, 10,225 LoC,  323 tests)  28+ 工具实现, ToolRegistry, LSP
+Layer 0  clawed-core          (30 files, 13,431 LoC,  452 tests)  基础类型, Tool trait, 权限, 配置, 文件监听
 ```
 
 依赖方向: `{cli,rpc,bridge} → agent → {swarm,mcp,computer-use,api,tools,bus} → core`（零循环依赖）
@@ -38,12 +38,12 @@ Layer 0  claude-core          (30 files, 13,431 LoC,  452 tests)  基础类型, 
 
 ```
                   ┌─────────┐
-                  │  Agent   │ ← claude-agent (QueryEngine + ToolExecutor)
+                  │  Agent   │ ← clawed-agent (QueryEngine + ToolExecutor)
                   │   Core   │
                   └────┬─────┘
                        │ AgentCoreAdapter
                   ┌────┴─────┐
-                  │ EventBus │ ← claude-bus (broadcast notifications, mpsc requests)
+                  │ EventBus │ ← clawed-bus (broadcast notifications, mpsc requests)
                   └────┬─────┘
         ┌──────────┬───┴───┬──────────┬──────────┐
    ┌────┴───┐ ┌────┴───┐ ┌┴────┐ ┌───┴─────┐ ┌──┴─────┐
@@ -92,7 +92,7 @@ mcp.listServers
 
 ## Crate 详解
 
-### claude-core
+### clawed-core
 
 基础类型和 trait 定义层，无外部 HTTP 依赖。
 
@@ -110,7 +110,7 @@ mcp.listServers
 | `text_util.rs` | 文本处理工具 (truncate, collapse_blank_lines) |
 | `write_queue.rs` | 异步写入队列（磁盘 I/O 去抖动） |
 
-### claude-api
+### clawed-api
 
 Anthropic Messages API 客户端。
 
@@ -123,7 +123,7 @@ Anthropic Messages API 客户端。
 | `cache_detect.rs` | 缓存命中检测与统计（带 mutex 毒化恢复） |
 | `usage.rs` | Token 用量累计 |
 
-### claude-tools
+### clawed-tools
 
 28+ 工具实现和 MCP 客户端。
 
@@ -142,7 +142,7 @@ Anthropic Messages API 客户端。
 
 **ToolRegistry** (`lib.rs`): 集中注册所有工具，支持按名称查找、类别过滤、MCP 动态注入。
 
-### claude-agent
+### clawed-agent
 
 核心编排引擎 — 将工具、API、权限、压缩组合为完整的 Agent 循环。
 
@@ -174,7 +174,7 @@ Anthropic Messages API 客户端。
 - `sections.rs` — 18 个提示词 section (identity, guidelines, tasks, actions, tools, tone, ...)
 - `mod.rs` — `SystemPrompt` 类型, `DynamicSections` builder, 动态边界分割, 优先级覆盖
 
-### claude-cli
+### clawed-cli
 
 用户入口 — 命令行解析 + REPL 交互循环 + 主题系统。
 
@@ -193,7 +193,7 @@ Anthropic Messages API 客户端。
 | `diff_display.rs` | Diff 可视化 (syntect 语法高亮 + word-level diff) |
 | `markdown.rs` | Markdown 渲染 (终端适配, 代码块高亮) |
 
-### claude-bus
+### clawed-bus
 
 进程内事件总线 — 解耦 Agent Core 与 5 个客户端。
 
@@ -202,7 +202,7 @@ Anthropic Messages API 客户端。
 | `bus.rs` | `EventBus` + `ClientHandle` — broadcast 通知, mpsc 请求, 权限握手 |
 | `events.rs` | `AgentRequest` (18 种) / `AgentNotification` (26 种) 全部事件类型定义 |
 
-### claude-mcp
+### clawed-mcp
 
 MCP (Model Context Protocol) 服务器注册与生命周期管理。
 
@@ -215,7 +215,7 @@ MCP (Model Context Protocol) 服务器注册与生命周期管理。
 | `sse.rs` | SSE 传输客户端 |
 | `types.rs` | MCP 工具/资源类型定义 |
 
-### claude-rpc
+### clawed-rpc
 
 外部 JSON-RPC 接口 — TCP/stdio 供 IDE/脚本调用。
 
@@ -228,7 +228,7 @@ MCP (Model Context Protocol) 服务器注册与生命周期管理。
 | `transport/` | `TcpTransport`, `StdioTransport` (可扩展 WebSocket) |
 | `error.rs` | RPC 错误码定义 |
 
-### claude-bridge
+### clawed-bridge
 
 外部消息渠道网关 — 让 Agent 通过飞书/Telegram/Slack 等平台交互。
 
@@ -243,7 +243,7 @@ MCP (Model Context Protocol) 服务器注册与生命周期管理。
 | `adapters/` | `FeishuAdapter`, `TelegramAdapter`, `SlackAdapter` |
 | `webhook.rs` | Webhook 接收骨架（待完善） |
 
-### claude-swarm
+### clawed-swarm
 
 多 Agent 协作网络 — 基于 kameo Actor 模型。
 
@@ -256,7 +256,7 @@ MCP (Model Context Protocol) 服务器注册与生命周期管理。
 | `config.rs` | Swarm 配置解析 (agent 定义、路由规则) |
 | `types.rs` | `AgentMessage`, `SwarmEvent`, `AgentStatus` 等类型 |
 
-### claude-computer-use
+### clawed-computer-use
 
 Computer Use 工具 — 屏幕截图 + 鼠标/键盘控制。
 
@@ -341,17 +341,17 @@ cargo check
 cargo test
 
 # 运行特定 crate 测试
-cargo test -p claude-agent    # 483 tests
-cargo test -p claude-core     # 452 tests
-cargo test -p claude-tools    # 323 tests
-cargo test -p claude-cli      # 297 tests
-cargo test -p claude-api      # 180 tests
-cargo test -p claude-rpc      # 84 tests
-cargo test -p claude-mcp      # 73 tests
-cargo test -p claude-swarm    # 65 tests
-cargo test -p claude-bridge   # 52 tests
-cargo test -p claude-bus      # 23 tests
-cargo test -p claude-computer-use  # 16 tests
+cargo test -p clawed-agent    # 483 tests
+cargo test -p clawed-core     # 452 tests
+cargo test -p clawed-tools    # 323 tests
+cargo test -p clawed-cli      # 297 tests
+cargo test -p clawed-api      # 180 tests
+cargo test -p clawed-rpc      # 84 tests
+cargo test -p clawed-mcp      # 73 tests
+cargo test -p clawed-swarm    # 65 tests
+cargo test -p clawed-bridge   # 52 tests
+cargo test -p clawed-bus      # 23 tests
+cargo test -p clawed-computer-use  # 16 tests
 
 # Lint 检查
 cargo clippy --workspace

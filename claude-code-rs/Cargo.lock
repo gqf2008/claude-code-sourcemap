@@ -436,20 +436,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "claude-agent"
+name = "clawed-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
  "chrono",
- "claude-api",
- "claude-bus",
- "claude-computer-use",
- "claude-core",
- "claude-mcp",
- "claude-swarm",
- "claude-tools",
+ "clawed-api",
+ "clawed-bus",
+ "clawed-computer-use",
+ "clawed-core",
+ "clawed-mcp",
+ "clawed-swarm",
+ "clawed-tools",
  "crossterm",
  "dirs",
  "futures",
@@ -466,14 +466,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-api"
+name = "clawed-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
  "base64",
- "claude-core",
+ "clawed-core",
  "dirs",
  "futures",
  "opener",
@@ -491,13 +491,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-bridge"
+name = "clawed-bridge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "claude-agent",
- "claude-bus",
+ "clawed-agent",
+ "clawed-bus",
  "reqwest",
  "serde",
  "serde_json",
@@ -509,7 +509,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-bus"
+name = "clawed-bus"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -521,7 +521,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-cli"
+name = "clawed-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -530,12 +530,12 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
- "claude-agent",
- "claude-api",
- "claude-bus",
- "claude-core",
- "claude-mcp",
- "claude-tools",
+ "clawed-agent",
+ "clawed-api",
+ "clawed-bus",
+ "clawed-core",
+ "clawed-mcp",
+ "clawed-tools",
  "crossterm",
  "dirs",
  "futures",
@@ -559,14 +559,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-computer-use"
+name = "clawed-computer-use"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "base64",
- "claude-core",
- "claude-mcp",
+ "clawed-core",
+ "clawed-mcp",
  "dirs",
  "enigo",
  "hostname",
@@ -580,7 +580,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-core"
+name = "clawed-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -604,12 +604,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-mcp"
+name = "clawed-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-bus",
+ "clawed-bus",
  "dirs",
  "futures",
  "reqwest",
@@ -623,12 +623,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-rpc"
+name = "clawed-rpc"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "claude-agent",
- "claude-bus",
+ "clawed-agent",
+ "clawed-bus",
  "futures",
  "serde",
  "serde_json",
@@ -639,16 +639,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-swarm"
+name = "clawed-swarm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-api",
- "claude-bus",
- "claude-core",
- "claude-mcp",
- "claude-tools",
+ "clawed-api",
+ "clawed-bus",
+ "clawed-core",
+ "clawed-mcp",
+ "clawed-tools",
  "dirs",
  "futures",
  "kameo",
@@ -661,15 +661,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-tools"
+name = "clawed-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "base64",
  "chrono",
- "claude-core",
- "claude-mcp",
+ "clawed-core",
+ "clawed-mcp",
  "dirs",
  "futures",
  "glob",

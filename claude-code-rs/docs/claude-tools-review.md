@@ -1,4 +1,4 @@
-# Deep Review: claude-tools
+# Deep Review: clawed-tools
 
 ## Overview
 
@@ -10,7 +10,7 @@
 
 ### C-1: `grep.rs` bypasses path boundary checks (lines 93-98)
 
-**File:** `crates/claude-tools/src/grep.rs`
+**File:** `crates/clawed-tools/src/grep.rs`
 
 ```rust
 let search_path: PathBuf = match input["path"].as_str() {
@@ -30,7 +30,7 @@ Unlike **every other file tool** (Read, Edit, Write, LS, Glob, Bash working_dire
 
 ### C-2: `repl.rs` UTF-8 truncation panic (line 163)
 
-**File:** `crates/claude-tools/src/repl.rs`
+**File:** `crates/clawed-tools/src/repl.rs`
 
 ```rust
 if text.len() > 50_000 {
@@ -50,7 +50,7 @@ text.truncate(end);
 
 ### C-3: `multi_edit.rs` data corruption via sequential edits (lines 75-122)
 
-**File:** `crates/claude-tools/src/multi_edit.rs`
+**File:** `crates/clawed-tools/src/multi_edit.rs`
 
 Edits are applied sequentially with `replacen(old_str, new_str, 1)`. If Edit 0's `new_string` contains Edit 1's `old_string`, Edit 1 matches in the **wrong location**.
 

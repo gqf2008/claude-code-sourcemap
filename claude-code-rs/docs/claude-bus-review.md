@@ -1,7 +1,7 @@
-# claude-bus Crate 深度评审
+# clawed-bus Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-bus/` 全部源码（3 个文件）
+> 评审范围：`crates/clawed-bus/` 全部源码（3 个文件）
 
 ## 架构概览
 

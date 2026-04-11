@@ -26,7 +26,7 @@
 
 ## 二、逐 Crate 移植状态
 
-### 1. claude-core (Layer 0 — 基础层)
+### 1. clawed-core (Layer 0 — 基础层)
 
 | 指标 | 数值 |
 |------|------|
@@ -64,7 +64,7 @@
 
 ---
 
-### 2. claude-api (Layer 1 — HTTP 客户端)
+### 2. clawed-api (Layer 1 — HTTP 客户端)
 
 | 指标 | 数值 |
 |------|------|
@@ -91,7 +91,7 @@
 
 ---
 
-### 3. claude-tools (Layer 1 — 工具实现)
+### 3. clawed-tools (Layer 1 — 工具实现)
 
 | 指标 | 数值 |
 |------|------|
@@ -122,7 +122,7 @@
 
 ---
 
-### 4. claude-agent (Layer 2 — 编排引擎)
+### 4. clawed-agent (Layer 2 — 编排引擎)
 
 | 指标 | 数值 |
 |------|------|
@@ -154,7 +154,7 @@
 
 ---
 
-### 5. claude-cli (Layer 3 — 用户入口)
+### 5. clawed-cli (Layer 3 — 用户入口)
 
 | 指标 | 数值 |
 |------|------|
@@ -182,7 +182,7 @@
 
 ---
 
-### 6. claude-bus (Layer 1 — 事件总线)
+### 6. clawed-bus (Layer 1 — 事件总线)
 
 | 指标 | 数值 |
 |------|------|
@@ -202,7 +202,7 @@
 
 ---
 
-### 7. claude-mcp (Layer 2 — MCP 协议)
+### 7. clawed-mcp (Layer 2 — MCP 协议)
 
 | 指标 | 数值 |
 |------|------|
@@ -220,11 +220,11 @@
 - ✅ 服务器注册表 + 并发连接管理
 - ✅ 配置发现（`.mcp.json` 项目/用户根目录）
 - ✅ 内置 MCP 服务器支持
-- ✅ McpBusAdapter（桥接到 claude-bus 事件系统）
+- ✅ McpBusAdapter（桥接到 clawed-bus 事件系统）
 
 ---
 
-### 8. claude-rpc (Layer 3 — JSON-RPC 外部接口)
+### 8. clawed-rpc (Layer 3 — JSON-RPC 外部接口)
 
 | 指标 | 数值 |
 |------|------|
@@ -246,7 +246,7 @@
 
 ---
 
-### 9. claude-bridge (Layer 3 — 外部渠道网关)
+### 9. clawed-bridge (Layer 3 — 外部渠道网关)
 
 | 指标 | 数值 |
 |------|------|
@@ -271,7 +271,7 @@
 
 ---
 
-### 10. claude-swarm (Layer 2 — 多 Agent 协作)
+### 10. clawed-swarm (Layer 2 — 多 Agent 协作)
 
 | 指标 | 数值 |
 |------|------|
@@ -295,7 +295,7 @@
 
 ---
 
-### 11. claude-computer-use (Layer 2 — 屏幕控制)
+### 11. clawed-computer-use (Layer 2 — 屏幕控制)
 
 | 指标 | 数值 |
 |------|------|
@@ -321,11 +321,11 @@
 
 | 位置 | 类型 | 严重度 | 说明 |
 |------|------|--------|------|
-| claude-api/provider.rs | Stub | 低 | Bedrock 后端 — AWS SigV4 签名未实现 |
-| claude-api/provider.rs | Stub | 低 | Vertex 后端 — GCP 凭据处理未实现 |
-| claude-bridge/webhook.rs | 骨架 | 低 | Webhook 接收未完全实现 |
-| claude-tools/web_search.rs | 回退 | 低 | 无搜索后端时的优雅降级（设计行为） |
-| claude-agent/tests/integration.rs | Bug | 中 | `test_auto_compact_threshold` 测试失败 |
+| clawed-api/provider.rs | Stub | 低 | Bedrock 后端 — AWS SigV4 签名未实现 |
+| clawed-api/provider.rs | Stub | 低 | Vertex 后端 — GCP 凭据处理未实现 |
+| clawed-bridge/webhook.rs | 骨架 | 低 | Webhook 接收未完全实现 |
+| clawed-tools/web_search.rs | 回退 | 低 | 无搜索后端时的优雅降级（设计行为） |
+| clawed-agent/tests/integration.rs | Bug | 中 | `test_auto_compact_threshold` 测试失败 |
 
 **总计：5 处已知 stub/待完善项，零 `unimplemented!()` / `todo!()` 标记**
 
@@ -335,23 +335,23 @@
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
-| claude-core | ~452 | ✅ |
-| claude-api | 69+ | ✅ |
-| claude-tools | 323 | ✅ |
-| claude-agent | 483 | ⚠️ 1 个集成测试失败 |
-| claude-cli | 297 | ✅ |
-| claude-bus | 23 | ✅ |
-| claude-mcp | 73 | ✅ |
-| claude-rpc | 84 | ✅ |
-| claude-bridge | 52 | ✅ |
-| claude-swarm | 65 | ✅ |
-| claude-computer-use | 16 | ✅ |
+| clawed-core | ~452 | ✅ |
+| clawed-api | 69+ | ✅ |
+| clawed-tools | 323 | ✅ |
+| clawed-agent | 483 | ⚠️ 1 个集成测试失败 |
+| clawed-cli | 297 | ✅ |
+| clawed-bus | 23 | ✅ |
+| clawed-mcp | 73 | ✅ |
+| clawed-rpc | 84 | ✅ |
+| clawed-bridge | 52 | ✅ |
+| clawed-swarm | 65 | ✅ |
+| clawed-computer-use | 16 | ✅ |
 | **总计** | **~1,937+** | **⚠️ 1 个失败** |
 
 ### 失败测试详情
 ```
 test_auto_compact_threshold
-  位置: crates/claude-agent/tests/integration.rs:434
+  位置: crates/clawed-agent/tests/integration.rs:434
   错误: assertion failed: engine.should_auto_compact().await
 ```
 
@@ -363,17 +363,17 @@ test_auto_compact_threshold
 
 | 功能 | Crate | 说明 |
 |------|-------|------|
-| EventBus 架构 | claude-bus | 4-Client 事件总线，解耦 Agent Core 与多客户端 |
-| RPC 外部接口 | claude-rpc | JSON-RPC 2.0 server，供 IDE/脚本调用 |
-| 多渠道网关 | claude-bridge | 飞书/Telegram/Slack 集成（原版无） |
-| Swarm 多 Agent 网络 | claude-swarm | kameo Actor 模型多 Agent 协作（超越原版子 Agent） |
-| Computer Use 内置集成 | claude-computer-use | 原生屏幕控制集成 |
-| Cron 调度系统 | claude-core | 5 字段 cron 表达式调度（3 个工具 + 锁 + 任务管理） |
-| 插件系统 | claude-core/plugin.rs | DXT manifest 发现与生命周期管理 |
-| 文件监听 | claude-core | notify crate 实时配置变更检测 |
-| 图片处理 | claude-core/image.rs | URL 图片异步获取 + 本地图片引用 |
-| Bash 分类器 | claude-core | 命令类型识别与安全分级 |
-| 并发会话 | claude-core | 多会话同时运行管理 |
+| EventBus 架构 | clawed-bus | 4-Client 事件总线，解耦 Agent Core 与多客户端 |
+| RPC 外部接口 | clawed-rpc | JSON-RPC 2.0 server，供 IDE/脚本调用 |
+| 多渠道网关 | clawed-bridge | 飞书/Telegram/Slack 集成（原版无） |
+| Swarm 多 Agent 网络 | clawed-swarm | kameo Actor 模型多 Agent 协作（超越原版子 Agent） |
+| Computer Use 内置集成 | clawed-computer-use | 原生屏幕控制集成 |
+| Cron 调度系统 | clawed-core | 5 字段 cron 表达式调度（3 个工具 + 锁 + 任务管理） |
+| 插件系统 | clawed-core/plugin.rs | DXT manifest 发现与生命周期管理 |
+| 文件监听 | clawed-core | notify crate 实时配置变更检测 |
+| 图片处理 | clawed-core/image.rs | URL 图片异步获取 + 本地图片引用 |
+| Bash 分类器 | clawed-core | 命令类型识别与安全分级 |
+| 并发会话 | clawed-core | 多会话同时运行管理 |
 
 ---
 
@@ -461,7 +461,7 @@ test_auto_compact_threshold
 | P1 | 实现 Bedrock SigV4 签名 | 中 |
 | P1 | 实现 Vertex GCP 凭据处理 | 中 |
 | P2 | 完善 webhook.rs 实现 | 小 |
-| P3 | 增加 claude-bus 集成测试覆盖 | 小 |
+| P3 | 增加 clawed-bus 集成测试覆盖 | 小 |
 | P3 | WebSocket 传输支持（RPC） | 中 |
 
 ---

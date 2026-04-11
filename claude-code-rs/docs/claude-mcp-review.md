@@ -1,7 +1,7 @@
-# claude-mcp Crate 深度评审
+# clawed-mcp Crate 深度评审
 
 > 评审日期：2026-04-09
-> 评审范围：`crates/claude-mcp/` 全部源码（8 个文件，68.2KB）
+> 评审范围：`crates/clawed-mcp/` 全部源码（8 个文件，68.2KB）
 
 ## 架构概览
 
@@ -33,7 +33,7 @@ McpManager（registry）
 | `transport.rs` | 5.0KB | Stdio 传输（子进程 JSON-RPC） |
 | `lib.rs` | 1.8KB | 模块导出 |
 
-**依赖**：`serde`, `serde_json`, `tokio`, `reqwest`, `futures`, `claude-bus`
+**依赖**：`serde`, `serde_json`, `tokio`, `reqwest`, `futures`, `clawed-bus`
 
 ---
 

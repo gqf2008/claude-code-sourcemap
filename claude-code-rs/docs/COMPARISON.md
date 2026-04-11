@@ -18,7 +18,7 @@
 | **unsafe 块** | 0 | N/A | Rust |
 | **生产 panic** | 0 | 未知 | Rust |
 | **最大单文件** | 1,598 行 (`session.rs`) | 4,684 行 (`main.tsx`) | Rust (3x 更小) |
-| **最大目录** | `claude-agent` (42 文件) | `utils/` (500+ 文件) | Rust |
+| **最大目录** | `clawed-agent` (42 文件) | `utils/` (500+ 文件) | Rust |
 | **依赖数量** | 35 个工作区依赖 | 数百 (含 AWS/Azure/GCP SDK) | Rust |
 | **构建工具** | Cargo | Bun | — |
 
@@ -44,27 +44,27 @@ main.tsx (4,684行) → interactiveHelpers → Ink App → REPL → 各组件
 
 | Rust Crate | 职责 | 文件 | 测试 | 对应 JS 目录 |
 |------------|------|------|------|-------------|
-| `claude-core` | 基础类型、Tool trait、配置、权限 | 26 | 485 | `Tool.ts`, `types.ts`, `constants/` |
-| `claude-agent` | Agent 循环、hooks、权限、压缩、蜂群、插件 | 43 | 401 | `entrypoints/`, `utils/processUserInput/` |
-| `claude-tools` | 34+ 工具实现、ToolRegistry | 34 | 294 | `tools/` |
-| `claude-api` | HTTP 客户端、SSE 流、OAuth | 15 | 179 | `services/api/`, `query.ts` |
-| `claude-cli` | 二进制入口、REPL、CLI、UI | 26 | 242 | `main.tsx`, `commands/` |
-| `claude-bridge` | 外部消息网关 (飞书/TG/Slack) | 11 | 52 | 无 (Rust 独有) |
-| `claude-rpc` | JSON-RPC 外部接口 (TCP/stdio) | 9 | 84 | 无 (Rust 独有) |
-| `claude-mcp` | MCP 服务器注册、重连、健康监控 | 8 | 73 | `services/mcp/` |
-| `claude-computer-use` | Computer Use MCP 服务器 | 5 | 20 | `utils/computerUse/` |
-| `claude-bus` | 事件总线 (广播通知、mpsc) | 3 | 20 | 无 (架构差异) |
+| `clawed-core` | 基础类型、Tool trait、配置、权限 | 26 | 485 | `Tool.ts`, `types.ts`, `constants/` |
+| `clawed-agent` | Agent 循环、hooks、权限、压缩、蜂群、插件 | 43 | 401 | `entrypoints/`, `utils/processUserInput/` |
+| `clawed-tools` | 34+ 工具实现、ToolRegistry | 34 | 294 | `tools/` |
+| `clawed-api` | HTTP 客户端、SSE 流、OAuth | 15 | 179 | `services/api/`, `query.ts` |
+| `clawed-cli` | 二进制入口、REPL、CLI、UI | 26 | 242 | `main.tsx`, `commands/` |
+| `clawed-bridge` | 外部消息网关 (飞书/TG/Slack) | 11 | 52 | 无 (Rust 独有) |
+| `clawed-rpc` | JSON-RPC 外部接口 (TCP/stdio) | 9 | 84 | 无 (Rust 独有) |
+| `clawed-mcp` | MCP 服务器注册、重连、健康监控 | 8 | 73 | `services/mcp/` |
+| `clawed-computer-use` | Computer Use MCP 服务器 | 5 | 20 | `utils/computerUse/` |
+| `clawed-bus` | 事件总线 (广播通知、mpsc) | 3 | 20 | 无 (架构差异) |
 
 ### 2.3 事件总线架构 (Rust 独有)
 
 ```
                    ┌─────────┐
-                   │  Agent   │ ← claude-agent (QueryEngine + ToolExecutor)
+                   │  Agent   │ ← clawed-agent (QueryEngine + ToolExecutor)
                    │   Core   │
                    └────┬─────┘
                         │ AgentCoreAdapter
                    ┌────┴─────┐
-                   │ EventBus │ ← claude-bus (broadcast notifications, mpsc requests)
+                   │ EventBus │ ← clawed-bus (broadcast notifications, mpsc requests)
                    └────┬─────┘
          ┌──────────┬───┴───┬──────────┐
     ┌────┴───┐ ┌────┴───┐ ┌┴────┐ ┌───┴─────┐
@@ -85,7 +85,7 @@ main.tsx (4,684行) → interactiveHelpers → Ink App → REPL → 各组件
 
 ### 3.1 工具系统
 
-#### Rust — `Tool` trait (`claude-core/src/tool.rs:107-145`)
+#### Rust — `Tool` trait (`clawed-core/src/tool.rs:107-145`)
 
 ```rust
 #[async_trait]
@@ -145,7 +145,7 @@ export interface Tool {
 
 ### 3.2 Agent 循环架构
 
-#### Rust — `QueryEngine` (`claude-agent/src/engine/mod.rs`)
+#### Rust — `QueryEngine` (`clawed-agent/src/engine/mod.rs`)
 
 ```rust
 pub struct QueryEngine {
@@ -253,7 +253,7 @@ export function filterToolsByDenyRules<T>(tools: T[], ctx): T[] {
 
 ### 3.5 CLI/REPL 入口
 
-#### Rust — `claude-cli`
+#### Rust — `clawed-cli`
 
 ```
 main.rs       → clap 参数解析 → 模式分发 → EventBus 启动

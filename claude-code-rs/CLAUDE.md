@@ -8,7 +8,7 @@ Non-official Rust port of `@anthropic-ai/claude-code` (v2.1.88).
 cargo check                # Type-check only
 cargo build                # Full build
 cargo test                 # Run all 128+ tests
-cargo test -p claude-agent # Test specific crate
+cargo test -p clawed-agent # Test specific crate
 cargo clippy               # Lint
 cargo fmt --check          # Format check
 ```
@@ -41,11 +41,11 @@ Use `--base-url` to override API endpoint (e.g., LiteLLM, DashScope).
 
 | Crate | Role |
 |-------|------|
-| `claude-cli` | Binary entry, REPL, CLI parsing |
-| `claude-agent` | Agent loop, hooks, permissions, compression |
-| `claude-api` | HTTP client, SSE streaming, OAuth PKCE |
-| `claude-tools` | 28+ tools, MCP client, ToolRegistry |
-| `claude-core` | Base types, Tool trait, config |
+| `clawed-cli` | Binary entry, REPL, CLI parsing |
+| `clawed-agent` | Agent loop, hooks, permissions, compression |
+| `clawed-api` | HTTP client, SSE streaming, OAuth PKCE |
+| `clawed-tools` | 28+ tools, MCP client, ToolRegistry |
+| `clawed-core` | Base types, Tool trait, config |
 
 Dependency flow: `cli → agent → {api, tools} → core`
 

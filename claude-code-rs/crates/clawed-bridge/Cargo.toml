@@ -1,0 +1,27 @@
+[package]
+name = "clawed-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clawed-bus = { path = "../clawed-bus" }
+clawed-agent = { path = "../clawed-agent" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+
+# Webhook HTTP server
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["timeout"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
