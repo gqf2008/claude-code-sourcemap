@@ -13,8 +13,8 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    terminal,
     execute,
+    terminal,
 };
 
 /// Slash commands for tab completion.
@@ -27,11 +27,78 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/fast", "/add-dir", "/summary", "/rename", "/copy", "/share", "/files",
     "/env", "/agents", "/theme", "/plan", "/think", "/break-cache", "/rewind",
     "/vim", "/stickers", "/effort", "/tag", "/release-notes", "/feedback",
-    "/stats", "/usage", "/image",
+    "/stats", "/usage", "/image", "/pr-comments", "/branch",
 ];
 
 /// Continuation prompt for multiline input.
 const CONT_PROMPT: &str = "\x1b[2m│ \x1b[0m";
+
+/// Maximum number of dropdown items visible at once.
+const DROPDOWN_MAX_VISIBLE: usize = 8;
+
+/// Short description for each slash command (displayed in dropdown).
+fn command_description(name: &str) -> &'static str {
+    match name {
+        "/help" => "Show help",
+        "/clear" => "Clear conversation history",
+        "/model" => "Switch model",
+        "/compact" => "Compact conversation",
+        "/cost" => "Show token usage and costs",
+        "/skills" => "List available skills",
+        "/memory" => "Manage memory files",
+        "/session" => "Manage sessions",
+        "/diff" => "Show git diff",
+        "/status" => "Show session and git status",
+        "/permissions" => "Show permission mode",
+        "/config" => "Show current configuration",
+        "/undo" => "Undo last assistant turn",
+        "/review" => "AI code review",
+        "/doctor" => "Check environment health",
+        "/init" => "Initialize CLAUDE.md",
+        "/commit" => "Stage and commit changes",
+        "/commit-push-pr" => "Commit → push → create PR",
+        "/pr" => "Create/review pull request",
+        "/bug" => "Debug a problem",
+        "/search" => "Search conversation history",
+        "/history" => "Browse conversation turns",
+        "/retry" => "Retry last failed prompt",
+        "/version" => "Show version info",
+        "/login" => "Set API key",
+        "/logout" => "Clear API key",
+        "/context" => "Show loaded context",
+        "/export" => "Export session",
+        "/reload-context" => "Reload CLAUDE.md and settings",
+        "/mcp" => "Show MCP servers",
+        "/plugin" => "List loaded plugins",
+        "/exit" => "Exit the CLI",
+        "/fast" => "Toggle fast/cheap model",
+        "/add-dir" => "Add context directory",
+        "/summary" => "Generate conversation summary",
+        "/rename" => "Rename current session",
+        "/copy" => "Copy last response to clipboard",
+        "/share" => "Export shareable session",
+        "/files" => "List files in directory",
+        "/env" => "Show environment info",
+        "/agents" => "Manage agent definitions",
+        "/theme" => "Switch terminal theme",
+        "/plan" => "Toggle plan mode",
+        "/think" => "Toggle extended thinking",
+        "/break-cache" => "Skip prompt cache",
+        "/rewind" => "Rewind by N turns",
+        "/vim" => "Toggle vim mode",
+        "/stickers" => "Order stickers!",
+        "/effort" => "Set effort level",
+        "/tag" => "Tag/untag session",
+        "/release-notes" => "Show release notes",
+        "/feedback" => "Submit feedback",
+        "/stats" => "Show session statistics",
+        "/usage" => "Show usage stats",
+        "/image" => "Attach an image",
+        "/pr-comments" => "Fetch PR review comments",
+        "/branch" => "Fork conversation branch",
+        _ => "",
+    }
+}
 
 /// Result from reading a line of input.
 pub enum InputResult {
@@ -138,6 +205,12 @@ impl InputReader {
         let mut saved_lines: Vec<String> = vec![String::new()];
         // Cursor position (char index) within the last line
         let mut cursor: usize = 0;
+        // Dropdown autocomplete state
+        let mut dd_matches: Vec<usize> = vec![];
+        let mut dd_sel: usize = 0;
+        let mut dd_visible: bool = false;
+        let mut dd_dismissed: bool = false; // suppresses reopen after Esc
+        let prompt_width = prompt.chars().count();
 
         loop {
             let evt = event::read()?;
@@ -187,6 +260,13 @@ impl InputReader {
                             continue;
                         }
                     }
+                    // Complete dropdown selection before submitting
+                    if dd_visible && !dd_matches.is_empty() && dd_sel < dd_matches.len() {
+                        let sel_idx = dd_matches[dd_sel];
+                        lines = vec![SLASH_COMMANDS[sel_idx].to_string()];
+                        cursor = lines[0].chars().count();
+                    }
+                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     write!(stdout, "\r\n")?;
                     stdout.flush()?;
                     let text = lines.join("\n");
@@ -551,23 +631,13 @@ impl InputReader {
                     }
                     let line_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
                     let at_end = cursor == line_len;
-                    // Single-char optimization: just write the char if at end of single line
-                    if lines.len() == 1 && at_end {
-                        let line = &lines[0];
-                        if line.starts_with('/') {
-                            if let Some(hint) = get_slash_hint(line) {
-                                let remaining = &hint[line.len()..];
-                                write!(stdout, "{c}\x1b[2m{remaining}\x1b[0m")?;
-                                let back = remaining.len();
-                                if back > 0 {
-                                    write!(stdout, "\x1b[{back}D")?;
-                                }
-                            } else {
-                                write!(stdout, "{c}")?;
-                            }
-                        } else {
-                            write!(stdout, "{c}")?;
-                        }
+                    // When typing a slash command, always use full redraw (enables dropdown)
+                    let is_slash = lines.len() == 1 && lines[0].starts_with('/');
+                    if is_slash {
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    } else if lines.len() == 1 && at_end {
+                        // Single-char fast-path for non-slash input
+                        write!(stdout, "{c}")?;
                         stdout.flush()?;
                     } else {
                         redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
@@ -582,21 +652,33 @@ impl InputReader {
                         let buf = &lines[0];
                         if buf.starts_with('/') {
                             // Slash command completion
-                            let matches: Vec<&str> = SLASH_COMMANDS
-                                .iter()
-                                .filter(|cmd| cmd.starts_with(buf.as_str()))
-                                .copied()
-                                .collect();
-                            if matches.len() == 1 {
-                                lines[0] = format!("{} ", matches[0]);
+                            if dd_visible && dd_sel < dd_matches.len() && !dd_matches.is_empty() {
+                                // Complete with dropdown-selected item
+                                let sel_idx = dd_matches[dd_sel];
+                                lines[0] = format!("{} ", SLASH_COMMANDS[sel_idx]);
                                 cursor = lines[0].chars().count();
+                                dd_visible = false;
+                                dd_matches.clear();
                                 redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                            } else if matches.len() > 1 {
-                                write!(stdout, "\r\n")?;
-                                for m in &matches {
-                                    write!(stdout, "  \x1b[36m{m}\x1b[0m\r\n")?;
+                            } else {
+                                let matches: Vec<&str> = SLASH_COMMANDS
+                                    .iter()
+                                    .filter(|cmd| cmd.starts_with(buf.as_str()))
+                                    .copied()
+                                    .collect();
+                                if matches.len() == 1 {
+                                    lines[0] = format!("{} ", matches[0]);
+                                    cursor = lines[0].chars().count();
+                                    dd_visible = false;
+                                    dd_matches.clear();
+                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                                } else if matches.len() > 1 {
+                                    write!(stdout, "\r\n")?;
+                                    for m in &matches {
+                                        write!(stdout, "  \x1b[36m{m}\x1b[0m\r\n")?;
+                                    }
+                                    redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                                 }
-                                redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                             }
                         } else if let Some(at_pos) = buf.rfind('@') {
                             // @file path completion
@@ -619,7 +701,7 @@ impl InputReader {
                     }
                 }
 
-                // ── Up / Ctrl+P: history previous ─────────────────
+                // ── Up / Ctrl+P: history previous or dropdown up ──
                 Event::Key(KeyEvent {
                     code: KeyCode::Up, ..
                 })
@@ -628,7 +710,11 @@ impl InputReader {
                     modifiers: KeyModifiers::CONTROL,
                     ..
                 }) => {
-                    if hist_idx > 0 {
+                    if dd_visible && !dd_matches.is_empty() {
+                        dd_sel = dd_sel.saturating_sub(1);
+                        // Don't call redraw_buffer — post-match draw_dropdown
+                        // overwrites in-place without flicker
+                    } else if hist_idx > 0 {
                         if hist_idx == self.history.len() {
                             saved_lines = lines.clone();
                         }
@@ -642,7 +728,7 @@ impl InputReader {
                     }
                 }
 
-                // ── Down / Ctrl+N: history next ───────────────────
+                // ── Down / Ctrl+N: history next or dropdown down ──
                 Event::Key(KeyEvent {
                     code: KeyCode::Down, ..
                 })
@@ -651,7 +737,13 @@ impl InputReader {
                     modifiers: KeyModifiers::CONTROL,
                     ..
                 }) => {
-                    if hist_idx < self.history.len() {
+                    if dd_visible && !dd_matches.is_empty() {
+                        if dd_sel + 1 < dd_matches.len() {
+                            dd_sel += 1;
+                        }
+                        // Don't call redraw_buffer — post-match draw_dropdown
+                        // overwrites in-place without flicker
+                    } else if hist_idx < self.history.len() {
                         hist_idx += 1;
                         if hist_idx == self.history.len() {
                             lines = saved_lines.clone();
@@ -687,11 +779,16 @@ impl InputReader {
                     redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                 }
 
-                // ── Escape: cancel multiline (revert to single empty line) ──
+                // ── Escape: close dropdown first, then cancel multiline ──
                 Event::Key(KeyEvent {
                     code: KeyCode::Esc, ..
                 }) => {
-                    if lines.len() > 1 || !lines[0].is_empty() {
+                    if dd_visible {
+                        dd_visible = false;
+                        dd_dismissed = true;
+                        dd_matches.clear();
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    } else if lines.len() > 1 || !lines[0].is_empty() {
                         lines = vec![String::new()];
                         cursor = 0;
                         redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
@@ -699,6 +796,38 @@ impl InputReader {
                 }
 
                 _ => {} // Ignore resize, mouse, focus events
+            }
+
+            // ── Dropdown computation (after every keystroke) ─────────
+            if dd_dismissed {
+                // Esc just closed dropdown — don't reopen until next char input
+                dd_dismissed = false;
+            } else if lines.len() == 1 && lines[0].starts_with('/') && !lines[0].contains(' ') {
+                let prefix = &lines[0];
+                let new_matches: Vec<usize> = SLASH_COMMANDS
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cmd)| cmd.starts_with(prefix))
+                    .map(|(i, _)| i)
+                    .collect();
+                if new_matches.is_empty() {
+                    if dd_visible {
+                        dd_visible = false;
+                        dd_matches.clear();
+                    }
+                } else {
+                    dd_matches = new_matches;
+                    // Clamp selection
+                    if dd_sel >= dd_matches.len() {
+                        dd_sel = dd_matches.len() - 1;
+                    }
+                    dd_visible = true;
+                    let cursor_col = prompt_width + cursor;
+                    draw_dropdown(&mut stdout, prompt_width, cursor_col, &dd_matches, dd_sel)?;
+                }
+            } else if dd_visible {
+                dd_visible = false;
+                dd_matches.clear();
             }
         }
     }
@@ -926,6 +1055,15 @@ fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String], cursor
             // First line: colored prompt + content
             if line.starts_with('/') {
                 write!(stdout, "\x1b[1;32m{prompt}\x1b[36m{line}\x1b[0m")?;
+                // Ghost text hint for unique slash match
+                if !line.contains(' ') {
+                    if let Some(hint) = get_slash_hint(line) {
+                        let remaining = &hint[line.len()..];
+                        if !remaining.is_empty() {
+                            write!(stdout, "\x1b[2m{remaining}\x1b[0m")?;
+                        }
+                    }
+                }
             } else {
                 write!(stdout, "\x1b[1;32m{prompt}\x1b[0m{line}")?;
             }
@@ -939,10 +1077,106 @@ fn redraw_buffer(stdout: &mut io::Stdout, prompt: &str, lines: &[String], cursor
     }
 
     // Position cursor: it's on the last line now. Move it to the right column.
+    // Account for ghost text if present (cursor stays at end of typed text)
+    let last_line = lines.last().map(|l| l.as_str()).unwrap_or("");
+    let ghost_len = if last_line.starts_with('/') && !last_line.contains(' ') {
+        get_slash_hint(last_line)
+            .map(|h| h.len().saturating_sub(last_line.len()))
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-    if cursor < last_len {
-        let back = last_len - cursor;
+    let back = last_len.saturating_sub(cursor) + ghost_len;
+    if back > 0 {
         write!(stdout, "\x1b[{back}D")?;
+    }
+
+    stdout.flush()
+}
+
+/// Draw dropdown below the current input line.
+/// `cursor_col` is the current cursor column (prompt_width + cursor position in line).
+fn draw_dropdown(
+    stdout: &mut io::Stdout,
+    prompt_width: usize,
+    cursor_col: usize,
+    matches: &[usize],
+    selected: usize,
+) -> io::Result<()> {
+    if matches.is_empty() {
+        return Ok(());
+    }
+
+    // Compute visible window (scroll to keep selection visible)
+    let total = matches.len();
+    let max_vis = DROPDOWN_MAX_VISIBLE.min(total);
+    let start = if selected < max_vis {
+        0
+    } else {
+        selected - max_vis + 1
+    };
+    let end = (start + max_vis).min(total);
+
+    // Find max command width for alignment (across ALL matches for stable layout)
+    let max_cmd_width = matches
+        .iter()
+        .map(|&i| SLASH_COMMANDS[i].len())
+        .max()
+        .unwrap_or(10);
+
+    let mut lines_drawn: usize = 0;
+
+    // Draw each row below the input
+    for (pos, &idx) in matches[start..end].iter().enumerate() {
+        let i = start + pos;
+        let cmd = SLASH_COMMANDS[idx];
+        let desc = command_description(cmd);
+        let is_sel = i == selected;
+
+        write!(stdout, "\r\n")?;
+        // Indent to align with prompt
+        write!(stdout, "{:width$}", "", width = prompt_width)?;
+        lines_drawn += 1;
+
+        if is_sel {
+            write!(
+                stdout,
+                "\x1b[7m  {cmd:<width$}  {desc}\x1b[0m\x1b[K",
+                width = max_cmd_width,
+            )?;
+        } else {
+            write!(
+                stdout,
+                "  \x1b[36m{cmd:<width$}\x1b[0m  \x1b[2m{desc}\x1b[0m\x1b[K",
+                width = max_cmd_width,
+            )?;
+        }
+    }
+
+    // Show scroll indicator if needed
+    if total > max_vis {
+        write!(stdout, "\r\n")?;
+        write!(stdout, "{:width$}", "", width = prompt_width)?;
+        write!(
+            stdout,
+            "  \x1b[2m({}/{total} commands)\x1b[0m\x1b[K",
+            end
+        )?;
+        lines_drawn += 1;
+    }
+
+    // Clear any leftover lines from previous longer dropdown
+    write!(stdout, "\x1b[J")?;
+
+    // Move cursor back up to input line and to correct column
+    if lines_drawn > 0 {
+        write!(stdout, "\x1b[{lines_drawn}A")?;
+    }
+    // Position cursor at correct column
+    write!(stdout, "\r")?;
+    if cursor_col > 0 {
+        write!(stdout, "\x1b[{cursor_col}C")?;
     }
 
     stdout.flush()
