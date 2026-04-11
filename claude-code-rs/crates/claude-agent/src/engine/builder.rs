@@ -218,34 +218,31 @@ impl QueryEngineBuilder {
         let mcp_manager = self.mcp_manager.clone()
             .unwrap_or_else(|| Arc::new(RwLock::new(claude_mcp::McpManager::new())));
 
-        // Register Computer Use tools via builtin MCP server path
-        if std::env::var("CLAUDE_CODE_COMPUTER_USE").unwrap_or_default() == "1" {
-            match claude_computer_use::ComputerUseMcpServer::new() {
-                Ok(cu_server) => {
-                    let cu_server = Arc::new(cu_server);
-                    let read_only_tools = &["screenshot", "cursor_position"];
-                    let proxies = claude_tools::mcp::create_builtin_tool_proxies(
-                        cu_server.as_ref(),
-                        claude_core::tool::ToolCategory::ComputerUse,
-                        read_only_tools,
-                        mcp_manager.clone(),
-                    );
-                    let tool_count = proxies.len();
-                    registry.register_mcp_proxies(proxies);
+        // Register Computer Use tools — auto-detect display availability
+        match claude_computer_use::ComputerUseMcpServer::new() {
+            Ok(cu_server) => {
+                let cu_server = Arc::new(cu_server);
+                let read_only_tools = &["screenshot", "cursor_position"];
+                let proxies = claude_tools::mcp::create_builtin_tool_proxies(
+                    cu_server.as_ref(),
+                    claude_core::tool::ToolCategory::ComputerUse,
+                    read_only_tools,
+                    mcp_manager.clone(),
+                );
+                let tool_count = proxies.len();
+                registry.register_mcp_proxies(proxies);
 
-                    // Register as builtin in McpManager for call routing
-                    let mgr = mcp_manager.clone();
-                    let srv = cu_server.clone();
-                    // Use block_in_place since build() is called from async context
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            mgr.write().await.register_builtin(srv).await;
-                        });
+                // Register as builtin in McpManager for call routing
+                let mgr = mcp_manager.clone();
+                let srv = cu_server.clone();
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        mgr.write().await.register_builtin(srv).await;
                     });
-                    tracing::info!("Computer Use: {tool_count} tools registered via MCP path");
-                }
-                Err(e) => tracing::warn!("Computer Use unavailable: {e}"),
+                });
+                tracing::info!("Computer Use: {tool_count} tools registered");
             }
+            Err(e) => tracing::debug!("Computer Use not available: {e}"),
         }
 
         // Register Swarm tools if enabled via environment variable
