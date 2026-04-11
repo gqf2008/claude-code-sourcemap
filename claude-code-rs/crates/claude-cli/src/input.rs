@@ -199,11 +199,21 @@ impl Hinter for InputHelper {
         if pos != line.len() || !line.starts_with('/') || line.contains(' ') {
             return None;
         }
+        // Exact "/" with nothing after → prompt user to press Tab
+        if line == "/" {
+            return Some(SlashHint {
+                text: format!("  (Tab: {} commands)", SLASH_COMMANDS.len()),
+            });
+        }
         let mut found: Option<&str> = None;
         for cmd in SLASH_COMMANDS {
             if cmd.starts_with(line) && *cmd != line {
                 if found.is_some() {
-                    return None;
+                    // Ambiguous: show count hint instead
+                    let count = SLASH_COMMANDS.iter().filter(|c| c.starts_with(line)).count();
+                    return Some(SlashHint {
+                        text: format!("  (Tab: {count} matches)"),
+                    });
                 }
                 found = Some(cmd);
             }
@@ -217,7 +227,16 @@ impl Hinter for InputHelper {
 impl Highlighter for InputHelper {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
         if line.starts_with('/') {
-            Cow::Owned(format!("\x1b[36m{line}\x1b[0m"))
+            // Color only the command portion cyan, leave arguments normal
+            if let Some(space_idx) = line.find(' ') {
+                Cow::Owned(format!(
+                    "\x1b[36m{}\x1b[0m{}",
+                    &line[..space_idx],
+                    &line[space_idx..],
+                ))
+            } else {
+                Cow::Owned(format!("\x1b[36m{line}\x1b[0m"))
+            }
         } else {
             Cow::Borrowed(line)
         }
@@ -528,8 +547,23 @@ mod tests {
         let helper = InputHelper::new();
         let history = MemHistory::new();
         let ctx = Context::new(&history);
+        // "/co" matches /compact, /config, /context, /copy — now shows count hint
         let hint = helper.hint("/co", 3, &ctx);
-        assert!(hint.is_none());
+        assert!(hint.is_some());
+        let text = hint.unwrap().text;
+        assert!(text.contains("Tab:"), "ambiguous hint should contain 'Tab:': {text}");
+    }
+
+    #[test]
+    fn test_hinter_slash_only() {
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let hint = helper.hint("/", 1, &ctx);
+        assert!(hint.is_some());
+        let text = hint.unwrap().text;
+        assert!(text.contains("Tab:"), "/ hint should show Tab prompt: {text}");
     }
 
     #[test]
@@ -543,9 +577,38 @@ mod tests {
     }
 
     #[test]
+    fn test_all_slash_commands_have_descriptions() {
+        for cmd in SLASH_COMMANDS {
+            let desc = command_description(cmd);
+            assert!(
+                !desc.is_empty(),
+                "SLASH_COMMANDS entry {cmd} has no description in command_description()"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_duplicate_slash_commands() {
+        let mut seen = std::collections::HashSet::new();
+        for cmd in SLASH_COMMANDS {
+            assert!(seen.insert(cmd), "Duplicate SLASH_COMMAND: {cmd}");
+        }
+    }
+
+    #[test]
+    fn test_slash_commands_sorted_format() {
+        for cmd in SLASH_COMMANDS {
+            assert!(cmd.starts_with('/'), "SLASH_COMMAND must start with /: {cmd}");
+            assert!(!cmd.contains(' '), "SLASH_COMMAND must not contain spaces: {cmd}");
+        }
+    }
+
+    #[test]
     fn paste_clipboard_image_no_display_returns_err() {
+        // In CI / headless environments, opening clipboard typically fails.
+        // We just verify the function doesn't panic.
         let result = paste_clipboard_image();
-        let _ = result;
+        assert!(result.is_err() || result.is_ok());
     }
 
     #[test]

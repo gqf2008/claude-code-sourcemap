@@ -771,7 +771,7 @@ pub async fn run(
                 }
 
                 // Non-slash input: InputReader handles multiline via
-                // Shift+Enter / Alt+Enter / bracketed paste.
+                // Ctrl+J / Shift+Enter (rustyline).
                 let input = line.trim();
                 if input.is_empty() { continue; }
                 rl.add_history(input);
