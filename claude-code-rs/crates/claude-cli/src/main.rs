@@ -169,6 +169,14 @@ struct Cli {
     #[arg(long)]
     base_url: Option<String>,
 
+    /// Override context window size (in tokens).
+    /// Controls how many tokens the model can see at once.
+    /// Default is determined by the model (e.g. 200K for Claude).
+    /// Also configurable via CLAUDE_CODE_MAX_CONTEXT_TOKENS env var;
+    /// this flag takes precedence over the env var
+    #[arg(long)]
+    max_context_window: Option<u64>,
+
     /// Global session timeout in seconds.
     /// Automatically exits after this duration — useful for CI/CD pipelines.
     /// 0 means no timeout (default)
@@ -360,6 +368,7 @@ async fn run() -> anyhow::Result<()> {
             None
         })
         .append_system_prompt(cli.append_system_prompt)
+        .max_context_window(cli.max_context_window)
         .mcp_instructions(mcp_instructions);
 
     // Apply base URL override: CLI flag → ANTHROPIC_BASE_URL env → default
@@ -551,6 +560,7 @@ mod tests {
         assert_eq!(cli.permission_mode, "default");
         assert_eq!(cli.max_turns, 100);
         assert_eq!(cli.max_tokens, 16384);
+        assert!(cli.max_context_window.is_none());
         assert!(!cli.verbose);
         assert!(!cli.no_claude_md);
         assert!(!cli.print);
@@ -596,6 +606,12 @@ mod tests {
     fn test_cli_allowed_tools() {
         let cli = Cli::try_parse_from(["claude", "--allowed-tools", "Read", "--allowed-tools", "Bash"]).unwrap();
         assert_eq!(cli.allowed_tools, vec!["Read", "Bash"]);
+    }
+
+    #[test]
+    fn test_cli_max_context_window() {
+        let cli = Cli::try_parse_from(["claude", "--max-context-window", "128000"]).unwrap();
+        assert_eq!(cli.max_context_window, Some(128_000));
     }
 
     #[test]

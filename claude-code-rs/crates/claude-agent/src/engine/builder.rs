@@ -52,6 +52,8 @@ pub struct QueryEngineBuilder {
     pub(crate) provider: Option<String>,
     /// Override API base URL
     pub(crate) base_url: Option<String>,
+    /// Override context window size (in tokens). Takes precedence over env vars.
+    pub(crate) max_context_window: Option<u64>,
     /// Shared MCP manager for tool routing (used by builtin + external MCP servers).
     pub(crate) mcp_manager: Option<Arc<RwLock<claude_mcp::McpManager>>>,
 }
@@ -80,6 +82,7 @@ impl QueryEngineBuilder {
             scratchpad_dir: None,
             provider: None,
             base_url: None,
+            max_context_window: None,
             mcp_manager: None,
         }
     }
@@ -182,6 +185,13 @@ impl QueryEngineBuilder {
         self
     }
 
+    /// Override the context window size (in tokens).
+    /// Takes precedence over CLAUDE_CODE_MAX_CONTEXT_TOKENS env var.
+    pub fn max_context_window(mut self, tokens: Option<u64>) -> Self {
+        self.max_context_window = tokens;
+        self
+    }
+
     /// Set a shared MCP manager for routing tool calls to builtin/external MCP servers.
     pub fn mcp_manager(mut self, manager: Arc<RwLock<claude_mcp::McpManager>>) -> Self {
         self.mcp_manager = Some(manager);
@@ -257,7 +267,8 @@ impl QueryEngineBuilder {
         let model_name = self.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".into());
         let caps = claude_core::model::model_capabilities(&model_name);
 
-        // Apply context window env var overrides:
+        // Apply context window overrides (precedence: CLI flag > env var > model default):
+        // - --max-context-window: highest priority, set from CLI
         // - CLAUDE_CODE_MAX_CONTEXT_TOKENS: set absolute context window (for large-context providers)
         // - CLAUDE_CODE_AUTO_COMPACT_WINDOW: cap context window (can only reduce, matches TS behavior)
         let effective_context_window = {
@@ -265,7 +276,10 @@ impl QueryEngineBuilder {
                 std::env::var(name).ok()?.parse().ok().filter(|&v| v > 0)
             }
             let mut cw = caps.context_window;
-            if let Some(v) = env_u64("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
+            if let Some(v) = self.max_context_window {
+                cw = v;
+                tracing::info!("--max-context-window={v} → context_window={cw}");
+            } else if let Some(v) = env_u64("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
                 cw = v;
                 tracing::info!("CLAUDE_CODE_MAX_CONTEXT_TOKENS={v} → context_window={cw}");
             }
