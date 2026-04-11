@@ -7,6 +7,8 @@ use crossterm::{
 use std::io::{self, Write};
 
 /// RAII guard: only disables raw mode if we enabled it.
+/// NOTE: duplicated from `claude-cli/src/ui.rs` — kept separate to avoid
+/// adding crossterm to `claude-core` (which is platform-agnostic).
 struct RawModeGuard {
     should_restore: bool,
 }

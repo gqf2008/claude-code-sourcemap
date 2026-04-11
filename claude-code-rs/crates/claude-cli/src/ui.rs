@@ -24,6 +24,9 @@ use crossterm::{
 
 /// RAII guard that enables raw mode only if it was not already active.
 /// On drop, restores the previous state.
+///
+/// NOTE: intentionally duplicated in `claude-agent/src/permissions/tui.rs`
+/// to avoid adding crossterm to `claude-core` (which is platform-agnostic).
 struct RawModeGuard {
     should_restore: bool,
 }
@@ -216,12 +219,9 @@ pub fn crossterm_input(
                             }
                         }
                         let display = if masked && !buffer.is_empty() {
-                            let visible = &buffer[..1.min(buffer.len())];
-                            format!(
-                                "{}{}",
-                                visible,
-                                "*".repeat(buffer.len().saturating_sub(1).min(16))
-                            )
+                            let first_char = buffer.chars().next().unwrap().to_string();
+                            let rest = buffer.chars().count().saturating_sub(1).min(16);
+                            format!("{}{}", first_char, "*".repeat(rest))
                         } else {
                             buffer.clone()
                         };
@@ -264,7 +264,7 @@ fn draw_input_line(
     if buffer.is_empty() {
         write!(out, "\x1b[2m{}\x1b[0m", placeholder)?;
     } else if masked {
-        write!(out, "{}", "*".repeat(buffer.len()))?;
+        write!(out, "{}", "*".repeat(buffer.chars().count()))?;
     } else {
         write!(out, "{}", buffer)?;
     }
