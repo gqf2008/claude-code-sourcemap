@@ -41,7 +41,7 @@ pub async fn run(
     println!("{border}│  Model: {:<23} │\x1b[0m", display);
     println!("{border}│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
     println!("{border}│  Type /help for commands        │\x1b[0m");
-    println!("{border}│  Shift/Alt+Enter for newline    │\x1b[0m");
+    println!("{border}│  Ctrl+J or Shift+Enter: newline │\x1b[0m");
     println!("{border}╰─────────────────────────────────╯\x1b[0m\n");
 
     // Lazy-loaded and cached — first call scans disk, subsequent calls O(1)
@@ -936,6 +936,10 @@ pub async fn run(
                 turns_since_save += 1;
                 if turns_since_save >= CHECKPOINT_INTERVAL {
                     turns_since_save = 0;
+                    // Persist history so a force-exit (Ctrl-C × 2) doesn't lose it
+                    if let Some(ref path) = hist_path {
+                        rl.save_history(path);
+                    }
                     if let Err(e) = engine.save_session().await {
                         tracing::debug!("Session checkpoint failed: {}", e);
                     } else {

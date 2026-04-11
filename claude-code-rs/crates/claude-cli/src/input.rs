@@ -92,7 +92,7 @@ fn command_description(name: &str) -> &'static str {
         "/release-notes" => "Show release notes",
         "/feedback" => "Submit feedback",
         "/stats" => "Show session statistics",
-        "/usage" => "Show usage stats",
+        "/usage" => "Alias for /stats",
         "/image" => "Attach an image",
         "/pr-comments" => "Fetch PR review comments",
         "/branch" => "Fork conversation branch",
@@ -112,18 +112,23 @@ pub enum InputResult {
 
 // --- Rustyline helper ------------------------------------------------
 
-/// Ghost-text hint for slash commands (shows dimmed remainder of unique match).
+/// Ghost-text hint for slash commands.
+///
+/// - `is_completion = true`: hint text is an actual command suffix (right-arrow accepts it)
+/// - `is_completion = false`: informational only, e.g. "(Tab: 57 commands)"
 #[derive(Debug)]
 struct SlashHint {
     text: String,
+    is_completion: bool,
 }
 
 impl Hint for SlashHint {
     fn display(&self) -> &str {
         &self.text
     }
+    /// Only expose right-arrow completion for real command suffixes, not informational hints.
     fn completion(&self) -> Option<&str> {
-        Some(&self.text)
+        if self.is_completion { Some(&self.text) } else { None }
     }
 }
 
@@ -199,27 +204,31 @@ impl Hinter for InputHelper {
         if pos != line.len() || !line.starts_with('/') || line.contains(' ') {
             return None;
         }
-        // Exact "/" with nothing after → prompt user to press Tab
+        // Exact "/" with nothing after → informational only (right-arrow must NOT accept this)
         if line == "/" {
             return Some(SlashHint {
                 text: format!("  (Tab: {} commands)", SLASH_COMMANDS.len()),
+                is_completion: false,
             });
         }
         let mut found: Option<&str> = None;
         for cmd in SLASH_COMMANDS {
             if cmd.starts_with(line) && *cmd != line {
                 if found.is_some() {
-                    // Ambiguous: show count hint instead
+                    // Ambiguous: informational count hint (right-arrow must NOT accept this)
                     let count = SLASH_COMMANDS.iter().filter(|c| c.starts_with(line)).count();
                     return Some(SlashHint {
                         text: format!("  (Tab: {count} matches)"),
+                        is_completion: false,
                     });
                 }
                 found = Some(cmd);
             }
         }
+        // Unique match: real completion suffix (right-arrow accepts it)
         found.map(|cmd| SlashHint {
             text: cmd[line.len()..].to_string(),
+            is_completion: true,
         })
     }
 }
@@ -323,7 +332,7 @@ impl InputReader {
     /// - Emacs key bindings (Ctrl+A/E/U/K/W, Ctrl+R, etc.)
     pub fn readline(&mut self, prompt: &str) -> io::Result<InputResult> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            return self.read_pipe_fallback(prompt);
+            return read_pipe_fallback(prompt);
         }
 
         match self.editor.readline(prompt) {
@@ -332,24 +341,6 @@ impl InputReader {
             Err(ReadlineError::Eof) => Ok(InputResult::Eof),
             Err(e) => Err(io::Error::other(e)),
         }
-    }
-
-    /// Fallback for piped/non-TTY input.
-    #[allow(clippy::unused_self)]
-    fn read_pipe_fallback(&self, prompt: &str) -> io::Result<InputResult> {
-        let mut stdout = io::stdout();
-        write!(stdout, "{prompt}")?;
-        stdout.flush()?;
-
-        let mut buffer = String::new();
-        let bytes_read = io::stdin().read_line(&mut buffer)?;
-        if bytes_read == 0 {
-            return Ok(InputResult::Eof);
-        }
-        while matches!(buffer.chars().last(), Some('\n' | '\r')) {
-            buffer.pop();
-        }
-        Ok(InputResult::Line(buffer))
     }
 }
 
@@ -360,6 +351,23 @@ pub fn history_file_path() -> Option<PathBuf> {
         let _ = std::fs::create_dir_all(&dir);
         dir.join("history")
     })
+}
+
+/// Fallback for piped/non-TTY input (reads one line from stdin).
+fn read_pipe_fallback(prompt: &str) -> io::Result<InputResult> {
+    let mut stdout = io::stdout();
+    write!(stdout, "{prompt}")?;
+    stdout.flush()?;
+
+    let mut buffer = String::new();
+    let bytes_read = io::stdin().read_line(&mut buffer)?;
+    if bytes_read == 0 {
+        return Ok(InputResult::Eof);
+    }
+    while matches!(buffer.chars().last(), Some('\n' | '\r')) {
+        buffer.pop();
+    }
+    Ok(InputResult::Line(buffer))
 }
 
 /// Complete @file paths relative to current directory.
@@ -376,10 +384,13 @@ fn complete_file_path(partial: &str) -> Option<Vec<String>> {
     };
 
     let project_root = Path::new(".").canonicalize().ok()?;
-    if let Ok(canonical_dir) = dir.canonicalize() {
-        if !canonical_dir.starts_with(&project_root) {
-            return Some(vec![]);
-        }
+    // Reject paths that don't exist OR are outside the project root — explicit, not implicit.
+    let canonical_dir = match dir.canonicalize() {
+        Ok(d) => d,
+        Err(_) => return Some(vec![]), // Non-existent or inaccessible directory
+    };
+    if !canonical_dir.starts_with(&project_root) {
+        return Some(vec![]);
     }
 
     let mut results = Vec::new();
@@ -538,7 +549,10 @@ mod tests {
         let ctx = Context::new(&history);
         let hint = helper.hint("/ver", 4, &ctx);
         assert!(hint.is_some());
-        assert_eq!(hint.unwrap().display(), "sion");
+        let h = hint.unwrap();
+        assert_eq!(h.display(), "sion");
+        // Unique match: right-arrow should accept the completion
+        assert!(h.completion().is_some(), "unique hint must be a real completion");
     }
 
     #[test]
@@ -550,8 +564,10 @@ mod tests {
         // "/co" matches /compact, /config, /context, /copy — now shows count hint
         let hint = helper.hint("/co", 3, &ctx);
         assert!(hint.is_some());
-        let text = hint.unwrap().text;
-        assert!(text.contains("Tab:"), "ambiguous hint should contain 'Tab:': {text}");
+        let h = hint.unwrap();
+        assert!(h.text.contains("Tab:"), "ambiguous hint should contain 'Tab:': {}", h.text);
+        // Informational hint: right-arrow must NOT accept it (would insert literal text)
+        assert!(h.completion().is_none(), "informational hint must not be a completion");
     }
 
     #[test]
@@ -562,8 +578,10 @@ mod tests {
         let ctx = Context::new(&history);
         let hint = helper.hint("/", 1, &ctx);
         assert!(hint.is_some());
-        let text = hint.unwrap().text;
-        assert!(text.contains("Tab:"), "/ hint should show Tab prompt: {text}");
+        let h = hint.unwrap();
+        assert!(h.text.contains("Tab:"), "/ hint should show Tab prompt: {}", h.text);
+        // Informational hint: right-arrow must NOT accept it
+        assert!(h.completion().is_none(), "/ informational hint must not be a completion");
     }
 
     #[test]
