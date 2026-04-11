@@ -1006,24 +1006,12 @@ pub async fn run(
     Ok(())
 }
 
-/// Display token usage and cost after each turn.
-async fn print_turn_stats(engine: &QueryEngine) {
-    let state = engine.state().read().await;
-    let cost = engine.cost_tracker();
-    let total_cost = cost.total_usd();
-
-    let input_k = format_compact_tokens(state.total_input_tokens);
-    let output_k = format_compact_tokens(state.total_output_tokens);
-
-    if total_cost > 0.0 {
-        eprintln!(
-            "\x1b[2m  tokens: {}↓ {}↑ · cost: ${:.4} · turns: {}\x1b[0m",
-            input_k, output_k, total_cost, state.turn_count
-        );
-    }
-}
+/// Token/cost stats are now embedded in the per-turn status line from `print_stream`.
+/// This function is kept for the context-usage warning that follows.
+async fn print_turn_stats(_engine: &QueryEngine) {}
 
 /// Format tokens compactly: 1234 → "1.2K", 12345 → "12K", 1234567 → "1.2M"
+#[allow(dead_code)] // used in unit tests
 fn format_compact_tokens(n: u64) -> String {
     if n < 1_000 {
         format!("{}", n)

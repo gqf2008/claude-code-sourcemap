@@ -295,9 +295,9 @@ pub(super) fn short_path(path: &str) -> &str {
     path
 }
 
-/// Format a status line shown after each turn completes.
+/// Format a status line shown after each turn completes (single line).
 ///
-/// Example: `[claude-sonnet-4 | auto | 23% context | $0.0142 | 3.2s]`
+/// Example: `[claude-sonnet-4 | 23% ctx | 22.3K↓ 1.2K↑ | $0.0142 | 3.2s]`
 pub(super) fn format_status_line(
     model: &str,
     input_tokens: u64,
@@ -335,14 +335,32 @@ pub(super) fn format_status_line(
     // Shorten model name for display
     let model_short = shorten_model_name(model);
 
+    // Compact token counts
+    let in_tok = compact_tokens(input_tokens);
+    let out_tok = compact_tokens(output_tokens);
+
     format!(
-        "\x1b[2m[{} | {}{}%\x1b[2m ctx | {} | {:.1}s]\x1b[0m",
+        "\x1b[2m[{} | {}{}%\x1b[2m ctx | {}↓ {}↑ | {} | {:.1}s]\x1b[0m",
         model_short,
         context_color,
         context_pct as u32,
+        in_tok,
+        out_tok,
         cost_str,
         elapsed_secs,
     )
+}
+
+fn compact_tokens(n: u64) -> String {
+    if n < 1_000 {
+        format!("{n}")
+    } else if n < 100_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}K", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
 }
 
 /// Shorten common model names for status line display.
