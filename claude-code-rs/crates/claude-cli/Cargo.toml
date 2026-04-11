@@ -33,7 +33,6 @@ regex = { workspace = true }
 indicatif = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
-cliclack = { workspace = true }
 opener = { workspace = true }
 arboard = { workspace = true }
 png = { workspace = true }

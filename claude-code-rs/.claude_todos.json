@@ -1,44 +1,26 @@
 [
   {
-    "id": "tools-cmp",
-    "content": "对比工具系统实现 (Rust vs JS)",
+    "id": "analyze-ts",
+    "content": "Analyze TypeScript source code structure and feature inventory",
     "status": "completed",
     "priority": "high"
   },
   {
-    "id": "agent-cmp",
-    "content": "对比 Agent 循环架构 (Rust vs JS)",
+    "id": "analyze-rust",
+    "content": "Analyze Rust crate structure and feature inventory",
     "status": "completed",
     "priority": "high"
   },
   {
-    "id": "api-cmp",
-    "content": "对比 API 客户端 (Rust vs JS)",
-    "status": "completed",
+    "id": "compare-features",
+    "content": "Source-level alignment comparison: modules, tools, commands, features",
+    "status": "in_progress",
     "priority": "high"
   },
   {
-    "id": "mcp-cmp",
-    "content": "对比 MCP 实现 (Rust vs JS)",
-    "status": "completed",
-    "priority": "high"
-  },
-  {
-    "id": "perm-cmp",
-    "content": "对比权限系统 (Rust vs JS)",
-    "status": "completed",
-    "priority": "high"
-  },
-  {
-    "id": "cli-cmp",
-    "content": "对比 CLI/REPL 入口 (Rust vs JS)",
-    "status": "completed",
-    "priority": "high"
-  },
-  {
-    "id": "final-report",
-    "content": "汇总完整对比报告",
-    "status": "completed",
+    "id": "generate-report",
+    "content": "Generate completion report with missing items",
+    "status": "pending",
     "priority": "high"
   }
 ]

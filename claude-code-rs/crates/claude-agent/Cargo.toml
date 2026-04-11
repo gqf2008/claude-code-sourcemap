@@ -25,7 +25,7 @@ tracing = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
 tokio-util = { workspace = true }
-cliclack = { workspace = true }
+crossterm = { workspace = true }
 dirs = { workspace = true }
 
 [lints]

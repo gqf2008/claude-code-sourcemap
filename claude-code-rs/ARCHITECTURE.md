@@ -156,7 +156,7 @@ Anthropic Messages API 客户端。
 | `bus_adapter.rs` | `AgentCoreAdapter` — QueryEngine ↔ EventBus 桥接（含 tool_name 追踪） |
 | `traits.rs` | `AgentEngine` trait — 统一接口供 bus/swarm/rpc 调用 |
 | `hooks/` | 25 种事件类型、Hook 匹配 (glob/regex 缓存)、shell 执行 |
-| `permissions/` | `PermissionChecker` — 规则匹配 + 建议 + cliclack 交互 |
+| `permissions/` | `PermissionChecker` — 规则匹配 + 建议 + crossterm 交互 |
 | `compact/` | 会话压缩模块 (全量/微/记忆提取) |
 | `system_prompt/` | 系统提示词组装 (18 个 section + 动态边界) |
 | `coordinator.rs` | 多 Agent 协调模式 (AgentTracker, dispatch) |
@@ -187,8 +187,8 @@ Anthropic Messages API 客户端。
 | `input.rs` | `InputReader` — crossterm 按键处理, Ctrl+R 搜索, Alt+V 粘贴图片 |
 | `repl_commands/` | 30+ 斜杠命令处理 (model, compact, diff, review, PR ...) |
 | `output/` | 流式渲染: `helpers`(Spinner/格式化), `renderer`(OutputRenderer), `stream`(print_stream) |
-| `session.rs` | `SessionManager` (bus 代理) + 权限 handler (cliclack 弹窗) |
-| `ui.rs` | cliclack 交互组件 (permission_confirm, model_select, init_wizard) |
+| `session.rs` | `SessionManager` (bus 代理) + 权限 handler (crossterm 弹窗) |
+| `ui.rs` | crossterm 交互组件 (permission_confirm, model_select, init_wizard) |
 | `theme.rs` | 6 主题 (Dark/Light/Daltonized/ANSI), 终端色彩检测 |
 | `diff_display.rs` | Diff 可视化 (syntect 语法高亮 + word-level diff) |
 | `markdown.rs` | Markdown 渲染 (终端适配, 代码块高亮) |
@@ -279,7 +279,7 @@ Computer Use 工具 — 屏幕截图 + 鼠标/键盘控制。
                        ↓
               ToolUse detected? → PermissionChecker.check()
                        ↓                    ↓
-                   Approved          Denied → PermissionRequest via bus → cliclack UI
+                   Approved          Denied → PermissionRequest via bus → crossterm UI
                        ↓
               Hooks.pre_tool_use() → Executor.run() → Hooks.post_tool_use()
                        ↓
@@ -300,7 +300,7 @@ Permission check flow:
 2. Match against PermissionRule list (allow/deny patterns)
 3. If no match → consult mode default
 4. Plan mode → allow read-only, deny writes
-5. Default → prompt user via cliclack (session.rs PermissionHandler)
+5. Default → prompt user via crossterm (session.rs PermissionHandler)
 ```
 
 ## Hook 系统

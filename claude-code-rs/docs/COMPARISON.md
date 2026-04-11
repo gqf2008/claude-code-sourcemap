@@ -237,7 +237,7 @@ export function filterToolsByDenyRules<T>(tools: T[], ctx): T[] {
 | **自动模式** | ✅ Auto 模式 + 安全白名单 + 远程分类器 + 拒绝追踪 | ✅ YOLO 分类器 + 自动审批 |
 | **Bash 权限** | 风险分类 (80+ 命令模式) + sudo 处理 | 完整 AST 分析 + 危险命令检测 |
 | **危险模式** | ✅ dangerous pattern 检测 + strip | ✅ dangerousPatterns.ts |
-| **交互确认** | cliclack 弹窗 (含风险等级标签) | React 组件弹窗 |
+| **交互确认** | crossterm 弹窗 (含风险等级标签) | React 组件弹窗 |
 
 ### 3.4 API 客户端
 

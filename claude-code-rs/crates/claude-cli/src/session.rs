@@ -157,7 +157,7 @@ use claude_bus::events::{PermissionRequest, PermissionResponse, RiskLevel};
 /// Spawn a background task that handles permission requests via the bus.
 ///
 /// Receives `PermissionRequest` from the Agent Core, shows a terminal dialog
-/// using `cliclack`, and sends back `PermissionResponse`.
+/// using crossterm, and sends back `PermissionResponse`.
 ///
 /// This should be spawned as a tokio task alongside the REPL:
 /// ```ignore
