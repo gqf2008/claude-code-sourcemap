@@ -5,7 +5,7 @@ use clawed_agent::engine::QueryEngine;
 /// Run /doctor diagnostics.
 pub(crate) async fn handle_doctor(engine: &QueryEngine, cwd: &std::path::Path) {
     println!("\x1b[1;36m╭───────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│    Claude Code Doctor     │\x1b[0m");
+    println!("\x1b[1;36m│    Clawed Code Doctor     │\x1b[0m");
     println!("\x1b[1;36m╰───────────────────────────╯\x1b[0m\n");
 
     let mut warnings = 0u32;

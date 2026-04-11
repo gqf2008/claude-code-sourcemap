@@ -56,7 +56,7 @@ pub(crate) fn generate_claude_md_template(cwd: &std::path::Path) -> String {
     let has_makefile = cwd.join("Makefile").exists();
 
     // Header
-    sections.push("# CLAUDE.md\n\nThis file provides guidance to Claude Code when working with this repository.".to_string());
+  sections.push("# CLAUDE.md\n\nThis file provides guidance to Clawed Code when working with this repository.".to_string());
 
     // Build & Test section based on detected project type
     let mut build_cmds = Vec::new();

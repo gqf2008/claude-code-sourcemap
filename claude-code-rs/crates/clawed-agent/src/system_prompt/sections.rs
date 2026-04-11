@@ -9,7 +9,7 @@ use std::path::Path;
 use clawed_core::model;
 
 /// Identity prefix for the default interactive CLI mode.
-pub const DEFAULT_PREFIX: &str = r#"You are Claude Code, Anthropic's official CLI for Claude. You are an interactive CLI agent that assists users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
+pub const DEFAULT_PREFIX: &str = r#"You are Clawed Code, a Rust-based open-source AI coding assistant for the terminal. You are an interactive CLI agent that assists users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
 
 IMPORTANT: Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes.
 
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn default_prefix_contains_identity() {
-        assert!(DEFAULT_PREFIX.contains("Claude Code"));
+        assert!(DEFAULT_PREFIX.contains("Clawed Code"));
         assert!(DEFAULT_PREFIX.contains("Anthropic"));
     }
 

@@ -283,7 +283,7 @@ pub fn build_effective_system_prompt(
 /// Build the coordinator-mode system prompt.
 pub fn coordinator_system_prompt() -> String {
     format!(
-        r#"You are Claude Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
+        r#"You are Clawed Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
 
 ## Role
 
@@ -349,7 +349,7 @@ After all workers complete:
 
 /// Default system prompt for sub-agents (explore, general-purpose, etc.).
 pub const DEFAULT_AGENT_PROMPT: &str = "\
-You are an agent for Claude Code, Anthropic's official CLI for Claude. \
+You are an agent for Clawed Code, a Rust-based open-source AI coding assistant. \
 Given the user's message, you should use the tools available to complete the task. \
 Complete the task fully — don't gold-plate, but don't leave it half-done. \
 When you complete the task, respond with a concise report covering what was done \

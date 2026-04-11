@@ -37,7 +37,7 @@ pub async fn run(
     let display = clawed_core::model::display_name_any(&current_model);
     let border = theme::c_prompt();
     println!("{border}╭─────────────────────────────────╮\x1b[0m");
-    println!("{border}│      Claude Code (Rust)         │\x1b[0m");
+    println!("{border}│        Clawed Code              │\x1b[0m");
     println!("{border}│  Model: {:<23} │\x1b[0m", display);
     println!("{border}│  cwd: {:<25} │\x1b[0m", truncate_path(&cwd, 25));
     println!("{border}│  Type /help for commands        │\x1b[0m");
@@ -562,7 +562,7 @@ pub async fn run(
                             }
                             CommandResult::Share => {
                                 let state = engine.state().read().await;
-                                let mut md = String::from("# Claude Code Session\n\n");
+                                let mut md = String::from("# Clawed Code Session\n\n");
                                 for msg in &state.messages {
                                     match msg {
                                         clawed_core::message::Message::User(u) => {
@@ -719,7 +719,7 @@ pub async fn run(
                                 }
                             }
                             CommandResult::ReleaseNotes => {
-                                println!("\x1b[1mClaude Code (Rust) v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
+                                println!("\x1b[1mClawed Code v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
                                 println!();
                                 println!("Recent changes:");
                                 println!("  • Full cursor position tracking with word navigation");

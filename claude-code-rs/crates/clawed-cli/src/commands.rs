@@ -466,8 +466,8 @@ const HELP_TEXT_BASE: &str = "\
   /env               Show environment information
   /version           Show version info
   /release-notes     Show version and release notes
-  /stickers          Order Claude Code stickers!
-  /feedback <text>   Submit feedback about Claude Code
+  /stickers          Order Clawed Code stickers!
+  /feedback <text>   Submit feedback about Clawed Code
   /stats             Show detailed session statistics
 
 \x1b[1mTips\x1b[0m

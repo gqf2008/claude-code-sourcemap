@@ -493,7 +493,7 @@ pub fn confirm(message: &str) -> io::Result<bool> {
 
 /// Multi-step initialization wizard. Returns `(api_key, model)`.
 pub fn init_wizard(default_model: &str) -> io::Result<(String, String)> {
-    print_intro("🚀 Claude Code Setup")?;
+    print_intro("🚀 Clawed Code Setup")?;
 
     let api_key = crossterm_input(
         "Anthropic API key:",
