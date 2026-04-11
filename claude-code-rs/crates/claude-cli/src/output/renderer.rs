@@ -116,9 +116,9 @@ impl OutputRenderer {
                     .map(|t| t.elapsed())
                     .unwrap_or_default();
                 if is_error {
-                    eprintln!("{}  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
+                    eprintln!("{}  ✗ failed\x1b[0m \x1b[36m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
                 } else {
-                    eprintln!("{}  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
+                    eprintln!("{}  ✓ done\x1b[0m \x1b[36m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
                 }
                 if let Some(ref text) = result_preview {
                     if let Some(inline) = format_tool_result_inline(&self.last_tool_name, text) {

@@ -84,9 +84,9 @@ pub async fn print_stream(
                 tool_start_time = None;
 
                 if is_error {
-                    eprintln!("{}  ✗ failed\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
+                    eprintln!("{}  ✗ failed\x1b[0m \x1b[36m({:.1}s)\x1b[0m", theme::c_err(), elapsed.as_secs_f64());
                 } else {
-                    eprintln!("{}  ✓ done\x1b[0m \x1b[2m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
+                    eprintln!("{}  ✓ done\x1b[0m \x1b[36m({:.1}s)\x1b[0m", theme::c_ok(), elapsed.as_secs_f64());
                 }
                 if let Some(ref result_text) = text {
                     if let Some(inline) = format_tool_result_inline(&last_tool_name, result_text) {

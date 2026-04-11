@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 const STALL_WARN_SECS: u64 = 30;
 const STALL_CRIT_SECS: u64 = 60;
 
-/// An animated spinner with stall detection.
+/// Spinner tick characters — braille animation.
+const TICK_STRINGS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
+
+/// An animated spinner with stall detection and live elapsed timer.
 /// Changes color when no progress updates occur.
 pub(super) struct Spinner {
     bar: ProgressBar,
@@ -22,9 +25,9 @@ impl Spinner {
     pub(super) fn start(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
         bar.set_style(
-            ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:.dim}")
+            ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:.cyan}")
                 .unwrap()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+                .tick_strings(TICK_STRINGS),
         );
         bar.set_message(message.to_string());
         bar.enable_steady_tick(Duration::from_millis(80));
@@ -49,17 +52,17 @@ impl Spinner {
                 if elapsed.as_secs() >= STALL_CRIT_SECS && !critical {
                     critical = true;
                     bar_clone.set_style(
-                        ProgressStyle::with_template("{spinner:.red} {msg} {elapsed:.dim}")
+                        ProgressStyle::with_template("{spinner:.red} {msg} {elapsed:.red}")
                             .unwrap()
-                            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+                            .tick_strings(TICK_STRINGS),
                     );
                     bar_clone.set_message(format!("{} {}(stalled {}s){}", orig_msg, theme::c_err(), elapsed.as_secs(), RESET));
                 } else if elapsed.as_secs() >= STALL_WARN_SECS && !warned {
                     warned = true;
                     bar_clone.set_style(
-                        ProgressStyle::with_template("{spinner:.yellow} {msg} {elapsed:.dim}")
+                        ProgressStyle::with_template("{spinner:.yellow} {msg} {elapsed:.yellow}")
                             .unwrap()
-                            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
+                            .tick_strings(TICK_STRINGS),
                     );
                     bar_clone.set_message(format!("{} {}(waiting...){}", orig_msg, theme::c_warn(), RESET));
                 }
