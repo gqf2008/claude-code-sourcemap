@@ -6,30 +6,33 @@
 
 | 指标 | 数值 |
 |------|------|
-| Crate 数 | 9 |
-| Rust 文件 | 157 |
-| 代码行数 | ~50,900 LoC |
-| 注册工具 | 28+ (含 MCP 动态代理) |
+| Crate 数 | 11 |
+| Rust 文件 | 204 |
+| 代码行数 | ~69,500 LoC |
+| 注册工具 | 28+ (含 MCP 动态代理 + Computer Use) |
 | 斜杠命令 | 30+ |
-| 测试数 | 1,669 |
+| 测试数 | 2,048 |
 | Clippy 警告 | 0 |
 | unsafe 块 | 0 |
+| Release 二进制 | 19.8 MB, 38ms 启动 |
 
 ## 分层架构
 
 ```
-Layer 3  claude-cli      (26 files,  7,725 LoC,  231 tests)  二进制入口, REPL, cliclack UI
-Layer 3  claude-rpc      ( 9 files,  1,713 LoC,   84 tests)  JSON-RPC 外部接口 (TCP/stdio)
-Layer 3  claude-bridge   (11 files,  1,985 LoC,   52 tests)  外部消息渠道网关 (Feishu/Telegram/Slack)
-Layer 2  claude-agent    (34 files, 12,248 LoC,  394 tests)  引擎编排, 会话, Hooks, 权限, 压缩
-Layer 2  claude-mcp      ( 8 files,  1,791 LoC,   60 tests)  MCP 服务器注册与生命周期管理
-Layer 1  claude-bus      ( 3 files,  1,026 LoC,   20 tests)  事件总线, ClientHandle, 广播通知
-Layer 1  claude-api      (15 files,  6,489 LoC,  177 tests)  HTTP 客户端, 流式 SSE, OAuth PKCE
-Layer 1  claude-tools    (32 files,  7,613 LoC,  271 tests)  28+ 工具实现, ToolRegistry
-Layer 0  claude-core     (24 files, 10,669 LoC,  358 tests)  基础类型, Tool trait, 权限模型, 配置
+Layer 3  claude-cli           (30 files, 11,570 LoC,  297 tests)  二进制入口, REPL, 主题, NDJSON 输出
+Layer 3  claude-rpc           ( 9 files,  2,251 LoC,   84 tests)  JSON-RPC 外部接口 (TCP/stdio)
+Layer 3  claude-bridge        (11 files,  2,087 LoC,   52 tests)  外部消息渠道网关 (飞书/Telegram/Slack)
+Layer 2  claude-agent         (38 files, 15,144 LoC,  483 tests)  引擎编排, 会话, Hooks, 权限, 压缩
+Layer 2  claude-mcp           ( 8 files,  2,546 LoC,   73 tests)  MCP 注册, 健康监控, 自动重连
+Layer 2  claude-swarm         (14 files,  3,134 LoC,   65 tests)  kameo Actor 多 Agent 网络
+Layer 2  claude-computer-use  ( 5 files,  1,237 LoC,   16 tests)  Computer Use (截屏/键鼠/内置 MCP)
+Layer 1  claude-bus           ( 3 files,  1,198 LoC,   23 tests)  事件总线, ClientHandle, 广播通知
+Layer 1  claude-api           (15 files,  6,693 LoC,  180 tests)  HTTP 客户端, 流式 SSE, OAuth PKCE
+Layer 1  claude-tools         (41 files, 10,225 LoC,  323 tests)  28+ 工具实现, ToolRegistry, LSP
+Layer 0  claude-core          (30 files, 13,431 LoC,  452 tests)  基础类型, Tool trait, 权限, 配置, 文件监听
 ```
 
-依赖方向: `{cli,rpc,bridge} → agent → {api,tools,mcp,bus} → core`（零循环依赖）
+依赖方向: `{cli,rpc,bridge} → agent → {swarm,mcp,computer-use,api,tools,bus} → core`（零循环依赖）
 
 ## 4-Client Event Bus 架构
 
@@ -42,11 +45,11 @@ Layer 0  claude-core     (24 files, 10,669 LoC,  358 tests)  基础类型, Tool 
                   ┌────┴─────┐
                   │ EventBus │ ← claude-bus (broadcast notifications, mpsc requests)
                   └────┬─────┘
-        ┌──────────┬───┴───┬──────────┐
-   ┌────┴───┐ ┌────┴───┐ ┌┴────┐ ┌───┴─────┐
-   │  CLI   │ │  RPC   │ │ MCP │ │ Bridge  │
-   │(REPL)  │ │(TCP)   │ │     │ │(飞书等) │
-   └────────┘ └────────┘ └─────┘ └─────────┘
+        ┌──────────┬───┴───┬──────────┬──────────┐
+   ┌────┴───┐ ┌────┴───┐ ┌┴────┐ ┌───┴─────┐ ┌──┴─────┐
+   │  CLI   │ │  RPC   │ │ MCP │ │ Bridge  │ │ Swarm  │
+   │(REPL)  │ │(TCP)   │ │     │ │(飞书等) │ │(kameo) │
+   └────────┘ └────────┘ └─────┘ └─────────┘ └────────┘
 ```
 
 每个客户端持有独立的 `ClientHandle`，通过 bus 发送 `AgentRequest`（18 种），接收 `AgentNotification` 广播（26 种）。
@@ -132,11 +135,10 @@ Anthropic Messages API 客户端。
 | Shell | `Bash`, `PowerShell`, `REPL` |
 | Web | `WebFetch`, `WebSearch` |
 | 代码 | `LSP` (6 种操作 + ripgrep fallback), `Notebook` |
-| Git | `Git` (status/diff/log/blame), `DiffUI`, `Worktree` |
+| Git | `Git` (status/diff/log/blame), `DiffUI` (syntect 高亮), `Worktree` |
 | 交互 | `AskUser`, `SendMessage` |
 | Agent | `Task` (子 Agent 派发), `Skill` |
 | 管理 | `Todo`, `Config`, `PlanMode`, `Sleep` |
-| MCP | `mcp/client.rs` (JSON-RPC stdio), `mcp/server.rs` (配置加载), `mcp/proxy.rs` (动态代理工具) |
 
 **ToolRegistry** (`lib.rs`): 集中注册所有工具，支持按名称查找、类别过滤、MCP 动态注入。
 
@@ -149,17 +151,18 @@ Anthropic Messages API 客户端。
 | `engine/mod.rs` | `QueryEngine` — Agent 主循环 (query→dispatch→tool→loop) |
 | `engine/builder.rs` | `EngineBuilder` — 构建 engine 并组装 coordinator 管道 |
 | `query.rs` | 流式响应处理、token 计数、上下文警告 |
-| `executor.rs` | 工具执行器 (权限检查→Hook→执行→结果格式化) |
+| `executor.rs` | 工具执行器 (权限检查→Hook→执行→结果格式化), 并发 join_all |
 | `state.rs` | `SessionState` — 消息历史、会话 I/O、简历恢复 |
 | `bus_adapter.rs` | `AgentCoreAdapter` — QueryEngine ↔ EventBus 桥接（含 tool_name 追踪） |
-| `hooks.rs` | 25 种事件类型、Hook 匹配 (glob/regex 缓存)、shell 执行 |
+| `traits.rs` | `AgentEngine` trait — 统一接口供 bus/swarm/rpc 调用 |
+| `hooks/` | 25 种事件类型、Hook 匹配 (glob/regex 缓存)、shell 执行 |
 | `permissions/` | `PermissionChecker` — 规则匹配 + 建议 + cliclack 交互 |
-| `compact/` | 会话压缩模块 (见下) |
-| `system_prompt/` | 系统提示词组装 (见下) |
+| `compact/` | 会话压缩模块 (全量/微/记忆提取) |
+| `system_prompt/` | 系统提示词组装 (18 个 section + 动态边界) |
 | `coordinator.rs` | 多 Agent 协调模式 (AgentTracker, dispatch) |
 | `dispatch_agent.rs` | 子 Agent 派发 (explore/task/general-purpose)，含 CancelTokenMap/AgentChannelMap |
 | `cost.rs` | `CostTracker` — 按模型累计 token/费用 |
-| `task_runner.rs` | 后台任务执行器 |
+| `task_runner.rs` | 后台任务执行器 (NDJSON 流式输出支持) |
 | `audit.rs` | 操作审计日志 |
 
 **compact/ 子模块：**
@@ -173,23 +176,26 @@ Anthropic Messages API 客户端。
 
 ### claude-cli
 
-用户入口 — 命令行解析 + REPL 交互循环 + cliclack UI。
+用户入口 — 命令行解析 + REPL 交互循环 + 主题系统。
 
 | 模块 | 职责 |
 |------|------|
-| `main.rs` | CLI 参数解析 (clap), 模式分发, EventBus 启动 |
+| `main.rs` | CLI 参数解析 (clap), 模式分发, EventBus 启动, 超时/退出码 |
 | `auth.rs` | API key 解析（多 provider）、OAuth 凭据、会话恢复 |
 | `init.rs` | `--init` 项目初始化、CLAUDE.md 模板生成、MCP 发现 |
-| `repl.rs` | REPL 主循环 — rustyline, 多行输入, Tab 补全, 自动压缩检查 |
+| `repl.rs` | REPL 主循环 — crossterm, 多行输入, Tab 补全, 实时文件监听 |
+| `input.rs` | `InputReader` — crossterm 按键处理, Ctrl+R 搜索, Alt+V 粘贴图片 |
 | `repl_commands/` | 30+ 斜杠命令处理 (model, compact, diff, review, PR ...) |
-| `output/` | 流式渲染模块：`helpers`(Spinner/格式化), `renderer`(OutputRenderer), `stream`(print_stream) |
+| `output/` | 流式渲染: `helpers`(Spinner/格式化), `renderer`(OutputRenderer), `stream`(print_stream) |
 | `session.rs` | `SessionManager` (bus 代理) + 权限 handler (cliclack 弹窗) |
 | `ui.rs` | cliclack 交互组件 (permission_confirm, model_select, init_wizard) |
-| `diff_display.rs` | Diff 可视化 (类似 delta/bat 的颜色输出) |
+| `theme.rs` | 6 主题 (Dark/Light/Daltonized/ANSI), 终端色彩检测 |
+| `diff_display.rs` | Diff 可视化 (syntect 语法高亮 + word-level diff) |
+| `markdown.rs` | Markdown 渲染 (终端适配, 代码块高亮) |
 
 ### claude-bus
 
-进程内事件总线 — 解耦 Agent Core 与 4 个客户端。
+进程内事件总线 — 解耦 Agent Core 与 5 个客户端。
 
 | 模块 | 职责 |
 |------|------|
@@ -236,6 +242,29 @@ MCP (Model Context Protocol) 服务器注册与生命周期管理。
 | `adapter.rs` | `ChannelAdapter` trait 定义 |
 | `adapters/` | `FeishuAdapter`, `TelegramAdapter`, `SlackAdapter` |
 | `webhook.rs` | Webhook 接收骨架（待完善） |
+
+### claude-swarm
+
+多 Agent 协作网络 — 基于 kameo Actor 模型。
+
+| 模块 | 职责 |
+|------|------|
+| `actor.rs` | `AgentActor` — kameo Actor, 持有 QueryEngine, 处理 `AgentMessage` |
+| `swarm.rs` | `SwarmManager` — Actor 网络编排: 注册/启动/停止/路由 |
+| `topology.rs` | 拓扑定义: `SwarmTopology`, `AgentRole`, `Link`; 从 YAML 加载 |
+| `bus.rs` | `SwarmBusAdapter` — Swarm ↔ EventBus 桥接 |
+| `config.rs` | Swarm 配置解析 (agent 定义、路由规则) |
+| `types.rs` | `AgentMessage`, `SwarmEvent`, `AgentStatus` 等类型 |
+
+### claude-computer-use
+
+Computer Use 工具 — 屏幕截图 + 鼠标/键盘控制。
+
+| 模块 | 职责 |
+|------|------|
+| `tool.rs` | `ComputerUseTool` — screenshot/click/type/scroll/key 5 种操作 |
+| `bus.rs` | `ComputerUseBusAdapter` — CU ↔ EventBus 桥接 |
+| `types.rs` | 操作类型定义 (Action enum, Coordinate, ScreenSize) |
 
 ## 核心数据流
 
@@ -296,7 +325,7 @@ Compact                → 压缩事件
 | unsafe 代码 | 0 块 |
 | panic! (生产代码) | 0 处 |
 | .lock().unwrap() (生产代码) | 0 处 (全部使用 `lock_or_recover` 毒化恢复) |
-| TODO/FIXME | 2 处 (路线图级: 图片 bus 转发) |
+| TODO/FIXME | 0 处 |
 | Clippy 警告 | 0 |
 | 死锁风险 | 无 (单任务顺序循环 + 一致锁顺序) |
 
@@ -308,19 +337,28 @@ cd claude-code-rs
 # 编译检查
 cargo check
 
-# 运行所有测试 (1,669 tests)
+# 运行所有测试 (2,048 tests)
 cargo test
 
 # 运行特定 crate 测试
-cargo test -p claude-agent    # 394 tests
-cargo test -p claude-core     # 358 tests
-cargo test -p claude-tools    # 271 tests
-cargo test -p claude-cli      # 231 tests
-cargo test -p claude-api      # 177 tests
+cargo test -p claude-agent    # 483 tests
+cargo test -p claude-core     # 452 tests
+cargo test -p claude-tools    # 323 tests
+cargo test -p claude-cli      # 297 tests
+cargo test -p claude-api      # 180 tests
+cargo test -p claude-rpc      # 84 tests
+cargo test -p claude-mcp      # 73 tests
+cargo test -p claude-swarm    # 65 tests
+cargo test -p claude-bridge   # 52 tests
+cargo test -p claude-bus      # 23 tests
+cargo test -p claude-computer-use  # 16 tests
 
 # Lint 检查
 cargo clippy --workspace
 
-# 运行特定测试
-cargo test test_auto_compact
+# CI (GitHub Actions)
+# .github/workflows/ci.yml — check + test (Linux/Mac/Win) + clippy + fmt
+
+# Release 构建
+cargo build --release  # ~19.8 MB, ~38ms 启动
 ```
