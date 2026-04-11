@@ -142,10 +142,13 @@ impl InputReader {
         loop {
             let evt = event::read()?;
 
-            // Skip key-release events — Windows crossterm fires both Press and Release,
-            // which would cause every keystroke to be processed twice.
-            if let Event::Key(KeyEvent { kind: KeyEventKind::Release, .. }) = &evt {
-                continue;
+            // Only process Press events (and Repeat for held keys).
+            // Windows crossterm fires Press + Release for every keystroke;
+            // processing Release would double every action.
+            if let Event::Key(KeyEvent { kind, .. }) = &evt {
+                if *kind != KeyEventKind::Press && *kind != KeyEventKind::Repeat {
+                    continue;
+                }
             }
 
             match evt {
@@ -246,6 +249,26 @@ impl InputReader {
                         lines.truncate(1);
                     }
                     redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                }
+
+                // ── Ctrl+H: backspace alias (some terminals send this) ──
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('h'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    let last_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                    if cursor > 0 && last_len > 0 {
+                        if let Some(last) = lines.last_mut() {
+                            str_remove_char(last, cursor - 1);
+                        }
+                        cursor -= 1;
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    } else if cursor == 0 && lines.len() > 1 {
+                        lines.pop();
+                        cursor = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
+                    }
                 }
 
                 // ── Ctrl+W: delete last word ─────────────────────────
@@ -504,14 +527,8 @@ impl InputReader {
                             str_remove_char(last, cursor - 1);
                         }
                         cursor -= 1;
-                        let new_len = lines.last().map(|l| l.chars().count()).unwrap_or(0);
-                        if lines.len() == 1 && cursor == new_len {
-                            // At end of single line: simple erase
-                            write!(stdout, "\x08 \x08")?;
-                            stdout.flush()?;
-                        } else {
-                            redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
-                        }
+                        // Always use full redraw — \x08 escape is unreliable on some Windows terminals
+                        redraw_buffer(&mut stdout, prompt, &lines, cursor)?;
                     } else if cursor == 0 && lines.len() > 1 {
                         // At start of continuation line: merge up
                         lines.pop();
