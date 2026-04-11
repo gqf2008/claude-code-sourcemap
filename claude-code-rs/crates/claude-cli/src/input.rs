@@ -19,8 +19,8 @@ use rustyline::hint::{Hint, Hinter};
 use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{
-    Cmd, CompletionType, Config, Context, EditMode, Editor, EventHandler, Helper,
-    KeyCode, KeyEvent, Modifiers,
+    Cmd, CompletionType, ConditionalEventHandler, Config, Context, EditMode, Editor,
+    Event, EventContext, EventHandler, Helper, KeyCode, KeyEvent, Modifiers, RepeatCount,
 };
 
 /// Slash commands for tab completion.
@@ -154,25 +154,20 @@ impl Completer for InputHelper {
             return Ok((0, Vec::new()));
         }
 
+        // Empty buffer — user pressed "/" which fires Cmd::Complete; show all commands.
+        if line.is_empty() {
+            let pairs = slash_command_pairs(SLASH_COMMANDS);
+            return Ok((0, pairs));
+        }
+
         // Slash command completion
         if line.starts_with('/') && !line.contains(' ') {
-            let matches: Vec<Pair> = SLASH_COMMANDS
+            let matching: Vec<&str> = SLASH_COMMANDS
                 .iter()
+                .copied()
                 .filter(|cmd| cmd.starts_with(line))
-                .map(|cmd| {
-                    let desc = command_description(cmd);
-                    let display = if desc.is_empty() {
-                        cmd.to_string()
-                    } else {
-                        format!("{cmd}  \x1b[2m{desc}\x1b[0m")
-                    };
-                    Pair {
-                        display,
-                        replacement: cmd.to_string(),
-                    }
-                })
                 .collect();
-            return Ok((0, matches));
+            return Ok((0, slash_command_pairs(&matching)));
         }
 
         // @file path completion
@@ -266,6 +261,50 @@ impl Highlighter for InputHelper {
 
 impl Validator for InputHelper {}
 impl Helper for InputHelper {}
+
+/// Build display `Pair`s for a slice of slash commands.
+fn slash_command_pairs(cmds: &[&str]) -> Vec<Pair> {
+    cmds.iter()
+        .map(|cmd| {
+            let desc = command_description(cmd);
+            let display = if desc.is_empty() {
+                cmd.to_string()
+            } else {
+                format!("{cmd}  \x1b[2m{desc}\x1b[0m")
+            };
+            Pair { display, replacement: cmd.to_string() }
+        })
+        .collect()
+}
+
+/// Event handler: pressing `/` on an **empty** buffer fires `Cmd::Complete`
+/// so the full slash-command dropdown appears immediately without needing Tab.
+/// On a non-empty buffer the key is inserted normally (default behavior).
+struct SlashTriggerHandler;
+
+impl ConditionalEventHandler for SlashTriggerHandler {
+    fn handle(
+        &self,
+        evt: &Event,
+        n: RepeatCount,
+        _positive: bool,
+        ctx: &EventContext<'_>,
+    ) -> Option<Cmd> {
+        // Only intercept bare `/` (no modifiers)
+        if let Event::KeySeq(keys) = evt {
+            if let [KeyEvent(KeyCode::Char('/'), Modifiers::NONE)] = keys.as_slice() {
+                if ctx.line().is_empty() {
+                    // Empty buffer: trigger dropdown instead of inserting '/'
+                    return Some(Cmd::Complete);
+                }
+                // Non-empty buffer: insert '/' normally
+                return Some(Cmd::SelfInsert(n, '/'));
+            }
+        }
+        None
+    }
+}
+
 // --- Public InputReader -----------------------------------------------
 
 /// Rustyline-based input reader with slash command completion and history.
@@ -293,6 +332,13 @@ impl InputReader {
         editor.bind_sequence(
             KeyEvent(KeyCode::Enter, Modifiers::SHIFT),
             EventHandler::Simple(Cmd::Newline),
+        );
+
+        // `/` on an empty line → show full slash-command dropdown immediately.
+        // On a non-empty line the character is inserted as usual.
+        editor.bind_sequence(
+            KeyEvent(KeyCode::Char('/'), Modifiers::NONE),
+            EventHandler::Conditional(Box::new(SlashTriggerHandler)),
         );
 
         Self { editor }
@@ -489,6 +535,22 @@ mod tests {
         reader.add_history("");
         reader.add_history("   ");
         // No panic = success; empty entries are skipped
+    }
+
+    #[test]
+    fn test_completer_empty_line_returns_all_commands() {
+        // Typing "/" on empty buffer fires Cmd::Complete with empty line.
+        // Verify the completer returns the full slash command list.
+        use rustyline::history::MemHistory;
+        let helper = InputHelper::new();
+        let history = MemHistory::new();
+        let ctx = Context::new(&history);
+        let (start, matches) = helper.complete("", 0, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(matches.len(), SLASH_COMMANDS.len(),
+            "empty-buffer completion should return all {} commands", SLASH_COMMANDS.len());
+        assert!(matches.iter().any(|p| p.replacement == "/help"));
+        assert!(matches.iter().any(|p| p.replacement == "/exit"));
     }
 
     #[test]
